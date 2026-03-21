@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Kích Hoạt Tài Khoản</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            width: 100%;
+            max-width: 450px;
+            background: #ffffff;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        h2 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        p {
+            color: #555;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 20px;
+            font-size: 16px;
+            color: #fff;
+            background-color: #28a745;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-top: 10px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .button:hover {
+            background-color: #218838;
+        }
+        .footer {
+            font-size: 12px;
+            color: #777;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>Kích Hoạt Tài Khoản</h2>
+    <p>Xin chào,</p>
+    <p>Chúng tôi đã nhận được yêu cầu đăng ký tài khoản của bạn. Hãy nhấn vào nút dưới đây để kích hoạt tài khoản.</p>
+
+    <a th:href="${linkConfirm}" class="button">Kích Hoạt Tài Khoản</a>
+
+    <p class="footer">Nếu bạn không yêu cầu đăng ký, vui lòng bỏ qua email này.</p>
+</div>
+</body>
+</html>

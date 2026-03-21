@@ -1,0 +1,36 @@
+server:
+  port: ${GATEWAY_PORT:8088}
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  cloud:
+    gateway:
+      server:
+        webflux:
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowedOrigins: "*"
+                allowedMethods: "*"
+                allowedHeaders: "*"
+          routes:
+            - id: user-service-route
+              uri: ${USER_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/users/**, /auth/**, /roles/**, /permissions/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 5
+                    redis-rate-limiter.burstCapacity: 10
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@ipKeyResolver}"
+
+jwt:
+  signerKey: ${JWT_SECRET:DayLaMotChuoiBiMatSieuDaiVaPhucTapDeKyJWTTokenChoHeThongAI1234567890}
