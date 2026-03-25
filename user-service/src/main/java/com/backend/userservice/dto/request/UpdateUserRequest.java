@@ -1,7 +1,6 @@
 package com.backend.userservice.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.backend.userservice.validator.DobConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -17,9 +16,8 @@ import java.util.List;
 public class UpdateUserRequest {
     private String password;
 
-    @DobConstraint(min = 18, message = "INVALID_DOB")
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "dd/MM/yyyy")
-    private LocalDate dob;
+    private LocalDate dayOfBirth;
 
     private List<String> roles;
 }

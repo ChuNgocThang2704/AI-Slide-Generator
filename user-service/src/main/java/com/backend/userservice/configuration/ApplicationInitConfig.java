@@ -33,39 +33,25 @@ public class ApplicationInitConfig {
     static final String ADMIN_PASSWORD = "admin";
 
     @Bean
-    @ConditionalOnProperty(
-            prefix = "spring",
-            value = "datasource.driverClassName",
-            havingValue = "com.mysql.cj.jdbc.Driver")
     ApplicationRunner applicationRunner(UserRepository userRepository, RoleRepository roleRepository){
         log.info("Start initializing application... ");
         return args -> {
-            if (userRepository.findByUsername(ADMIN_USER_NAME).isEmpty()) {
-                if (roleRepository.findById(String.valueOf(RoleEnum.USER)).isEmpty()) {
-                    roleRepository.save(RoleEntity.builder()
-                            .name(String.valueOf(RoleEnum.USER))
-                            .description("Role User")
-                            .build());
-                }
-                if (roleRepository.findById(String.valueOf(RoleEnum.ADMIN)).isEmpty()) {
-                    roleRepository.save(RoleEntity.builder()
-                            .name(String.valueOf(RoleEnum.ADMIN))
-                            .description("Role Admin")
-                            .build());
-                }
-                RoleEntity roleAdmin = roleRepository.findById(String.valueOf(RoleEnum.ADMIN))
-                        .orElseThrow(() -> new AppException(ErrorCode.ROLE_NOT_FOUND));
+            String adminEmail = "admin@aislide.com";
+            if (userRepository.findByEmail(adminEmail).isEmpty()) {
+                RoleEntity adminRole = roleRepository.findByName("ADMIN")
+                        .orElseGet(() -> roleRepository.save(RoleEntity.builder().name("ADMIN").build()));
 
-                Set<RoleEntity> roles = new HashSet<>();
-                roles.add(roleAdmin);
+                roleRepository.findByName("USER")
+                        .orElseGet(() -> roleRepository.save(RoleEntity.builder().name("USER").build()));
 
-                UserEntity user = UserEntity.builder()
+                UserEntity admin = UserEntity.builder()
+                        .email(adminEmail)
                         .username(ADMIN_USER_NAME)
                         .password(passwordEncoder.encode(ADMIN_PASSWORD))
-                        .roles(roles)
+                        .roles(Set.of(adminRole))
                         .build();
-                userRepository.save(user);
-                log.warn("Admin user has been created with default password: admin, please change it!!!");
+                userRepository.save(admin);
+                log.warn("Admin account created: admin@aislide.com / admin123");
             }
             log.info("Application initialized successfully...");
         };

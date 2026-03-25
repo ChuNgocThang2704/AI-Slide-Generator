@@ -6,8 +6,6 @@ import com.backend.userservice.entity.PermissionEntity;
 import com.backend.userservice.repository.PermissionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.modelmapper.ModelMapper;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -18,24 +16,29 @@ import java.util.stream.Collectors;
 @Slf4j
 public class PermissionService {
     private final PermissionRepository permissionRepository;
-    private final ModelMapper modelMapper;
 
-    @PreAuthorize("hasRole('ADMIN')")
     public PermissionResponse createPermission(PermissionRequest request) {
-        PermissionEntity permission = modelMapper.map(request, PermissionEntity.class);
+        PermissionEntity permission = PermissionEntity.builder()
+                .name(request.getName())
+                .description(request.getDescription())
+                .build();
         permissionRepository.save(permission);
-        return modelMapper.map(permission, PermissionResponse.class);
+        return PermissionResponse.builder()
+                .name(permission.getName())
+                .description(permission.getDescription())
+                .build();
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
     public List<PermissionResponse> getAllPermissions() {
         var permissions = permissionRepository.findAll();
         return permissions.stream().map(permission ->
-                modelMapper.map(permission,PermissionResponse.class))
+                PermissionResponse.builder()
+                        .name(permission.getName())
+                        .description(permission.getDescription())
+                        .build())
                 .collect(Collectors.toList());
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
     public void deletePermission(String permission) {
         permissionRepository.deleteById(permission);
     }

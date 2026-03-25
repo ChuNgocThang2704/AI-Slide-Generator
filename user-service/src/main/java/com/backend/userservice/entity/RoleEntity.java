@@ -2,7 +2,11 @@ package com.backend.userservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.SQLDelete;
+import org.hibernate.annotations.Where;
 
+import java.io.Serializable;
+import java.util.HashSet;
 import java.util.Set;
 
 @Getter
@@ -11,7 +15,9 @@ import java.util.Set;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity(name = "roles")
-public class RoleEntity {
+@Where(clause = "is_active = true")
+@SQLDelete(sql = "UPDATE roles SET is_active = false WHERE name = ?")
+public class RoleEntity extends  AbstractAuditingEntity<String> {
     @Id
     private String name;
 
@@ -21,5 +27,5 @@ public class RoleEntity {
     @JoinTable(name="role_permission",
             joinColumns = @JoinColumn(name="role_name"),
             inverseJoinColumns = @JoinColumn(name="permission_name"))
-    private Set<PermissionEntity> permissions;
+    private Set<PermissionEntity> permissions = new HashSet<>();
 }

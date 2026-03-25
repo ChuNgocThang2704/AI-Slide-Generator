@@ -1,39 +1,40 @@
 server:
-  port: ${USER_PORT:8081}
+  port: ${USER_PORT:8089}
 
 spring:
   application:
-    name: back-end
+    name: user-service
 
   datasource:
     url: ${DB_URL}
-    driverClassName: com.mysql.cj.jdbc.Driver
+    driverClassName: org.postgresql.Driver
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
-
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
     show-sql: true
-
-  servlet:
-    multipart:
-      max-file-size: 50MB
-      max-request-size: 50MB
-
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9094}
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
 
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-
-  image:
-    key: ${IMAGE_API_KEY}
+#      host: ${REDIS_HOST:localhost}
+#      port: ${REDIS_PORT:6379}
+#      password: ${REDIS_PASSWORD:}
+      url: ${REDIS_URL:redis://localhost:6379}
+      ssl:
+        enabled: true
+      connect-timeout: 5000ms
+      timeout: 5000ms
 
   mail:
-    from: ${MAIL_FROM}
     host: smtp.gmail.com
     port: 587
     username: ${MAIL_USERNAME}
@@ -42,27 +43,7 @@ spring:
       mail.smtp.auth: true
       mail.smtp.starttls.enable: true
 
-  security:
-    oauth2:
-      client:
-        registration:
-          google:
-            client-id: ${GOOGLE_CLIENT_ID}
-            client-secret: ${GOOGLE_CLIENT_SECRET}
-            redirect-uri: ${GOOGLE_REDIRECT_URI}
-            scope: openid,profile,email
-        provider:
-          google:
-            user-info-uri: https://www.googleapis.com/oauth2/v3/userinfo
-
 jwt:
   signerKey: ${JWT_SIGNER_KEY}
   valid-duration: ${JWT_VALID_DURATION:3600}
   refreshable-duration: ${JWT_REFRESH_DURATION:36000}
-
-springdoc:
-  swagger-ui:
-    enabled: true
-    path: /swagger-ui.html
-  api-docs:
-    enabled: true
