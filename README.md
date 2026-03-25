@@ -203,13 +203,13 @@ Luồng chính chạy **bất đồng bộ** qua RabbitMQ với **điểm dừng
 | Bước | Hành động                                                                                                                                                                                                                                            | Thành phần tham gia                                                     | Ghi chú                                                                                                       |
 | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | 1    | **Upload và tạo yêu cầu:** User đã đăng nhập, đã có file trong Document Service (hoặc upload ngay). Chọn template, bấm "Tạo slide"                                                                                                                   | Frontend → API Gateway → Document Management Service, Task Orchestrator | Document Service đảm bảo file tồn tại; trừ quota (gọi Subscription and Payment Service)                       |
-| 2    | Task Orchestrator tạo bản ghi project (status DRAFT), tạo task tổng (taskId), ghi `ai_task_logs` (EXTRACT_TEXT, PENDING)                                                                                                                             | Task Orchestrator, MySQL/Redis                                          | Trả về `taskId`, `projectId` cho Frontend ngay                                                                |
-| 3    | **Đẩy vào Queue:** Task Orchestrator publish message lên RabbitMQ: taskId, projectId, source_doc s3_url, template_id                                                                                                                                 | Task Orchestrator → RabbitMQ                                            | Queue dành cho bước extract text                                                                              |
+| 2    | Task Orchestrator tạo bản ghi project (status DRAFT), tạo task tổng (task_uuid), ghi `ai_task_logs` (EXTRACT_TEXT, PENDING)                                                                                                                             | Task Orchestrator, MySQL/Redis                                          | Trả về `task_uuid`, `project_uuid` cho Frontend ngay                                                                |
+| 3    | **Đẩy vào Queue:** Task Orchestrator publish message lên RabbitMQ: task_uuid, project_uuid, source_doc s3_url, template_id                                                                                                                                 | Task Orchestrator → RabbitMQ                                            | Queue dành cho bước extract text                                                                              |
 | 4    | **Text Extraction & Generation:** AI Text Processing Service consume message → tải file từ S3 → đọc nội dung (PyPDF2/pdfplumber/python-docx) → gọi LLM (Ollama/Qwen) → sinh dàn bài JSON (từng slide: nội dung text + prompt ảnh)                     | RabbitMQ → AI Text Processing Service, S3, LLM                          | Cập nhật `ai_task_logs` (EXTRACT_TEXT, PROCESSING → SUCCESS)                                                  |
 | 5    | **Lưu Draft Content:** Service gửi kết quả về Task Orchestrator / Document Management Service → lưu vào bảng `slide_pages` (content_json, image_prompt) → cập nhật project status = REVIEWING                                                        | AI Text Processing Service → Document Management Service, MySQL         | **KHÔNG** publish sang queue Image Gen ngay. Pipeline tạm dừng tại đây                                        |
 | 6    | **Thông báo Review:** Notification Service gửi event "Nội dung đã sẵn sàng để xem trước" → Frontend hiển thị UI Editor với nội dung text từng slide                                                                                                  | Notification Service → Frontend (WebSocket/SSE)                         | User thấy nút "Xem trước và Chỉnh sửa"                                                                        |
-| 7    | **User Review & Edit:** User xem từng slide, chỉnh sửa text/prompt ảnh trực tiếp trên giao diện → Frontend gọi API để cập nhật `slide_pages` (PUT /projects/{id}/slides/{page_index})                                                               | Frontend → API Gateway → Document Management Service                    | Cho phép user sửa nhiều lần. Project vẫn ở trạng thái REVIEWING                                               |
-| 8    | **User Approve:** User hài lòng với nội dung → bấm nút "Phê duyệt và Tiếp tục" → Frontend gọi API approve (POST /projects/{id}/approve)                                                                                                              | Frontend → API Gateway → Task Orchestrator                              | Task Orchestrator cập nhật project status = PROCESSING, publish message sang queue Image Gen                  |
+| 7    | **User Review & Edit:** User xem từng slide, chỉnh sửa text/prompt ảnh trực tiếp trên giao diện → Frontend gọi API để cập nhật `slide_pages` (PUT /projects/{project_uuid}/slides/{page_index})                                                               | Frontend → API Gateway → Document Management Service                    | Cho phép user sửa nhiều lần. Project vẫn ở trạng thái REVIEWING                                               |
+| 8    | **User Approve:** User hài lòng với nội dung → bấm nút "Phê duyệt và Tiếp tục" → Frontend gọi API approve (POST /projects/{project_uuid}/approve)                                                                                                              | Frontend → API Gateway → Task Orchestrator                              | Task Orchestrator cập nhật project status = PROCESSING, publish message sang queue Image Gen                  |
 | 9    | **Image Generation:** AI Image Gen Service consume → với mỗi slide cần ảnh: đọc `image_prompt` từ DB → gọi SDXL/FLUX sinh ảnh → upload ảnh lên S3 → cập nhật `slide_pages.image_url`                                                                | RabbitMQ → AI Image Gen Service, S3, Diffusers                          | Ghi `generated_images` (user_id, prompt, s3_url) nếu cần lưu thư viện; publish message sang queue PPTX Render |
 | 10   | **Slide Assembling:** PPTX Render Service consume → đọc template .pptx từ S3 (theo template_id) → đọc text + image_url từ `slide_pages` → điền vào layout_placeholders → render file .pptx → upload lên S3 → cập nhật project (status DONE), project_exports (PPTX, s3_url) | RabbitMQ → PPTX Render Service, S3, Template metadata                   | `ai_task_logs` (RENDER_PPTX, SUCCESS)                                                                         |
 | 11   | **Thông báo tiến trình:** Trong suốt bước 9–10, Task Orchestrator publish event tiến trình (60%, 80%, 100%) lên RabbitMQ → Notification Service subscribe → đẩy qua WebSocket/SSE tới Frontend                                                       | RabbitMQ, Notification Service, Frontend (WebSocket/SSE)                | User thấy thanh tiến trình real-time từ 50% (sau approve) đến 100%                                            |
@@ -302,26 +302,26 @@ Dưới đây là chi tiết thiết kế CSDL cho từng bảng thuộc các Mi
 
 #### Danh sách các bảng chi tiết:
 - **`users`**: Thông tin định danh cốt lõi.
-  - `id` (PK, BIGINT)
+  - `id` (PK, UUID)
   - `email` (VARCHAR(100), UNIQUE)
   - `password_hash` (VARCHAR(255))
   - `status` (ENUM: ACTIVE, INACTIVE, BANNED)
   - `created_at` (TIMESTAMP)
 - **`roles`**: Master Data chứa các nhóm quyền.
-  - `id` (PK, INT)
+  - `id` (PK, UUID)
   - `code` (VARCHAR(50), UNIQUE) - VD: ADMIN, MANAGER, FREE_USER, PRO_USER
 - **`permissions`**: Master Data chứa từng hành động cực nhỏ.
-  - `id` (PK, INT)
+  - `id` (PK, UUID)
   - `code` (VARCHAR(50), UNIQUE) - VD: EXPORT_PPTX, GEN_IMAGE_FLUX, UPLOAD_PDF_100MB
 - **`user_roles`**: Bảng nối N-N giữa User và Role. (Một user có thể có nhiều role).
-  - `user_id` (FK -> users.id)
-  - `role_id` (FK -> roles.id)
+  - `user_id` (UUID, FK -> users.id)
+  - `role_id` (UUID, FK -> roles.id)
 - **`role_permissions`**: Bảng nối N-N giữa Role và Permission. (Khi user up lên gói Pro, chỉ cần gán role PRO_USER là có trọn quyền).
-  - `role_id` (FK -> roles.id)
-  - `permission_id` (FK -> permissions.id)
+  - `role_id` (UUID, FK -> roles.id)
+  - `permission_id` (UUID, FK -> permissions.id)
 - **`login_audit_logs`**: Lưu vết bảo mật hệ thống.
-  - `id` (PK, BIGINT)
-  - `user_id` (FK -> users.id)
+  - `id` (PK, UUID)
+  - `user_id` (UUID, FK -> users.id)
   - `ip_address` (VARCHAR(45))
   - `device` (VARCHAR(255))
   - `login_time` (TIMESTAMP)
@@ -337,31 +337,31 @@ erDiagram
     users ||--o{ login_audit_logs : "generates track"
 
     users {
-        BIGINT id PK
+        UUID id PK
         VARCHAR email UK
         VARCHAR password_hash
         ENUM status
         TIMESTAMP created_at
     }
     roles {
-        INT id PK
+        UUID id PK
         VARCHAR code UK
     }
     permissions {
-        INT id PK
+        UUID id PK
         VARCHAR code UK
     }
     user_roles {
-        BIGINT user_id FK
-        INT role_id FK
+        UUID user_id FK
+        UUID role_id FK
     }
     role_permissions {
-        INT role_id FK
-        INT permission_id FK
+        UUID role_id FK
+        UUID permission_id FK
     }
     login_audit_logs {
-        BIGINT id PK
-        BIGINT user_id FK
+        UUID id PK
+        UUID user_id FK
         VARCHAR ip_address
         VARCHAR device
         TIMESTAMP login_time
@@ -376,42 +376,42 @@ erDiagram
 
 #### Danh sách các bảng chi tiết:
 - **`packages`**: Master Data các gói cước.
-  - `id` (PK, INT)
+  - `id` (PK, UUID)
   - `code` (VARCHAR(50), UNIQUE)
   - `name` (VARCHAR(100))
   - `price` (DECIMAL)
   - `billing_cycle` (ENUM: MONTHLY, YEARLY)
 - **`package_features`**: Giới hạn cụ thể của từng gói.
-  - `id` (PK, BIGINT)
-  - `package_id` (FK -> packages.id)
+  - `id` (PK, UUID)
+  - `package_id` (UUID, FK -> packages.id)
   - `feature_key` (VARCHAR(50)) - VD: MAX_SLIDES_PER_MONTH
   - `feature_value` (INT) - VD: 50
 - **`user_subscriptions`**: Gói cước user đang sử dụng hiện tại.
-  - `id` (PK, BIGINT)
-  - `user_id` (BIGINT, Index) *(ID tham chiếu chéo tới Core User)*
-  - `package_id` (FK -> packages.id)
+  - `id` (PK, UUID)
+  - `user_id` (UUID, Index) *(ID tham chiếu chéo tới Core User)*
+  - `package_id` (UUID, FK -> packages.id)
   - `start_date` (TIMESTAMP)
   - `expire_date` (TIMESTAMP)
   - `status` (ENUM: ACTIVE, EXPIRED)
 - **`subscription_history`**: Lưu vết mỗi khi user nâng cấp/hạ cấp gói. Bắt buộc để truy thu / giải quyết khiếu nại.
-  - `id` (PK, BIGINT)
-  - `user_subscription_id` (FK -> user_subscriptions.id)
+  - `id` (PK, UUID)
+  - `user_subscription_id` (UUID, FK -> user_subscriptions.id)
   - `action` (ENUM: UPGRADE, DOWNGRADE, CANCEL)
   - `created_at` (TIMESTAMP)
 - **`invoices`**: Hóa đơn pháp lý sinh ra mỗi chu kỳ.
-  - `id` (PK, BIGINT)
-  - `user_id` (BIGINT, Index)
+  - `id` (PK, UUID)
+  - `user_id` (UUID, Index)
   - `total_amount` (DECIMAL)
   - `tax` (DECIMAL)
   - `issue_date` (TIMESTAMP)
 - **`transactions`**: Lịch sử gọi cổng thanh toán.
-  - `id` (PK, BIGINT)
-  - `invoice_id` (FK -> invoices.id)
+  - `id` (PK, UUID)
+  - `invoice_id` (UUID, FK -> invoices.id)
   - `gateway` (ENUM: VNPAY, STRIPE, PAYPAL)
   - `trans_ref` (VARCHAR(100))
   - `status` (ENUM: PENDING, SUCCESS, FAILED)
 - **`discount_coupons`**: Mã giảm giá cho marketing.
-  - `id` (PK, INT)
+  - `id` (PK, UUID)
   - `code` (VARCHAR(50), UNIQUE)
   - `discount_percent` (DECIMAL)
   - `max_usage` (INT)
@@ -428,48 +428,48 @@ erDiagram
     invoices ||--o{ transactions : "paid via"
 
     packages {
-        INT id PK
+        UUID id PK
         VARCHAR code UK
         VARCHAR name
         DECIMAL price
         ENUM billing_cycle
     }
     package_features {
-        BIGINT id PK
-        INT package_id FK
+        UUID id PK
+        UUID package_id FK
         VARCHAR feature_key
         INT feature_value
     }
     user_subscriptions {
-        BIGINT id PK
-        BIGINT user_id
-        INT package_id FK
+        UUID id PK
+        UUID user_id
+        UUID package_id FK
         TIMESTAMP start_date
         TIMESTAMP expire_date
         ENUM status
     }
     subscription_history {
-        BIGINT id PK
-        BIGINT user_subscription_id FK
+        UUID id PK
+        UUID user_subscription_id FK
         ENUM action
         TIMESTAMP created_at
     }
     invoices {
-        BIGINT id PK
-        BIGINT user_id
+        UUID id PK
+        UUID user_id
         DECIMAL total_amount
         DECIMAL tax
         TIMESTAMP issue_date
     }
     transactions {
-        BIGINT id PK
-        BIGINT invoice_id FK
+        UUID id PK
+        UUID invoice_id FK
         ENUM gateway
         VARCHAR trans_ref
         ENUM status
     }
     discount_coupons {
-        INT id PK
+        UUID id PK
         VARCHAR code UK
         DECIMAL discount_percent
         INT max_usage
@@ -484,22 +484,22 @@ erDiagram
 
 #### Danh sách các bảng chi tiết:
 - **`templates`**: Thông tin tổng quan bộ giao diện.
-  - `id` (PK, INT)
+  - `id` (PK, UUID)
   - `name` (VARCHAR(100))
   - `author` (VARCHAR(100))
   - `thumbnail_url` (VARCHAR(255))
   - `is_premium` (BOOLEAN)
 - **`template_categories`**: Phân loại Template theo ngành nghề (Công nghệ, Y tế, Giáo dục...).
-  - `id` (PK, INT)
+  - `id` (PK, UUID)
   - `name` (VARCHAR(100))
-  - `template_id` (FK -> templates.id)
+  - `template_id` (UUID, FK -> templates.id)
 - **`slide_layouts`**: Các loại bố cục bên trong 1 template.
-  - `id` (PK, BIGINT)
-  - `template_id` (FK -> templates.id)
+  - `id` (PK, UUID)
+  - `template_id` (UUID, FK -> templates.id)
   - `layout_type` (ENUM: TITLE, 2_COLUMN, IMAGE_RIGHT)
 - **`layout_placeholders`**: Tọa độ chính xác để chèn nội dung. Worker sẽ chọc vào bảng này để map Text/Image.
-  - `id` (PK, BIGINT)
-  - `layout_id` (FK -> slide_layouts.id)
+  - `id` (PK, UUID)
+  - `layout_id` (UUID, FK -> slide_layouts.id)
   - `element_type` (ENUM: TEXT, IMAGE)
   - `x_pos` (INT)
   - `y_pos` (INT)
@@ -507,9 +507,9 @@ erDiagram
   - `height` (INT)
   - `z_index` (INT)
 - **`user_favorite_templates`**: UX cá nhân hóa lưu template yêu thích.
-  - `id` (PK, BIGINT)
-  - `user_id` (BIGINT, Index) *(ID tham chiếu chéo)*
-  - `template_id` (FK -> templates.id)
+  - `id` (PK, UUID)
+  - `user_id` (UUID, Index) *(ID tham chiếu chéo)*
+  - `template_id` (UUID, FK -> templates.id)
 
 #### Sơ đồ Entity-Relationship (ERD):
 ```mermaid
@@ -520,25 +520,25 @@ erDiagram
     templates ||--o{ user_favorite_templates : "favorited by users"
 
     templates {
-        INT id PK
+        UUID id PK
         VARCHAR name
         VARCHAR author
         VARCHAR thumbnail_url
         BOOLEAN is_premium
     }
     template_categories {
-        INT id PK
+        UUID id PK
         VARCHAR name
-        INT template_id FK
+        UUID template_id FK
     }
     slide_layouts {
-        BIGINT id PK
-        INT template_id FK
+        UUID id PK
+        UUID template_id FK
         ENUM layout_type
     }
     layout_placeholders {
-        BIGINT id PK
-        BIGINT layout_id FK
+        UUID id PK
+        UUID layout_id FK
         ENUM element_type
         INT x_pos
         INT y_pos
@@ -547,9 +547,9 @@ erDiagram
         INT z_index
     }
     user_favorite_templates {
-        BIGINT id PK
-        BIGINT user_id
-        INT template_id FK
+        UUID id PK
+        UUID user_id
+        UUID template_id FK
     }
 ```
 
@@ -560,49 +560,49 @@ erDiagram
 
 #### Danh sách các bảng chi tiết:
 - **`source_documents`**: File gốc do người dùng tải lên.
-  - `id` (PK, BIGINT)
-  - `user_id` (BIGINT, Index)
+  - `id` (PK, UUID)
+  - `user_id` (UUID, Index)
   - `file_name` (VARCHAR(255))
   - `s3_url` (VARCHAR(255))
   - `page_count` (INT)
   - `file_size` (BIGINT)
 - **`projects`** (Slide Projects): Không gian làm việc chính (Workspace) một File Trình Chiếu.
-  - `id` (PK, BIGINT)
-  - `owner_id` (BIGINT, Index)
-  - `source_doc_id` (FK -> source_documents.id)
-  - `template_id` (INT)
+  - `id` (PK, UUID)
+  - `owner_id` (UUID, Index)
+  - `source_doc_id` (UUID, FK -> source_documents.id)
+  - `template_id` (UUID)
   - `name` (VARCHAR(255))
   - `status` (ENUM: DRAFT, REVIEWING, PROCESSING, DONE)
 - **`project_collaborators`**: Tính năng share dự án (Làm việc nhóm).
-  - `id` (PK, BIGINT)
-  - `project_id` (FK -> projects.id)
-  - `user_id` (BIGINT, Index)
+  - `id` (PK, UUID)
+  - `project_id` (UUID, FK -> projects.id)
+  - `user_id` (UUID, Index)
   - `role` (ENUM: EDITOR, VIEWER)
 - **`slide_pages`**: Nội dung của từng trang chi tiết.
-  - `id` (PK, BIGINT)
-  - `project_id` (FK -> projects.id)
+  - `id` (PK, UUID)
+  - `project_id` (UUID, FK -> projects.id)
   - `page_index` (INT)
-  - `layout_id` (INT)
+  - `layout_id` (UUID)
   - `content_json` (JSON)
   - `image_prompt` (TEXT)
   - `image_url` (VARCHAR(255))
 - **`ai_task_logs`**: Bảng Operation Audit Queue. Hệ thống sập bước nào có thể query ra ngay.
-  - `id` (PK, BIGINT)
-  - `project_id` (FK -> projects.id)
+  - `id` (PK, UUID)
+  - `project_id` (UUID, FK -> projects.id)
   - `task_type` (ENUM: EXTRACT_TEXT, GEN_IMAGE, RENDER_PPTX)
   - `status` (ENUM: PENDING, PROCESSING, SUCCESS, FAILED)
   - `started_at` (TIMESTAMP)
   - `completed_at` (TIMESTAMP)
   - `error_message` (TEXT)
 - **`generated_images`**: Thư viện ảnh AI sinh ra để tái lưu trữ dùng cho project khác.
-  - `id` (PK, BIGINT)
-  - `user_id` (BIGINT, Index)
+  - `id` (PK, UUID)
+  - `user_id` (UUID, Index)
   - `prompt` (TEXT)
   - `s3_url` (VARCHAR(255))
   - `created_at` (TIMESTAMP)
 - **`project_exports`**: Lịch sử xuất lưu trữ để quản lý Quota Billing (Export ra PPT/PDF).
-  - `id` (PK, BIGINT)
-  - `project_id` (FK -> projects.id)
+  - `id` (PK, UUID)
+  - `project_id` (UUID, FK -> projects.id)
   - `export_type` (ENUM: PPTX, PDF)
   - `s3_url` (VARCHAR(255))
   - `exported_at` (TIMESTAMP)
@@ -619,39 +619,39 @@ erDiagram
     projects ||--o{ project_exports : "exported multiple times"
 
     source_documents {
-        BIGINT id PK
-        BIGINT user_id
+        UUID id PK
+        UUID user_id
         VARCHAR file_name
         VARCHAR s3_url
         INT page_count
         BIGINT file_size
     }
     projects {
-        BIGINT id PK
-        BIGINT owner_id
-        BIGINT source_doc_id FK
-        INT template_id
+        UUID id PK
+        UUID owner_id
+        UUID source_doc_id FK
+        UUID template_id
         VARCHAR name
         ENUM status
     }
     project_collaborators {
-        BIGINT id PK
-        BIGINT project_id FK
-        BIGINT user_id
+        UUID id PK
+        UUID project_id FK
+        UUID user_id
         ENUM role
     }
     slide_pages {
-        BIGINT id PK
-        BIGINT project_id FK
+        UUID id PK
+        UUID project_id FK
         INT page_index
-        INT layout_id
+        UUID layout_id
         JSON content_json
         TEXT image_prompt
         VARCHAR image_url
     }
     ai_task_logs {
-        BIGINT id PK
-        BIGINT project_id FK
+        UUID id PK
+        UUID project_id FK
         ENUM task_type
         ENUM status
         TIMESTAMP started_at
@@ -659,15 +659,15 @@ erDiagram
         TEXT error_message
     }
     generated_images {
-        BIGINT id PK
-        BIGINT user_id
+        UUID id PK
+        UUID user_id
         TEXT prompt
         VARCHAR s3_url
         TIMESTAMP created_at
     }
     project_exports {
-        BIGINT id PK
-        BIGINT project_id FK
+        UUID id PK
+        UUID project_id FK
         ENUM export_type
         VARCHAR s3_url
         TIMESTAMP exported_at
@@ -682,7 +682,7 @@ erDiagram
 #### Danh sách collection chi tiết:
 - **`notifications`**: Nội dung thông báo hiển thị ở quả chuông.
   - `_id` (ObjectId)
-  - `user_id` (BIGINT/String, Index)
+  - `user_id` (UUID/String, Index)
   - `type` (String) - VD: BILLING, TASK_PROGRESS, SYSTEM
   - `title` (String)
   - `body` (String)

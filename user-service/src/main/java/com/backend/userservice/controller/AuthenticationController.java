@@ -4,7 +4,6 @@ import com.backend.userservice.dto.request.AuthenticationRequest;
 import com.backend.userservice.dto.request.CheckTokenRequest;
 import com.backend.userservice.dto.response.ApiResponse;
 import com.backend.userservice.dto.response.AuthenticationResponse;
-import com.backend.userservice.dto.response.CheckTokenResponse;
 import com.backend.userservice.service.AuthenticationService;
 import com.nimbusds.jose.JOSEException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -27,29 +26,22 @@ public class AuthenticationController {
     @PostMapping("/login")
     ApiResponse<AuthenticationResponse> authenticate(@RequestBody AuthenticationRequest request) {
         AuthenticationResponse result = authenticationService.authenticate(request);
-        return ApiResponse.<AuthenticationResponse>builder().result(result).build();
-    }
-
-    @PostMapping("/validate-token")
-    ApiResponse<CheckTokenResponse> validateToken(HttpServletRequest request) {
-        String header = request.getHeader("Authorization");
-        String token = "";
-        if (header != null && header.startsWith("Bearer ")) {
-            token = header.substring(7);
-        }
-        CheckTokenResponse result = authenticationService.checkValidToken(CheckTokenRequest.builder().token(token).build());
-        return ApiResponse.<CheckTokenResponse>builder().result(result).build();
+        return ApiResponse.<AuthenticationResponse>builder().data(result).build();
     }
 
     @PostMapping("/refresh")
-    ApiResponse<AuthenticationResponse> authenticate(HttpServletRequest request)
+    ApiResponse<AuthenticationResponse> refresh(@RequestBody CheckTokenRequest request)
             throws ParseException, JOSEException {
-        AuthenticationResponse result = authenticationService.refreshToken(request);
-        return ApiResponse.<AuthenticationResponse>builder().result(result).build();
+        AuthenticationResponse result = authenticationService.refreshToken(request.getToken());
+        return ApiResponse.<AuthenticationResponse>builder().data(result).build();
     }
     @PostMapping("/logout")
     ApiResponse<Void> logout(HttpServletRequest request) {
-        authenticationService.logout(request);
+        String header = request.getHeader("Authorization");
+        if (header != null && header.startsWith("Bearer ")) {
+            String token = header.substring(7);
+            authenticationService.logout(token);
+        }
         return ApiResponse.<Void>builder()
                 .message("Logout successfully")
                 .build();

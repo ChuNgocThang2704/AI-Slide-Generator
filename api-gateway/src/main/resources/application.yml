@@ -6,9 +6,19 @@ spring:
     name: api-gateway
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-
+#      host: ${REDIS_HOST:localhost}
+#      port: ${REDIS_PORT:6379}
+#      username: ${REDIS_USERNAME:default}
+#      password: ${REDIS_PASSWORD:}
+      url: ${REDIS_URL:redis://localhost:6379}
+      ssl:
+        enabled: true
+      lettuce:
+        extension:
+          ssl:
+            enabled: true
+      connect-timeout: 5000ms
+      timeout: 5000ms
   cloud:
     gateway:
       server:
@@ -33,4 +43,4 @@ spring:
                     key-resolver: "#{@ipKeyResolver}"
 
 jwt:
-  signerKey: ${JWT_SECRET:DayLaMotChuoiBiMatSieuDaiVaPhucTapDeKyJWTTokenChoHeThongAI1234567890}
+  signerKey: ${JWT_SECRET}
