@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xác nhận đăng ký</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 0; }
+        .wrapper { width: 100%; table-layout: fixed; background-color: #f4f7f6; padding-bottom: 40px; padding-top: 40px; }
+        .main { background-color: #ffffff; width: 100%; max-width: 600px; margin: 0 auto; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); overflow: hidden; }
+        .header { background-color: #4A90E2; padding: 30px; text-align: center; color: #ffffff; }
+        .content { padding: 40px 30px; text-align: center; color: #333333; }
+        .code-container { background-color: #f0f7ff; border: 2px dashed #4A90E2; border-radius: 6px; padding: 20px; margin: 30px 0; display: inline-block; }
+        .code { font-size: 36px; font-weight: bold; color: #4A90E2; letter-spacing: 8px; margin: 0; }
+        .footer { padding: 20px; text-align: center; color: #999999; font-size: 12px; }
+    </style>
+</head>
+<body>
+<div class="wrapper">
+    <div class="main">
+        <div class="header">
+            <h1 style="margin:0;">AI Slide Generator</h1>
+        </div>
+        <div class="content">
+            <h2>Xác nhận đăng ký tài khoản</h2>
+            <p>Chào <strong th:text="${username}">User</strong>,</p>
+            <p>Cảm ơn bạn đã lựa chọn dịch vụ của chúng tôi. Vui lòng sử dụng mã xác thực dưới đây để hoàn tất quá trình đăng ký:</p>
+
+            <div class="code-container">
+                <p class="code" th:text="${code}">12345678</p>
+            </div>
+
+            <p>Mã này có hiệu lực trong <strong>15 phút</strong>. Tuyệt đối không chia sẻ mã này với bất kỳ ai.</p>
+            <p>Nếu bạn không thực hiện yêu cầu này, hãy bỏ qua email này.</p>
+        </div>
+        <div class="footer">
+            &copy; 2026 AI Slide Generator.
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -17,7 +17,13 @@ public class UpdateUserRequest {
     private String password;
 
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "dd/MM/yyyy")
-    private LocalDate dayOfBirth;
+    private LocalDate dateOfBirth;
+
+    private String fullName;
+
+    private String avatarUrl;
+
+    private String phoneNumber;
 
     private List<String> roles;
 }

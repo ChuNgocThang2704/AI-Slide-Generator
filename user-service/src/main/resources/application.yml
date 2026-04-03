@@ -15,7 +15,7 @@ spring:
       minimum-idle: 5
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: update
     show-sql: true
     properties:
       hibernate:
@@ -33,7 +33,14 @@ spring:
         enabled: true
       connect-timeout: 5000ms
       timeout: 5000ms
-
+  rabbitmq:
+    host: ${RABBIT_HOST}
+    port: 5671
+    username: ${RABBIT_USER}
+    password: ${RABBIT_PASS}
+    virtual-host: ${RABBIT_VHOST}
+    ssl:
+      enabled: true
   mail:
     host: smtp.gmail.com
     port: 587
@@ -47,3 +54,13 @@ jwt:
   signerKey: ${JWT_SIGNER_KEY}
   valid-duration: ${JWT_VALID_DURATION:3600}
   refreshable-duration: ${JWT_REFRESH_DURATION:36000}
+
+google:
+  client-id: ${GOOGLE_CLIENT_ID:}
+  client-secret: ${GOOGLE_SECRET:}
+  redirect-uri: ${GOOGLE_REDIRECT_URL:}
+  user-info-uri: ${USER_INFO_URI:https://www.googleapis.com/oauth2/v3/userinfo}
+  token-uri: ${TOKEN_GOOGLE_URI:https://oauth2.googleapis.com/token}
+app:
+  rabbitmq:
+    queue: ${RABBIT_QUEUE:notification_queue}

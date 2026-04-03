@@ -1,0 +1,33 @@
+server:
+  port: ${NOTIFICATION_PORT:8090}
+
+spring:
+  application:
+    name: notification-service
+
+  rabbitmq:
+    host: ${RABBIT_HOST}
+    port: 5671
+    username: ${RABBIT_USER}
+    password: ${RABBIT_PASS}
+    virtual-host: ${RABBIT_VHOST}
+    ssl:
+      enabled: true
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+
+  thymeleaf:
+    prefix: classpath:/templates/
+    suffix: .html
+    mode: HTML
+    encoding: UTF-8
+app:
+  rabbitmq:
+    queue: ${RABBIT_QUEUE:notification_queue}

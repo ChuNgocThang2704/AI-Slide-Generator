@@ -33,9 +33,13 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
     private final ReactiveStringRedisTemplate redisTemplate;
 
     private static final String[] PUBLIC_ENDPOINTS = {
-            "/auth/login",
-            "/auth/introspect",
-            "/users/register"
+            "/api/auth/login",
+            "/api/auth/google/login",
+            "/api/auth/google/redirect",
+            "/api/auth/refresh",
+            "/api/auth/introspect",
+            "/api/users/register",
+            "/api/users/verify-code"
     };
 
     @Override
@@ -71,7 +75,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
         String jti = claims.getJWTID();
 
         String redisKey = "TOKEN_BLACK_LIST_" + userId + "_" + jti;
-
+        log.info("Redis key logout {} :", redisKey);
         return redisTemplate.hasKey(redisKey)
                 .flatMap(isBlacklisted -> {
                     if (Boolean.TRUE.equals(isBlacklisted)) {

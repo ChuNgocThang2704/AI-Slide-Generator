@@ -24,10 +24,10 @@ public class RoleService {
     private final PermissionRepository permissionRepository;
 
     public RoleResponse createRole(RoleRequest request) {
-        RoleEntity roleEntity = RoleEntity.builder()
-                .name(request.getName())
-                .description(request.getDescription())
-                .build();
+        RoleEntity roleEntity = roleRepository.findById(request.getName())
+                .orElse(RoleEntity.builder().name(request.getName()).build());
+
+        roleEntity.setDescription(request.getDescription());
 
         List<PermissionEntity> permissions = permissionRepository.findAllById(request.getPermissions());
         roleEntity.setPermissions(new HashSet<>(permissions));
