@@ -5,7 +5,7 @@ import lombok.*;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
-import java.time.LocalDate;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -32,19 +32,32 @@ public class UserEntity extends AbstractAuditingEntity<UUID> {
     @Column(name = "email", unique = true)
     private String email;
 
-    @Column(name = "dayOfBirth")
-    private LocalDate dayOfBirth;
+    @Column(name = "google_id", unique = true)
+    private String googleId;
 
     @Column(name = "status")
-    private String status;
+    private Integer status;
 
     @Column(name = "email_verified", nullable = false)
     private boolean emailVerified;
+
+    @Column(name = "last_login_at")
+    private Instant lastLoginAt;
+
+    @OneToOne(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private UserProfileEntity profile;
 
     @ManyToMany
     @JoinTable(name="user_roles",
             joinColumns = @JoinColumn(name="user_id"),
             inverseJoinColumns = @JoinColumn(name="role_name"))
     private Set<RoleEntity> roles = new HashSet<>();
+
+    public void setProfile(UserProfileEntity profile) {
+        this.profile = profile;
+        if (profile != null) {
+            profile.setUser(this);
+        }
+    }
 }
 

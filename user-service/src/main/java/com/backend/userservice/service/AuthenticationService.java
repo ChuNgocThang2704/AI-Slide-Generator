@@ -1,10 +1,18 @@
 package com.backend.userservice.service;
 
+import com.backend.userservice.constant.RoleEnum;
+import com.backend.userservice.constant.Status;
 import com.backend.userservice.dto.request.AuthenticationRequest;
 import com.backend.userservice.dto.response.AuthenticationResponse;
+import com.backend.userservice.dto.response.GoogleAuthUrlResponse;
+import com.backend.userservice.dto.response.GoogleTokenResponse;
+import com.backend.userservice.dto.response.GoogleUserInfoResponse;
+import com.backend.userservice.entity.RoleEntity;
 import com.backend.userservice.entity.UserEntity;
+import com.backend.userservice.entity.UserProfileEntity;
 import com.backend.userservice.exception.AppException;
 import com.backend.userservice.exception.ErrorCode;
+import com.backend.userservice.repository.RoleRepository;
 import com.backend.userservice.repository.UserRepository;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -20,6 +28,7 @@ import java.text.ParseException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -28,19 +37,26 @@ import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AuthenticationService {
     private static final String TOKEN_BLACKLIST_PREFIX = "TOKEN_BLACK_LIST_";
+    private static final String ACCESS_TOKEN_TYPE = "access";
+    private static final String REFRESH_TOKEN_TYPE = "refresh";
 
     private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
     private final RedisTemplate<String, Object> redisTemplate;
+    private final PasswordEncoder passwordEncoder;
+    private final WebClient webClient = WebClient.builder().build();
 
     @NonFinal
     @Value("${jwt.signerKey}")
@@ -54,20 +70,36 @@ public class AuthenticationService {
     @Value("${jwt.refreshable-duration}")
     protected long REFRESHABLE_DURATION;
 
+    @NonFinal
+    @Value("${google.client-id}")
+    protected String googleClientId;
+
+    @NonFinal
+    @Value("${google.client-secret}")
+    protected String googleClientSecret;
+
+    @NonFinal
+    @Value("${google.redirect-uri}")
+    protected String googleRedirectUri;
+
+    @NonFinal
+    @Value("${google.user-info-uri}")
+    protected String googleUserInfoUri;
+
+    @NonFinal
+    @Value("${google.token-uri}")
+    protected String googleTokenUri;
+
     private SignedJWT verifyToken(String token, boolean isRefresh) throws JOSEException, ParseException {
         JWSVerifier jwsVerifier = new MACVerifier(SIGNER_KEY.getBytes());
         SignedJWT signedJWT = SignedJWT.parse(token);
 
-        Date expiryTime = isRefresh
-                ? new Date(signedJWT.getJWTClaimsSet()
-                        .getIssueTime()
-                        .toInstant()
-                        .plus(REFRESHABLE_DURATION, ChronoUnit.SECONDS)
-                        .toEpochMilli())
-                : signedJWT.getJWTClaimsSet().getExpirationTime();
-
         boolean verified = signedJWT.verify(jwsVerifier);
-        if (!verified || expiryTime.before(new Date())) {
+        String tokenType = signedJWT.getJWTClaimsSet().getStringClaim("token_type");
+        String expectedTokenType = isRefresh ? REFRESH_TOKEN_TYPE : ACCESS_TOKEN_TYPE;
+        Date expiryTime = signedJWT.getJWTClaimsSet().getExpirationTime();
+
+        if (!verified || expiryTime.before(new Date()) || !expectedTokenType.equals(tokenType)) {
             throw new AppException(ErrorCode.UNAUTHENTICATED);
         }
 
@@ -94,24 +126,30 @@ public class AuthenticationService {
         if (!CollectionUtils.isEmpty(user.getRoles())) {
             user.getRoles().forEach(role -> {
                 stringJoiner.add("ROLE_" + role.getName());
-                if (!CollectionUtils.isEmpty(role.getPermissions())) {
-                    role.getPermissions().forEach(permission -> stringJoiner.add(permission.getName()));
-                }
             });
         }
 
         return stringJoiner.toString();
     }
 
-    private String generateToken(UserEntity userEntity) {
+    private String generateAccessToken(UserEntity userEntity) {
+        return generateToken(userEntity, VALID_DURATION, ACCESS_TOKEN_TYPE);
+    }
+
+    private String generateRefreshToken(UserEntity userEntity) {
+        return generateToken(userEntity, REFRESHABLE_DURATION, REFRESH_TOKEN_TYPE);
+    }
+
+    private String generateToken(UserEntity userEntity, long durationInSeconds, String tokenType) {
         JWSHeader jwsHeader = new JWSHeader(JWSAlgorithm.HS512);
 
         JWTClaimsSet jwtClaimsSet = new JWTClaimsSet.Builder()
                 .subject(userEntity.getId().toString())
                 .issuer("ai-slide-generator")
                 .issueTime(new Date())
-                .expirationTime(new Date(Instant.now().plus(VALID_DURATION, ChronoUnit.SECONDS).toEpochMilli()))
+                .expirationTime(new Date(Instant.now().plus(durationInSeconds, ChronoUnit.SECONDS).toEpochMilli()))
                 .jwtID(UUID.randomUUID().toString())
+                .claim("token_type", tokenType)
                 .claim("scope", buildScope(userEntity))
                 .build();
         Payload payload = new Payload(jwtClaimsSet.toJSONObject());
@@ -127,10 +165,23 @@ public class AuthenticationService {
         }
     }
 
+    public GoogleAuthUrlResponse getGoogleAuthUrl() {
+        String authUrl = "https://accounts.google.com/o/oauth2/v2/auth?"
+                + "client_id=" + googleClientId
+                + "&redirect_uri=" + googleRedirectUri
+                + "&response_type=code"
+                + "&scope=profile%20email"
+                + "&access_type=offline"
+                + "&prompt=consent";
+
+        return GoogleAuthUrlResponse.builder()
+                .url(authUrl)
+                .build();
+    }
+
     public AuthenticationResponse authenticate(AuthenticationRequest request) {
-        PasswordEncoder passwordEncoder = new BCryptPasswordEncoder(10);
         UserEntity userEntity = userRepository
-                .findByUsername(request.getUsername())
+                .findByEmail(request.getEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
 
         boolean authenticated = passwordEncoder.matches(request.getPassword(), userEntity.getPassword());
@@ -138,14 +189,133 @@ public class AuthenticationService {
             throw new AppException(ErrorCode.USERNAME_OR_PASSWORD_INCORRECT);
         }
 
-        return AuthenticationResponse.builder()
-                .token(generateToken(userEntity))
-                .build();
+        if (!userEntity.isEmailVerified()){
+            throw new AppException(ErrorCode.USER_IS_NOT_ACTIVE);
+        }
+
+        userEntity.setLastLoginAt(Instant.now());
+        userEntity.setStatus(Status.USER_STATUS.ACTIVE);
+        userRepository.save(userEntity);
+
+        return buildAuthenticationResponse(userEntity);
+    }
+
+    public AuthenticationResponse handleGoogleOAuthCode(String code) {
+        if (code == null || code.isBlank()) {
+            throw new AppException(ErrorCode.GOOGLE_AUTH_FAILED);
+        }
+
+        GoogleTokenResponse tokenResponse;
+        try {
+            tokenResponse = webClient.post()
+                    .uri(googleTokenUri)
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(BodyInserters.fromFormData("code", code)
+                            .with("client_id", googleClientId)
+                            .with("client_secret", googleClientSecret)
+                            .with("redirect_uri", googleRedirectUri)
+                            .with("grant_type", "authorization_code"))
+                    .retrieve()
+                    .bodyToMono(GoogleTokenResponse.class)
+                    .block();
+        } catch (Exception exception) {
+            log.error("Failed to exchange Google auth code", exception);
+            throw new AppException(ErrorCode.GOOGLE_AUTH_FAILED);
+        }
+
+        if (tokenResponse == null || tokenResponse.getAccessToken() == null || tokenResponse.getAccessToken().isBlank()) {
+            throw new AppException(ErrorCode.GOOGLE_AUTH_FAILED);
+        }
+
+        GoogleUserInfoResponse googleUserInfo;
+        try {
+            googleUserInfo = webClient.get()
+                    .uri(googleUserInfoUri)
+                    .headers(headers -> headers.setBearerAuth(tokenResponse.getAccessToken()))
+                    .retrieve()
+                    .bodyToMono(GoogleUserInfoResponse.class)
+                    .block();
+        } catch (Exception exception) {
+            log.error("Failed to load Google user info", exception);
+            throw new AppException(ErrorCode.GOOGLE_AUTH_FAILED);
+        }
+
+        if (googleUserInfo == null || googleUserInfo.getSub() == null || googleUserInfo.getEmail() == null) {
+            throw new AppException(ErrorCode.GOOGLE_AUTH_FAILED);
+        }
+
+        UserEntity user = upsertGoogleUser(googleUserInfo);
+        user.setLastLoginAt(Instant.now());
+        userRepository.save(user);
+
+        return buildAuthenticationResponse(user);
+    }
+
+    private UserEntity upsertGoogleUser(GoogleUserInfoResponse googleUserInfo) {
+        UserEntity user = userRepository.findByGoogleId(googleUserInfo.getSub())
+                .orElseGet(() -> userRepository.findByEmail(googleUserInfo.getEmail()).orElse(null));
+
+        if (user == null) {
+            RoleEntity defaultRole = roleRepository.findById(String.valueOf(RoleEnum.USER_FREE))
+                    .orElseThrow(() -> new AppException(ErrorCode.ROLE_NOT_FOUND));
+
+            user = UserEntity.builder()
+                    .email(googleUserInfo.getEmail())
+                    .username(generateUsername(googleUserInfo.getEmail(), googleUserInfo.getSub()))
+                    .password(passwordEncoder.encode(UUID.randomUUID().toString()))
+                    .googleId(googleUserInfo.getSub())
+                    .status(Status.USER_STATUS.VERIFIED)
+                    .emailVerified(true)
+                    .roles(new HashSet<>(java.util.Set.of(defaultRole)))
+                    .build();
+            user.setProfile(UserProfileEntity.builder()
+                    .fullName(googleUserInfo.getName())
+                    .avatarUrl(googleUserInfo.getPicture())
+                    .build());
+            return userRepository.save(user);
+        }
+
+        user.setGoogleId(googleUserInfo.getSub());
+        user.setEmail(googleUserInfo.getEmail());
+        user.setEmailVerified(true);
+        if (user.getStatus() == null) {
+            user.setStatus(Status.USER_STATUS.VERIFIED);
+        }
+
+        UserProfileEntity profile = user.getProfile();
+        if (profile == null) {
+            profile = UserProfileEntity.builder().build();
+            user.setProfile(profile);
+        }
+        if (googleUserInfo.getName() != null && !googleUserInfo.getName().isBlank()) {
+            profile.setFullName(googleUserInfo.getName());
+        }
+        if (googleUserInfo.getPicture() != null && !googleUserInfo.getPicture().isBlank()) {
+            profile.setAvatarUrl(googleUserInfo.getPicture());
+        }
+
+        return user;
+    }
+
+    private String generateUsername(String email, String googleId) {
+        String base = email != null && email.contains("@")
+                ? email.substring(0, email.indexOf('@'))
+                : "google_user";
+        String normalizedBase = base.replaceAll("[^a-zA-Z0-9_]", "_");
+        String candidate = normalizedBase;
+        int suffix = 1;
+
+        while (userRepository.findByUsername(candidate).isPresent()) {
+            candidate = normalizedBase + "_" + googleId.substring(Math.max(0, googleId.length() - 6)) + "_" + suffix;
+            suffix++;
+        }
+
+        return candidate;
     }
 
     public void logout(String token) {
         try {
-            SignedJWT signToken = verifyToken(token, true);
+            SignedJWT signToken = verifyToken(token, false);
 
             String jwtId = signToken.getJWTClaimsSet().getJWTID();
             String userId = signToken.getJWTClaimsSet().getSubject();
@@ -175,8 +345,13 @@ public class AuthenticationService {
         UserEntity user = userRepository.findById(UUID.fromString(userIdStr))
                 .orElseThrow(() -> new AppException(ErrorCode.UNAUTHENTICATED));
 
+        return buildAuthenticationResponse(user);
+    }
+
+    private AuthenticationResponse buildAuthenticationResponse(UserEntity userEntity) {
         return AuthenticationResponse.builder()
-                .token(generateToken(user))
+                .token(generateAccessToken(userEntity))
+                .refreshToken(generateRefreshToken(userEntity))
                 .build();
     }
 }

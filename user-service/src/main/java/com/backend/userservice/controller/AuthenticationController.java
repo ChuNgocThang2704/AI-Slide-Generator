@@ -2,13 +2,16 @@ package com.backend.userservice.controller;
 
 import com.backend.userservice.dto.request.AuthenticationRequest;
 import com.backend.userservice.dto.request.CheckTokenRequest;
+import com.backend.userservice.dto.request.GoogleAuthenticationRequest;
 import com.backend.userservice.dto.response.ApiResponse;
 import com.backend.userservice.dto.response.AuthenticationResponse;
+import com.backend.userservice.dto.response.GoogleAuthUrlResponse;
 import com.backend.userservice.service.AuthenticationService;
 import com.nimbusds.jose.JOSEException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -26,6 +29,19 @@ public class AuthenticationController {
     @PostMapping("/login")
     ApiResponse<AuthenticationResponse> authenticate(@RequestBody AuthenticationRequest request) {
         AuthenticationResponse result = authenticationService.authenticate(request);
+        return ApiResponse.<AuthenticationResponse>builder().data(result).build();
+    }
+
+    @GetMapping("/google/login")
+    ApiResponse<GoogleAuthUrlResponse> getGoogleAuthUrl() {
+        return ApiResponse.<GoogleAuthUrlResponse>builder()
+                .data(authenticationService.getGoogleAuthUrl())
+                .build();
+    }
+
+    @PostMapping("/google/redirect")
+    ApiResponse<AuthenticationResponse> googleRedirect(@RequestBody GoogleAuthenticationRequest request) {
+        AuthenticationResponse result = authenticationService.handleGoogleOAuthCode(request.getCode());
         return ApiResponse.<AuthenticationResponse>builder().data(result).build();
     }
 

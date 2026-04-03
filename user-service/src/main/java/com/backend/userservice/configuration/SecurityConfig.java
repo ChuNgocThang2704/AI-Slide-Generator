@@ -26,16 +26,20 @@ public class SecurityConfig {
     @Value("${jwt.signerKey}")
     private String signerKey;
 
-    private static final String[] PUBLIC_ENDPOINTS = {
-        "/users/register", "/auth/login", "/auth/logout", "/auth/refresh"
+    private static final String[] PUBLIC_POST_ENDPOINTS = {
+        "/users/register", "/auth/login", "/auth/logout", "/auth/refresh", "/auth/google/redirect", "/users/verify-code"
+    };
+
+    private static final String[] PUBLIC_GET_ENDPOINTS = {
+        "/auth/google/login"
     };
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity httpSecurity) throws Exception {
-        httpSecurity.authorizeHttpRequests(request -> request.requestMatchers(HttpMethod.POST, PUBLIC_ENDPOINTS)
-                .permitAll()
-                .anyRequest().permitAll()
-        );
+        httpSecurity.authorizeHttpRequests(request -> request
+                .requestMatchers(HttpMethod.POST, PUBLIC_POST_ENDPOINTS).permitAll()
+                .requestMatchers(HttpMethod.GET, PUBLIC_GET_ENDPOINTS).permitAll()
+                .anyRequest().authenticated());
 
         httpSecurity.oauth2ResourceServer(oauth2 -> oauth2.jwt(jwtConfigurer -> jwtConfigurer
                         .decoder(jwtDecoder())

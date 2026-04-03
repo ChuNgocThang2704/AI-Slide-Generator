@@ -2,6 +2,7 @@ package com.backend.userservice.controller;
 
 import com.backend.userservice.dto.request.CreateUserRequest;
 import com.backend.userservice.dto.request.UpdateUserRequest;
+import com.backend.userservice.dto.request.VerifyCodeRequest;
 import com.backend.userservice.dto.response.ApiResponse;
 import com.backend.userservice.dto.response.UserPagination;
 import com.backend.userservice.dto.response.UserResponse;
@@ -55,10 +56,18 @@ public class UserController {
         return ApiResponse.<String>builder().data("User has been deleted").build();
     }
 
-    @PutMapping("/{userId}")
+    @PostMapping("/{userId}")
     ApiResponse<UserResponse> updateUser(@PathVariable String userId, @RequestBody UpdateUserRequest request) {
         return ApiResponse.<UserResponse>builder()
                 .data(userService.updateUser(UUID.fromString(userId), request))
+                .build();
+    }
+
+    @PostMapping("/verify-code")
+    ApiResponse<String> verifyCode(@RequestBody @Valid VerifyCodeRequest request) {
+        userService.verifyCode(request);
+        return ApiResponse.<String>builder()
+                .data("Xác thực tài khoản thành công! Bạn có thể đăng nhập ngay.")
                 .build();
     }
 }

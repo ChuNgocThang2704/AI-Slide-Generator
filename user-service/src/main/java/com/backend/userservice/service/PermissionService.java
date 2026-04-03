@@ -18,11 +18,12 @@ public class PermissionService {
     private final PermissionRepository permissionRepository;
 
     public PermissionResponse createPermission(PermissionRequest request) {
-        PermissionEntity permission = PermissionEntity.builder()
-                .name(request.getName())
-                .description(request.getDescription())
-                .build();
+        PermissionEntity permission = permissionRepository.findById(request.getName())
+                .orElse(PermissionEntity.builder().name(request.getName()).build());
+
+        permission.setDescription(request.getDescription());
         permissionRepository.save(permission);
+
         return PermissionResponse.builder()
                 .name(permission.getName())
                 .description(permission.getDescription())
