@@ -1,4 +1,4 @@
-package com.backend.documentservice.dto;
+package com.backend.documentservice.dto.response;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -11,11 +11,13 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class AiConfigDTO {
-
+public class AiConfigResponse {
     private UUID id;
+    private String roleCode;
     private String configName;
     private String language;
     private String tone;
-    private Integer maxSlideCount;
+    private Integer maxProjectsPerDay;
+    private Integer minPagesPerProject;
+    private Integer maxPagesPerProject;
 }

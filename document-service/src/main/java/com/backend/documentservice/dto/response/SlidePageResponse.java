@@ -1,4 +1,4 @@
-package com.backend.documentservice.dto;
+package com.backend.documentservice.dto.response;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -12,8 +12,8 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 public class SlidePageResponse {
-
     private UUID id;
+    private UUID projectId;
     private Integer pageIndex;
     private String title;
     private String content;

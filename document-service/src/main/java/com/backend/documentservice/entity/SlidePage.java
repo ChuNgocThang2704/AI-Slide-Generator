@@ -13,6 +13,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
+import org.hibernate.annotations.JdbcTypeCode;
 
 import java.util.UUID;
 
@@ -29,9 +30,11 @@ public class SlidePage extends AbstractAuditingEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
+    @JdbcTypeCode(java.sql.Types.VARCHAR)
     private UUID id;
 
     @Column(name = "project_id", nullable = false)
+    @JdbcTypeCode(java.sql.Types.VARCHAR)
     private UUID projectId;
 
     @Column(name = "page_index", nullable = false)
