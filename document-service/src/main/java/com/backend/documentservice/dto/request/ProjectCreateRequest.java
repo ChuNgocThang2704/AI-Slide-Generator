@@ -1,7 +1,5 @@
-package com.backend.documentservice.dto;
+package com.backend.documentservice.dto.request;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -16,17 +14,14 @@ import java.util.UUID;
 @AllArgsConstructor
 public class ProjectCreateRequest {
 
-    @NotBlank(message = "Project name is required")
-    private String name;
-
-    @NotNull(message = "Owner ID is required")
-    private UUID ownerId;
+    private String prompt;
 
     private UUID templateId;
 
     private UUID aiConfigId;
 
-    private String prompt;
-
     private MultipartFile file;
+
+    // Set by controller from SecurityContext
+    private UUID ownerId;
 }

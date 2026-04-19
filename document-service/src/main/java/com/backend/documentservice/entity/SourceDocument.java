@@ -13,7 +13,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
+import org.hibernate.annotations.JdbcTypeCode;
 
+import java.sql.Types;
 import java.util.UUID;
 
 @Entity
@@ -29,9 +31,11 @@ public class SourceDocument extends AbstractAuditingEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
+    @JdbcTypeCode(Types.VARCHAR)
     private UUID id;
 
     @Column(name = "user_id", nullable = false)
+    @JdbcTypeCode(Types.VARCHAR)
     private UUID userId;
 
     @Column(name = "file_name")

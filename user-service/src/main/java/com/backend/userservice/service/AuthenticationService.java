@@ -149,6 +149,7 @@ public class AuthenticationService {
                 .issueTime(new Date())
                 .expirationTime(new Date(Instant.now().plus(durationInSeconds, ChronoUnit.SECONDS).toEpochMilli()))
                 .jwtID(UUID.randomUUID().toString())
+                .claim("email", userEntity.getEmail())
                 .claim("token_type", tokenType)
                 .claim("scope", buildScope(userEntity))
                 .build();
