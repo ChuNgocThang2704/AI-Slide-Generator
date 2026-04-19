@@ -13,7 +13,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
+import org.hibernate.annotations.JdbcTypeCode;
 
+import java.sql.Types;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -30,9 +32,11 @@ public class AITaskLog extends AbstractAuditingEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
+    @JdbcTypeCode(Types.VARCHAR)
     private UUID id;
 
     @Column(name = "project_id", nullable = false)
+    @JdbcTypeCode(Types.VARCHAR)
     private UUID projectId;
 
     @Column(name = "task_type")

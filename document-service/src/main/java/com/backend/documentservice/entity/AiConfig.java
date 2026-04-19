@@ -13,7 +13,9 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
+import org.hibernate.annotations.JdbcTypeCode;
 
+import java.sql.Types;
 import java.util.UUID;
 
 @Entity
@@ -29,6 +31,7 @@ public class AiConfig extends AbstractAuditingEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
+    @JdbcTypeCode(Types.VARCHAR)
     private UUID id;
 
     @Column(name = "role_code", unique = true)
