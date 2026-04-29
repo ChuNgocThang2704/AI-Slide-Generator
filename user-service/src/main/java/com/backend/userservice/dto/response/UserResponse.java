@@ -22,4 +22,5 @@ public class UserResponse {
     private Instant lastLoginAt;
     private UserProfileResponse profile;
     private Set<RoleResponse> roles;
+    private Instant createdAt;
 }

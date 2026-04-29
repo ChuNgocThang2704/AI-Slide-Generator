@@ -18,13 +18,15 @@ import lombok.Setter;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
+import lombok.experimental.SuperBuilder;
+
 @Entity
 @Table(name = "user_profiles")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@SuperBuilder
 @Where(clause = "is_active = true")
 @SQLDelete(sql = "UPDATE user_profiles SET is_active = false WHERE user_id = ?")
 public class UserProfileEntity extends AbstractAuditingEntity<UUID> {

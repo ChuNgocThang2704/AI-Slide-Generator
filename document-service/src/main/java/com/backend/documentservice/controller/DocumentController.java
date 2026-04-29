@@ -103,6 +103,15 @@ public class DocumentController {
                 .build();
     }
 
+    @PostMapping("/projects/{id}/pages/sync")
+    public ApiResponse<List<SlidePageResponse>> syncSlidePages(
+            @PathVariable UUID id,
+            @RequestBody List<SlidePageUpdateRequest> requests) {
+        return ApiResponse.<List<SlidePageResponse>>builder()
+                .data(projectService.syncSlidePages(id, currentUserId(), requests))
+                .build();
+    }
+
     @GetMapping("/projects/{id}/task-logs")
     public ApiResponse<List<AITaskLogResponse>> getProjectTaskLogs(@PathVariable UUID id) {
         return ApiResponse.<List<AITaskLogResponse>>builder()

@@ -12,9 +12,17 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.io.Serializable;
 import java.time.Instant;
 
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import lombok.experimental.SuperBuilder;
+import lombok.Builder;
+
 @MappedSuperclass
 @EntityListeners(AuditingEntityListener.class)
 @Getter
+@Setter
+@SuperBuilder
+@NoArgsConstructor
 @JsonIgnoreProperties(value = { "createdBy", "createdAt", "updatedBy", "updatedAt" }, allowGetters = true)
 public class AbstractAuditingEntity<T> implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -26,6 +34,7 @@ public class AbstractAuditingEntity<T> implements Serializable {
 
     @CreatedDate
     @Column(name = "created_at", updatable = false)
+    @Builder.Default
     private Instant createdAt = Instant.now();
 
     @LastModifiedBy
@@ -34,6 +43,7 @@ public class AbstractAuditingEntity<T> implements Serializable {
 
     @LastModifiedDate
     @Column(name = "updated_at")
+    @Builder.Default
     private Instant updatedAt = Instant.now();
 
     @Column(name = "is_active")

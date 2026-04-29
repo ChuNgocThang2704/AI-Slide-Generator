@@ -6,11 +6,10 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -23,9 +22,8 @@ import java.util.UUID;
 @Table(name = "ai_task_logs")
 @Getter
 @Setter
-@Builder
+@SuperBuilder
 @NoArgsConstructor
-@AllArgsConstructor
 @SQLDelete(sql = "UPDATE ai_task_logs SET is_active = false WHERE id = ?")
 @Where(clause = "is_active = true")
 public class AITaskLog extends AbstractAuditingEntity {

@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Data
@@ -19,4 +20,6 @@ public class SlidePageResponse {
     private String content;
     private String imagePrompt;
     private String imageUrl;
+    private Instant createdAt;
+    private Instant updatedAt;
 }
