@@ -150,6 +150,13 @@ public class DocumentController {
                 .build();
     }
 
+    @GetMapping("/source-documents/{id}/view")
+    public ApiResponse<String> getPresignedViewUrl(@PathVariable UUID id) {
+        return ApiResponse.<String>builder()
+                .data(sourceDocumentService.generatePresignedViewUrl(id, currentUserId()))
+                .build();
+    }
+
     @DeleteMapping("/source-documents")
     public ApiResponse<String> deleteDocuments(@RequestBody List<UUID> ids) {
         sourceDocumentService.deleteDocuments(ids, currentUserId());

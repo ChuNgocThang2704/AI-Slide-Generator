@@ -257,18 +257,43 @@ public class ProjectService {
 
     private String generateProjectName(String prompt, String fileName) {
         if (prompt != null && !prompt.isBlank()) {
-            String cleanPrompt = prompt.trim().replaceAll("\\s+", " ");
-            if (cleanPrompt.length() > 30) {
-                return cleanPrompt.substring(0, 27) + "...";
+            String name = prompt.trim().replaceAll("\\s+", " ");
+            
+            String[] stopPhrases = {
+                "tạo slide về", "tạo bài thuyết trình về", "làm slide về", 
+                "hãy tạo slide về", "viết slide về", "thuyết trình về", 
+                "bài thuyết trình về", "tạo slide", "tạo bài"
+            };
+            
+            String lowerName = name.toLowerCase();
+            for (String phrase : stopPhrases) {
+                if (lowerName.startsWith(phrase)) {
+                    name = name.substring(phrase.length()).trim();
+                    break;
+                }
             }
-            return cleanPrompt;
+            
+            if (!name.isEmpty()) {
+                name = Character.toUpperCase(name.charAt(0)) + name.substring(1);
+            }
+            
+            if (name.length() > 40) {
+                int lastSpace = name.lastIndexOf(' ', 37);
+                if (lastSpace != -1) {
+                    name = name.substring(0, lastSpace) + "...";
+                } else {
+                    name = name.substring(0, 37) + "...";
+                }
+            }
+            
+            return name.isEmpty() ? "Dự án không tên" : name;
         }
 
         if (fileName != null && !fileName.isBlank()) {
-            return "Slide: " + fileName;
+            return "Dự án từ file: " + fileName;
         }
 
-        return "Dự án mới_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmm"));
+        return "Dự án slide mới (" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM HH:mm")) + ")";
     }
 
     private Integer determineFileType(String fileName) {
