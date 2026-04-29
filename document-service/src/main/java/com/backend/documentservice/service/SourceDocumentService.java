@@ -26,7 +26,11 @@ import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.GetUrlRequest;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import java.net.URL;
+import java.time.Duration;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -43,6 +47,7 @@ public class SourceDocumentService {
     private final SourceDocumentRepository sourceDocumentRepository;
     private final SourceDocumentMapper sourceDocumentMapper;
     private final S3Client s3Client;
+    private final S3Presigner s3Presigner;
 
     @Value("${aws.s3.bucket}")
     private String bucketName;
@@ -128,6 +133,32 @@ public class SourceDocumentService {
         return sourceDocumentMapper.toDto(entity);
     }
 
+    public String generatePresignedViewUrl(UUID id, UUID userId) {
+        log.info("[document-service] tạo pre-signed URL xem tài liệu id: {} cho user: {}", id, userId);
+        SourceDocument doc = sourceDocumentRepository.findById(id)
+                .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+
+        if (!doc.getUserId().equals(userId)) {
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        }
+
+        String key = extractS3KeyFromUrl(doc.getUrl());
+
+        if (key == null) throw new AppException(ErrorCode.DOCUMENT_NOT_FOUND);
+
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucketName.trim())
+                .key(key)
+                .build();
+
+        GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                .signatureDuration(Duration.ofMinutes(120))
+                .getObjectRequest(getObjectRequest)
+                .build();
+
+        return s3Presigner.presignGetObject(presignRequest).url().toString();
+    }
+
     @Transactional
     public void deleteDocuments(List<UUID> ids, UUID userId) {
         log.info("[document-service] xóa {} tài liệu của user: {}", ids.size(), userId);
@@ -160,9 +191,22 @@ public class SourceDocumentService {
 
     private String extractS3KeyFromUrl(String url) {
         try {
-            URL parsedUrl = new URL(url);
+            String cleanUrl = url.contains("?") ? url.split("\\?")[0] : url;
+            URL parsedUrl = new URL(cleanUrl);
             String path = parsedUrl.getPath();
-            return path.startsWith("/") ? path.substring(1) : path;
+
+            path = java.net.URLDecoder.decode(path, java.nio.charset.StandardCharsets.UTF_8);
+
+            if (path.startsWith("/")) {
+                path = path.substring(1);
+            }
+
+            String bName = bucketName.trim();
+            if (path.startsWith(bName + "/")) {
+                path = path.substring(bName.length() + 1);
+            }
+            
+            return path;
         } catch (Exception e) {
             log.error("Could not extract S3 key from URL: {}", url);
             return null;
