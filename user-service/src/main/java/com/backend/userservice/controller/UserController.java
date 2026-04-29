@@ -1,13 +1,16 @@
 package com.backend.userservice.controller;
 
-import com.backend.userservice.dto.request.CreateUserRequest;
+import com.backend.userservice.dto.request.CheckTokenRequest;
 import com.backend.userservice.dto.request.UpdateUserRequest;
-import com.backend.userservice.dto.request.VerifyCodeRequest;
 import com.backend.userservice.dto.response.ApiResponse;
+import com.backend.userservice.dto.response.AuthenticationResponse;
 import com.backend.userservice.dto.response.UserPagination;
 import com.backend.userservice.dto.response.UserResponse;
+import com.backend.userservice.service.AuthenticationService;
 import com.backend.userservice.service.UserService;
+import com.nimbusds.jose.JOSEException;
 import jakarta.validation.Valid;
+import java.text.ParseException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -20,13 +23,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class UserController {
     private final UserService userService;
-
-    @PostMapping("/register")
-    ApiResponse<UserResponse> createUser(@RequestBody @Valid CreateUserRequest request) {
-        return ApiResponse.<UserResponse>builder()
-                .data(userService.createUser(request))
-                .build();
-    }
 
     @GetMapping
     ApiResponse<UserPagination> getUsers(@RequestParam(defaultValue = "0", required = false) int page,
@@ -60,14 +56,6 @@ public class UserController {
     ApiResponse<UserResponse> updateUser(@PathVariable String userId, @RequestBody UpdateUserRequest request) {
         return ApiResponse.<UserResponse>builder()
                 .data(userService.updateUser(UUID.fromString(userId), request))
-                .build();
-    }
-
-    @PostMapping("/verify-code")
-    ApiResponse<String> verifyCode(@RequestBody @Valid VerifyCodeRequest request) {
-        userService.verifyCode(request);
-        return ApiResponse.<String>builder()
-                .data("Xác thực tài khoản thành công! Bạn có thể đăng nhập ngay.")
                 .build();
     }
 }

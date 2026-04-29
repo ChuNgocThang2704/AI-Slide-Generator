@@ -27,7 +27,7 @@ public class SecurityConfig {
     private String signerKey;
 
     private static final String[] PUBLIC_POST_ENDPOINTS = {
-        "/users/register", "/auth/login", "/auth/logout", "/auth/refresh", "/auth/google/redirect", "/users/verify-code"
+        "/auth/register", "/auth/login", "/auth/logout", "/auth/refresh", "/auth/google/redirect", "/auth/verify-code"
     };
 
     private static final String[] PUBLIC_GET_ENDPOINTS = {

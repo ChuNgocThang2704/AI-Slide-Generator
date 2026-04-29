@@ -10,12 +10,14 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 
+import lombok.experimental.SuperBuilder;
+
 @Entity(name = "users")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
+@SuperBuilder
 @Where(clause = "is_active = true")
 @SQLDelete(sql = "UPDATE users SET is_active = false WHERE id = ?")
 public class UserEntity extends AbstractAuditingEntity<UUID> {

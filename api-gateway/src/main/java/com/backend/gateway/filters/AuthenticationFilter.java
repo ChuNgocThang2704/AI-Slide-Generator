@@ -36,10 +36,9 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
             "/api/auth/login",
             "/api/auth/google/login",
             "/api/auth/google/redirect",
-            "/api/auth/refresh",
-            "/api/auth/introspect",
-            "/api/users/register",
-            "/api/users/verify-code"
+            "/api/auth/register",
+            "/api/auth/verify-code",
+            "/api/auth/refresh"
     };
 
     @Override

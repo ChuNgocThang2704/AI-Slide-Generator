@@ -51,70 +51,7 @@ public class UserService {
     private final UserProfileRepository userProfileRepository;
     private final PasswordEncoder passwordEncoder;
     private final RoleRepository roleRepository;
-    private final RabbitTemplate rabbitTemplate;
     private final StringRedisTemplate redisTemplate;
-    private final ObjectMapper objectMapper;
-    @Value("${app.rabbitmq.queue:notification_queue}")
-    private String notificationQueue;
-
-    public UserResponse createUser(CreateUserRequest createUserRequest) {
-        log.info("[user-service] đăng ký tài khoản mới với email: {}", createUserRequest.getEmail());
-        String email = createUserRequest.getEmail() != null ? createUserRequest.getEmail().trim().toLowerCase() : null;
-        if (email == null || email.isBlank()) {
-            throw new AppException(ErrorCode.EMAIL_IS_REQUIRED);
-        }
-        if (userRepository.existsByEmail(email)) {
-            throw new AppException(ErrorCode.USER_EXISTED);
-        }
-
-        UserEntity userEntity = UserEntity.builder()
-                .email(email)
-                .username(generateUsernameFromEmail(email))
-                .build();
-
-        userEntity.setPassword(passwordEncoder.encode(createUserRequest.getPassword()));
-
-        HashSet<RoleEntity> roles = new HashSet<>();
-        RoleEntity defaultRole = roleRepository.findById(String.valueOf(RoleEnum.USER_FREE))
-                .orElseThrow(() -> new AppException(ErrorCode.ROLE_NOT_FOUND));
-        roles.add(defaultRole);
-        userEntity.setRoles(roles);
-        userEntity.setEmailVerified(false);
-        userEntity.setStatus(Status.USER_STATUS.CREATED);
-
-        try {
-            userRepository.save(userEntity);
-            log.info("[user-service] lưu user thành công, gửi email xác nhận tới: {}", email);
-            sendVerificationEmail(userEntity);
-        } catch (DataIntegrityViolationException e) {
-            throw new AppException(ErrorCode.USER_EXISTED);
-        }
-
-        return toUserResponse(userEntity);
-    }
-
-    private void sendVerificationEmail(UserEntity userEntity) {
-        String verificationCode = String.format("%08d", new java.util.Random().nextInt(100000000));
-        String redisKey = "VERIFY_ACCOUNT_" + userEntity.getId() + "_" + verificationCode;
-        redisTemplate.opsForValue().set(redisKey, "", 15, TimeUnit.MINUTES);
-
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("email", userEntity.getEmail());
-        payload.put("code", verificationCode);
-
-        EmailRequest emailRequest = EmailRequest.builder()
-                .to(userEntity.getEmail())
-                .type("REGISTRATION_VERIFY")
-                .payload(payload)
-                .build();
-
-        try {
-            rabbitTemplate.convertAndSend(notificationQueue, emailRequest);
-            log.info("Đã đẩy yêu cầu gửi mail xác nhận cho {} vào hàng đợi", userEntity.getEmail());
-        } catch (Exception e) {
-            log.error("Lỗi khi đẩy message vào RabbitMQ: ", e);
-        }
-    }
 
     public UserResponse getMyInfo() {
         String uuid = SecurityContextHolder.getContext().getAuthentication().getName();
@@ -202,6 +139,7 @@ public class UserService {
                 .lastLoginAt(userEntity.getLastLoginAt())
                 .profile(toUserProfileResponse(userEntity.getProfile()))
                 .roles(mapRoles(userEntity.getRoles()))
+                .createdAt(userEntity.getCreatedAt())
                 .build();
     }
 
@@ -225,43 +163,5 @@ public class UserService {
                         .description(role.getDescription())
                         .build())
                 .collect(Collectors.toSet());
-    }
-
-    private String generateUsernameFromEmail(String email) {
-        String base = email != null && email.contains("@")
-                ? email.substring(0, email.indexOf('@'))
-                : "user";
-        String normalizedBase = base.replaceAll("[^a-zA-Z0-9_]", "_");
-        String candidate = normalizedBase.isBlank() ? "user" : normalizedBase;
-        int suffix = 1;
-
-        while (userRepository.findByUsername(candidate).isPresent()) {
-            candidate = normalizedBase + "_" + suffix;
-            suffix++;
-        }
-
-        return candidate;
-    }
-
-    public void verifyCode(VerifyCodeRequest request) {
-        log.info("[user-service] xác thực mã OTP cho email: {}", request.getEmail());
-        String email = request.getEmail().trim().toLowerCase();
-        UserEntity user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
-        String redisKey = "VERIFY_ACCOUNT_" + user.getId() + "_" + request.getCode();
-
-        Boolean hasKey = redisTemplate.hasKey(redisKey);
-
-        if (!hasKey) {
-            log.warn("Xác thực thất bại cho email: {}. Mã không tồn tại hoặc hết hạn.", email);
-            throw new AppException(ErrorCode.INVALID_CODE_OR_EXPIRED);
-        }
-
-        user.setEmailVerified(true);
-        user.setStatus(Status.USER_STATUS.VERIFIED);
-        userRepository.save(user);
-        redisTemplate.delete(redisKey);
-
-        log.info("Xác thực thành công cho User ID: {}", user.getId());
     }
 }

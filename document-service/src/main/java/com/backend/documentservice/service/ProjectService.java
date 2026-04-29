@@ -177,6 +177,8 @@ public class ProjectService {
                         .content(page.getContent())
                         .imagePrompt(page.getImagePrompt())
                         .imageUrl(page.getImageUrl())
+                        .createdAt(page.getCreatedAt())
+                        .updatedAt(page.getUpdatedAt())
                         .build())
                 .collect(Collectors.toList());
     }
@@ -207,7 +209,69 @@ public class ProjectService {
                 .content(page.getContent())
                 .imagePrompt(page.getImagePrompt())
                 .imageUrl(page.getImageUrl())
+                .createdAt(page.getCreatedAt())
+                .updatedAt(page.getUpdatedAt())
                 .build();
+    }
+
+    @Transactional
+    public List<SlidePageResponse> syncSlidePages(UUID projectId, UUID userId, List<SlidePageUpdateRequest> requests) {
+        log.info("[document-service] đồng bộ slide pages cho project id: {} cho user: {}", projectId, userId);
+        getProjectDetail(projectId, userId);
+
+        List<SlidePage> currentPages = slidePageRepository.findByProjectIdOrderByPageIndexAsc(projectId);
+        java.util.Map<UUID, SlidePage> currentPagesMap = currentPages.stream()
+                .collect(Collectors.toMap(SlidePage::getId, page -> page));
+
+        List<UUID> requestIds = requests.stream()
+                .filter(req -> req.getId() != null)
+                .map(SlidePageUpdateRequest::getId)
+                .collect(Collectors.toList());
+
+        // Delete pages not in request
+        List<SlidePage> pagesToDelete = currentPages.stream()
+                .filter(page -> !requestIds.contains(page.getId()))
+                .collect(Collectors.toList());
+        if (!pagesToDelete.isEmpty()) {
+            slidePageRepository.deleteAll(pagesToDelete);
+        }
+
+        List<SlidePage> updatedPages = new java.util.ArrayList<>();
+        // Update or Create
+        for (int i = 0; i < requests.size(); i++) {
+            SlidePageUpdateRequest req = requests.get(i);
+            SlidePage page;
+            if (req.getId() != null && currentPagesMap.containsKey(req.getId())) {
+                // Update
+                page = currentPagesMap.get(req.getId());
+                page.setTitle(req.getTitle());
+                page.setContent(req.getContent());
+                page.setImagePrompt(req.getImagePrompt());
+                page.setPageIndex(i);
+            } else {
+                // Create
+                page = SlidePage.builder()
+                        .projectId(projectId)
+                        .title(req.getTitle())
+                        .content(req.getContent())
+                        .imagePrompt(req.getImagePrompt())
+                        .pageIndex(i)
+                        .build();
+            }
+            updatedPages.add(slidePageRepository.save(page));
+        }
+
+        return updatedPages.stream().map(page -> SlidePageResponse.builder()
+                .id(page.getId())
+                .projectId(page.getProjectId())
+                .pageIndex(page.getPageIndex())
+                .title(page.getTitle())
+                .content(page.getContent())
+                .imagePrompt(page.getImagePrompt())
+                .imageUrl(page.getImageUrl())
+                .createdAt(page.getCreatedAt())
+                .updatedAt(page.getUpdatedAt())
+                .build()).collect(Collectors.toList());
     }
 
     public List<AITaskLogResponse> getTaskLogs(UUID id, UUID userId) {

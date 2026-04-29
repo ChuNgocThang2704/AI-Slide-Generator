@@ -9,9 +9,11 @@ import java.io.Serializable;
 import java.util.HashSet;
 import java.util.Set;
 
+import lombok.experimental.SuperBuilder;
+
 @Getter
 @Setter
-@Builder
+@SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity(name = "roles")
