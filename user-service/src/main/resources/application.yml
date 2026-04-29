@@ -25,17 +25,12 @@ spring:
 
   data:
     redis:
-#      host: ${REDIS_HOST:localhost}
-#      port: ${REDIS_PORT:6379}
-#      password: ${REDIS_PASSWORD:}
       url: ${REDIS_URL:redis://localhost:6379}
-      ssl:
-        enabled: true
       connect-timeout: 5000ms
       timeout: 5000ms
   rabbitmq:
     host: ${RABBIT_HOST}
-    port: 5671
+    port: ${RABBIT_PORT}
     username: ${RABBIT_USER}
     password: ${RABBIT_PASS}
     virtual-host: ${RABBIT_VHOST}

@@ -18,7 +18,7 @@ public class EmailConsumer {
 
     @RabbitListener(queues = "${app.rabbitmq.queue}")
     public void receive(EmailRequest request) {
-        log.info("Received email request for: {} with type: {}", request.getTo(), request.getType());
+        log.info("[notification-service] nhận yêu cầu gửi email loại: {} tới: {}", request.getType(), request.getTo());
 
         EmailStrategy strategy = strategyMap.get(request.getType());
 
@@ -29,8 +29,9 @@ public class EmailConsumer {
                     strategy.getTemplateName(),
                     request.getPayload()
             );
+            log.info("[notification-service] xử lý email thành công, loại: {}", request.getType());
         } else {
-            log.warn("No strategy found for email type: {}", request.getType());
+            log.warn("[notification-service] không tìm thấy chiến lược gửi email cho loại: {}", request.getType());
         }
     }
 }

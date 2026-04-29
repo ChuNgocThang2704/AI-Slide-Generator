@@ -5,16 +5,17 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class SourceDocumentResponse {
+public class ProjectExportResponse {
     private UUID id;
-    private String fileName;
-    private String url;
-    private Integer fileType;
-    private Long fileSize;
+    private UUID projectId;
+    private Integer exportType;
+    private String s3Url;
+    private Instant createdAt;
 }

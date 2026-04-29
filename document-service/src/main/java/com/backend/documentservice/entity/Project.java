@@ -56,6 +56,9 @@ public class Project extends AbstractAuditingEntity {
     @Column(name = "initial_prompt", columnDefinition = "TEXT")
     private String initialPrompt;
 
+    @Column(name = "slide_url")
+    private String slideUrl;
+
     @Column(name = "status")
     private Integer status;
 }

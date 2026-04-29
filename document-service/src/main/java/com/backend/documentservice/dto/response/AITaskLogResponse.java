@@ -7,22 +7,18 @@ import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
-import java.io.Serializable;
 
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ProjectResponse implements Serializable {
+public class AITaskLogResponse {
     private UUID id;
-    private String name;
-    private UUID ownerId;
-    private UUID sourceDocId;
-    private UUID templateId;
-    private UUID aiConfigId;
-    private String initialPrompt;
-    private String slideUrl;
+    private UUID projectId;
+    private Integer taskType;
     private Integer status;
+    private String errorMessage;
+    private Instant startedAt;
+    private Instant completedAt;
     private Instant createdAt;
-    private Instant updatedAt;
 }
