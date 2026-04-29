@@ -41,15 +41,12 @@ public class SourceDocument extends AbstractAuditingEntity {
     @Column(name = "file_name")
     private String fileName;
 
-    @Column(name = "s3_url")
-    private String s3Url;
-
     @Column(name = "file_type")
     private Integer fileType;
 
     @Column(name = "file_size")
     private Long fileSize;
 
-    @Column(name = "page_count")
-    private Integer pageCount;
+    @Column(name = "url", length = 1000)
+    private String url;
 }

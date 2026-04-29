@@ -28,14 +28,28 @@ spring:
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
-      ssl:
-        enabled: true
       connect-timeout: 5000ms
       timeout: 5000ms
+
+  rabbitmq:
+    host: ${RABBIT_HOST}
+    port: ${RABBIT_PORT:5671}
+    username: ${RABBIT_USER}
+    password: ${RABBIT_PASS}
+    virtual-host: ${RABBIT_VHOST}
+    ssl:
+      enabled: true
 
 jwt:
   signerKey: ${JWT_SIGNER_KEY}
 
 app:
   rabbitmq:
-    queue: ${RABBIT_QUEUE:document_queue}
+    queue: ${RABBIT_QUEUE:notification_queue}
+
+aws:
+  access-key: ${AWS_ACCESS_KEY}
+  secret-key: ${AWS_SECRET_KEY}
+  region: ${AWS_REGION:ap-southeast-1}
+  s3:
+    bucket: ${AWS_S3_BUCKET}

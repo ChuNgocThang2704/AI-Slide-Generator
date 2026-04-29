@@ -7,7 +7,7 @@ spring:
 
   rabbitmq:
     host: ${RABBIT_HOST}
-    port: 5671
+    port: ${RABBIT_PORT}
     username: ${RABBIT_USER}
     password: ${RABBIT_PASS}
     virtual-host: ${RABBIT_VHOST}

@@ -20,6 +20,7 @@ public class MailService {
     private final SpringTemplateEngine templateEngine;
 
     public void sendHtmlMail(String to, String subject, String templateName, Map<String, Object> contextData) {
+        log.info("[notification-service] gửi email tới: {}, template: {}", to, templateName);
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
@@ -33,9 +34,9 @@ public class MailService {
             helper.setText(htmlContent, true);
 
             mailSender.send(message);
-            log.info("Email sent to: {}", to);
+            log.info("[notification-service] gửi email thành công tới: {}", to);
         } catch (MessagingException e) {
-            log.error("Failed to send email to {}", to, e);
+            log.error("[notification-service] gửi email thất bại tới: {}", to, e);
         }
     }
 }

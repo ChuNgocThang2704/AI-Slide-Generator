@@ -1,6 +1,6 @@
 package com.backend.documentservice.configuration;
 
-import com.backend.documentservice.entity.AiConfig;
+import com.backend.documentservice.entity.AIConfig;
 import com.backend.documentservice.repository.AiConfigRepository;
 import com.backend.documentservice.util.Constants;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +42,7 @@ public class AppInitConfig {
     private void createConfigIfNotExist(AiConfigRepository repository, String roleCode, String configName, 
                                         String lang, String tone, int maxDay, int minPage, int maxPage) {
         if (repository.findByRoleCode(roleCode).isEmpty()) {
-            AiConfig config = AiConfig.builder()
+            AIConfig config = AIConfig.builder()
                     .roleCode(roleCode)
                     .configName(configName)
                     .language(lang)

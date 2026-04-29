@@ -58,6 +58,7 @@ public class UserService {
     private String notificationQueue;
 
     public UserResponse createUser(CreateUserRequest createUserRequest) {
+        log.info("[user-service] đăng ký tài khoản mới với email: {}", createUserRequest.getEmail());
         String email = createUserRequest.getEmail() != null ? createUserRequest.getEmail().trim().toLowerCase() : null;
         if (email == null || email.isBlank()) {
             throw new AppException(ErrorCode.EMAIL_IS_REQUIRED);
@@ -83,6 +84,7 @@ public class UserService {
 
         try {
             userRepository.save(userEntity);
+            log.info("[user-service] lưu user thành công, gửi email xác nhận tới: {}", email);
             sendVerificationEmail(userEntity);
         } catch (DataIntegrityViolationException e) {
             throw new AppException(ErrorCode.USER_EXISTED);
@@ -115,17 +117,15 @@ public class UserService {
     }
 
     public UserResponse getMyInfo() {
-        log.info("Fetching current user info");
-        var context = SecurityContextHolder.getContext();
-        String uuid = context.getAuthentication().getName();
-
+        String uuid = SecurityContextHolder.getContext().getAuthentication().getName();
+        log.info("[user-service] lấy thông tin cá nhân của user: {}", uuid);
         UserEntity user = userRepository.findById(UUID.fromString(uuid))
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
-
         return toUserResponse(user);
     }
 
     public UserResponse updateUser(UUID userId, UpdateUserRequest request) {
+        log.info("[user-service] cập nhật thông tin user: {}", userId);
         UserEntity user = userRepository.findById(userId)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
 
@@ -163,13 +163,15 @@ public class UserService {
     }
 
     public void deleteUser(UUID userId) {
+        log.info("[user-service] xóa user: {}", userId);
         UserEntity userEntity = userRepository.findById(userId)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
         userRepository.delete(userEntity);
+        log.info("[user-service] xóa user thành công: {}", userId);
     }
 
     public UserPagination getAllUsers(int page, int size) {
-        log.info("Fetching users page {}", page);
+        log.info("[user-service] lấy danh sách user, trang: {}, kích thước: {}", page, size);
         Pageable pageable = PageRequest.of(page, size, Sort.by("username").ascending());
 
         Page<UserResponse> result = userRepository.findAll(pageable).map(this::toUserResponse);
@@ -184,6 +186,7 @@ public class UserService {
     }
 
     public UserResponse getUser(String id) {
+        log.info("[user-service] lấy thông tin user theo id: {}", id);
         UserEntity userEntity = userRepository.findById(UUID.fromString(id))
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
         return toUserResponse(userEntity);
@@ -241,6 +244,7 @@ public class UserService {
     }
 
     public void verifyCode(VerifyCodeRequest request) {
+        log.info("[user-service] xác thực mã OTP cho email: {}", request.getEmail());
         String email = request.getEmail().trim().toLowerCase();
         UserEntity user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));

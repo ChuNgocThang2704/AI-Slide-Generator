@@ -41,9 +41,6 @@ public class SlidePage extends AbstractAuditingEntity {
     @Column(name = "page_index", nullable = false)
     private Integer pageIndex;
 
-    @Column(name = "layout_id")
-    private UUID layoutId;
-
     @Column(name = "title")
     private String title;
 

@@ -27,7 +27,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @SQLDelete(sql = "UPDATE ai_configs SET is_active = false WHERE id = ?")
 @Where(clause = "is_active = true")
-public class AiConfig extends AbstractAuditingEntity {
+public class AIConfig extends AbstractAuditingEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

@@ -181,6 +181,7 @@ public class AuthenticationService {
     }
 
     public AuthenticationResponse authenticate(AuthenticationRequest request) {
+        log.info("[user-service] đăng nhập với email: {}", request.getEmail());
         UserEntity userEntity = userRepository
                 .findByEmail(request.getEmail())
                 .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
@@ -197,11 +198,13 @@ public class AuthenticationService {
         userEntity.setLastLoginAt(Instant.now());
         userEntity.setStatus(Status.USER_STATUS.ACTIVE);
         userRepository.save(userEntity);
+        log.info("[user-service] đăng nhập thành công, userId: {}", userEntity.getId());
 
         return buildAuthenticationResponse(userEntity);
     }
 
     public AuthenticationResponse handleGoogleOAuthCode(String code) {
+        log.info("[user-service] xử lý Google OAuth code");
         if (code == null || code.isBlank()) {
             throw new AppException(ErrorCode.GOOGLE_AUTH_FAILED);
         }
@@ -315,6 +318,7 @@ public class AuthenticationService {
     }
 
     public void logout(String token) {
+        log.info("[user-service] đăng xuất, vô hiệu hóa token");
         try {
             SignedJWT signToken = verifyToken(token, false);
 
@@ -339,12 +343,14 @@ public class AuthenticationService {
     }
 
     public AuthenticationResponse refreshToken(String token) throws ParseException, JOSEException {
+        log.info("[user-service] làm mới token");
         SignedJWT signedJWT = verifyToken(token, true);
         logout(token);
 
         String userIdStr = signedJWT.getJWTClaimsSet().getSubject();
         UserEntity user = userRepository.findById(UUID.fromString(userIdStr))
                 .orElseThrow(() -> new AppException(ErrorCode.UNAUTHENTICATED));
+        log.info("[user-service] cấp token mới cho userId: {}", userIdStr);
 
         return buildAuthenticationResponse(user);
     }
