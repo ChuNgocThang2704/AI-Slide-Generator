@@ -121,7 +121,5 @@ services:
     dockerContext: .
     dockerfilePath: Dockerfile
     plan: free
-    buildArgs:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL}
     envVars:
       - fromGroup: ai-slide-common-secrets
