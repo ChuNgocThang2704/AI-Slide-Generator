@@ -58,7 +58,7 @@ spring:
           predicates:
             - Path=/api/document/**
           filters:
-            - StripPrefix=1
+            - StripPrefix=0
 
 jwt:
   signerKey: ${JWT_SECRET}
