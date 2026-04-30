@@ -54,15 +54,9 @@ services:
     envVars:
       - fromGroup: ai-slide-common-secrets
       - key: USER_SERVICE_URL
-        fromService:
-          name: user-service
-          type: web
-          property: host
+        value: http://user-service:8080
       - key: DOCUMENT_SERVICE_URL
-        fromService:
-          name: document-service
-          type: web
-          property: host
+        value: http://document-service:8080
       - key: JWT_SECRET
         value: ${JWT_SIGNER_KEY}
 
@@ -82,6 +76,8 @@ services:
         value: ${USER_DB_USERNAME}
       - key: DB_PASSWORD
         value: ${USER_DB_PASSWORD}
+      - key: SERVER_PORT
+        value: 8080
 
   # 3. Document Service
   - type: web
@@ -99,6 +95,8 @@ services:
         value: ${DOC_DB_USERNAME}
       - key: DB_PASSWORD
         value: ${DOC_DB_PASSWORD}
+      - key: SERVER_PORT
+        value: 8080
 
   # 4. Notification Service
   - type: web
@@ -110,18 +108,19 @@ services:
     plan: free
     envVars:
       - fromGroup: ai-slide-common-secrets
+      - key: SERVER_PORT
+        value: 8080
 
   # 5. Frontend
-  - type: web
+  - type: static
     name: ai-frontend
-    env: docker
+    env: node
     rootDir: front-end
-    dockerContext: .
-    dockerfilePath: Dockerfile
-    plan: free
+    buildCommand: npm install && npm run build
+    publishDir: dist
     envVars:
       - key: VITE_API_BASE_URL
         fromService:
           name: api-gateway
           type: web
-          property: host
+          property: url
