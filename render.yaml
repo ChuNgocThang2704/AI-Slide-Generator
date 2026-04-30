@@ -56,17 +56,11 @@ services:
     envVars:
       - fromGroup: ai-slide-common-secrets
       - key: USER_SERVICE_HOST
-        fromService:
-          name: user-service
-          type: web
-          property: host
+        value: user-service
       - key: USER_SERVICE_PORT
         value: 8080
       - key: DOCUMENT_SERVICE_HOST
-        fromService:
-          name: document-service
-          type: web
-          property: host
+        value: document-service
       - key: DOCUMENT_SERVICE_PORT
         value: 8080
       - key: JWT_SECRET
