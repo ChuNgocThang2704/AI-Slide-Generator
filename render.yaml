@@ -48,7 +48,7 @@ services:
     name: api-gateway
     env: docker
     rootDir: api-gateway
-    dockerContext: api-gateway
+    dockerContext: .
     dockerfilePath: Dockerfile
     plan: free
     envVars:
@@ -71,7 +71,7 @@ services:
     name: user-service
     env: docker
     rootDir: user-service
-    dockerContext: user-service
+    dockerContext: .
     dockerfilePath: Dockerfile
     plan: free
     envVars:
@@ -88,7 +88,7 @@ services:
     name: document-service
     env: docker
     rootDir: document-service
-    dockerContext: document-service
+    dockerContext: .
     dockerfilePath: Dockerfile
     plan: free
     envVars:
@@ -105,7 +105,7 @@ services:
     name: notification-service
     env: docker
     rootDir: notification-service
-    dockerContext: notification-service
+    dockerContext: .
     dockerfilePath: Dockerfile
     plan: free
     envVars:
@@ -116,7 +116,7 @@ services:
     name: ai-frontend
     env: docker
     rootDir: front-end
-    dockerContext: front-end
+    dockerContext: .
     dockerfilePath: Dockerfile
     plan: free
     envVars:

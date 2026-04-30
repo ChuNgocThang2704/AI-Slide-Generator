@@ -1,0 +1,346 @@
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 40px;
+}
+
+.title-section {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.status-indicator {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(0,0,0,0.3);
+}
+
+.detail-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.project-meta {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.action-section {
+  display: flex;
+  gap: 12px;
+}
+
+.detail-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.detail-tabs button {
+  padding: 10px 20px;
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.detail-tabs button.active {
+  background: var(--primary);
+  color: white;
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+}
+
+/* Slide Content Styles */
+.slide-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.slide-card {
+  display: flex;
+  gap: 24px;
+  padding: 30px;
+  border-radius: 24px;
+  transition: all 0.3s;
+  border: 1px solid transparent;
+}
+
+.slide-card.editing {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.05);
+  box-shadow: 0 20px 40px -10px rgba(0,0,0,0.3);
+}
+
+.slide-index {
+  font-size: 48px;
+  font-weight: 900;
+  color: rgba(255, 255, 255, 0.03);
+  line-height: 1;
+  width: 50px;
+}
+
+.slide-body {
+  flex: 1;
+}
+
+.slide-body h3 {
+  font-size: 22px;
+  margin-bottom: 14px;
+  color: var(--primary);
+}
+
+.slide-body p {
+  color: #e2e8f0;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.image-prompt-box {
+  margin-top: 20px;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+.prompt-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.prompt-text {
+  font-size: 14px;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* Edit Form Styles */
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.edit-form input, 
+.edit-form textarea {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: white;
+  font-family: inherit;
+  font-size: 16px;
+}
+
+.edit-form textarea {
+  resize: vertical;
+}
+
+.prompt-edit {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px 16px;
+}
+
+.prompt-edit input {
+  border: none;
+  background: transparent;
+  padding: 8px 0;
+  font-size: 14px;
+}
+
+.edit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.save-btn {
+  background: var(--success);
+  color: white;
+  padding: 10px;
+  border-radius: 10px;
+}
+
+.cancel-btn {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  padding: 10px;
+  border-radius: 10px;
+}
+
+/* Log Styles */
+.log-list {
+  padding: 8px;
+  border-radius: 20px;
+}
+
+.log-item {
+  display: flex;
+  align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  gap: 20px;
+}
+
+.log-item:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  color: var(--text-muted);
+  font-size: 13px;
+  width: 90px;
+}
+
+.log-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.log-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.log-error {
+  font-size: 13px;
+  color: var(--error);
+}
+
+.log-status-text {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 12px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 100px;
+}
+
+/* Export Styles */
+.export-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between; /* Đẩy nội dung ra 2 đầu */
+  gap: 24px;
+  padding: 24px;
+  border-radius: 20px;
+  margin-bottom: 20px;
+}
+
+.export-main-info {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex: 1;
+}
+
+.export-icon {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.export-type-tag {
+  position: absolute;
+  bottom: -8px;
+  background: white;
+  color: black;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.btn-download {
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  color: white;
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 10px 20px -5px rgba(99, 102, 241, 0.4);
+}
+
+.btn-success {
+  background: var(--success);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+}
+
+.add-slide-btn {
+  width: 100%;
+  padding: 24px;
+  border-radius: 20px;
+  border: 2px dashed rgba(255,255,255,0.1);
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  transition: all 0.2s;
+  background: rgba(255,255,255,0.02);
+}
+
+.add-slide-btn:hover {
+  background: rgba(255,255,255,0.05);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.delete-btn {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  padding: 10px;
+  border-radius: 10px;
+  transition: all 0.2s;
+}
+
+.delete-btn:hover {
+  background: #ef4444;
+  color: white;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.spin, .spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
