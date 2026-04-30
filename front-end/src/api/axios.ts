@@ -1,13 +1,18 @@
 import axios from 'axios';
 
-const BASE_URL = 'http://localhost:8080';
-const api = axios.create({
-  baseURL: `${BASE_URL}/api`,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+let BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
+// Đảm bảo BASE_URL là một URL tuyệt đối và có đầy đủ https://
+if (BASE_URL && !BASE_URL.startsWith('http')) {
+    BASE_URL = `https://${BASE_URL}.onrender.com`;
+}
+
+const api = axios.create({
+    baseURL: `${BASE_URL}/api`,
+    headers: {
+        'Content-Type': 'application/json',
+    },
+});
 
 api.interceptors.request.use(
   (config) => {
