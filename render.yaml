@@ -41,6 +41,8 @@ envVarGroups:
         sync: false
       - key: MAIL_PASSWORD
         sync: false
+      - key: JAVA_OPTS
+        value: -Xmx384m -Xms256m -XX:MaxMetaspaceSize=128m
 
 services:
   # 1. API Gateway
@@ -58,11 +60,15 @@ services:
           name: user-service
           type: web
           property: host
+      - key: USER_SERVICE_PORT
+        value: 8080
       - key: DOCUMENT_SERVICE_HOST
         fromService:
           name: document-service
           type: web
           property: host
+      - key: DOCUMENT_SERVICE_PORT
+        value: 8080
       - key: JWT_SECRET
         value: ${JWT_SIGNER_KEY}
 
