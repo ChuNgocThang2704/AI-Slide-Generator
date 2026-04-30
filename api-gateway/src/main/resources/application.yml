@@ -14,22 +14,29 @@ spring:
   cloud:
     gateway:
       globalcors:
+        add-to-chain: true
         cors-configurations:
           '[/**]':
             allowedOrigins: "*"
-            allowedMethods: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
             allowedHeaders: "*"
+            maxAge: 3600
       routes:
         - id: user-service-route
           uri: ${USER_SERVICE_URL:http://localhost:8081}
           predicates:
-            - Path=/api/users/**,/api/auth/**,/api/roles/**,/api/permissions/**
+            - Path=/api/users/**, /api/auth/**, /api/roles/**, /api/permissions/**
           filters:
             - StripPrefix=1
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 5
-                redis-rate-limiter.burstCapacity: 10
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
                 redis-rate-limiter.requestedTokens: 1
                 key-resolver: "#{@ipKeyResolver}"
         - id: document-service-route
@@ -37,7 +44,7 @@ spring:
           predicates:
             - Path=/api/document/**
           filters:
-            - StripPrefix=0
+            - StripPrefix=1
 
 jwt:
   signerKey: ${JWT_SECRET}
