@@ -112,7 +112,7 @@ services:
         value: 8080
 
   # 5. Frontend
-  - type: static
+  - type: static_site
     name: ai-frontend
     env: node
     rootDir: front-end
