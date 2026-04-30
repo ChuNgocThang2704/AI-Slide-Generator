@@ -1,6 +1,8 @@
 envVarGroups:
   - name: ai-slide-common-secrets
     envVars:
+      - key: VITE_API_BASE_URL
+        sync: false
       - key: USER_DB_URL
         sync: false
       - key: USER_DB_USERNAME
@@ -120,8 +122,4 @@ services:
     dockerfilePath: Dockerfile
     plan: free
     envVars:
-      - key: VITE_API_BASE_URL
-        fromService:
-          name: api-gateway
-          type: web
-          property: host
+      - fromGroup: ai-slide-common-secrets
