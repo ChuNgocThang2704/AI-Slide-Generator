@@ -167,7 +167,7 @@
                     <archive>
                         <manifest>
                             <addClasspath>true</addClasspath>
-                            <mainClass>com.java.backend.BackEndApplication</mainClass>
+                            <mainClass>com.backend.userservice.UserServiceApplication</mainClass>
                         </manifest>
                     </archive>
                 </configuration>
