@@ -1,7 +1,7 @@
 envVarGroups:
   - name: ai-slide-common-secrets
     envVars:
-      - key: VITE_API_BASE_URL
+      - key: VITE_API_BASE_URL # DÁN URL GATEWAY VÀO ĐÂY (Vd: https://api-gateway-vadz.onrender.com)
         sync: false
       - key: USER_DB_URL
         sync: false
