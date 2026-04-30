@@ -1,5 +1,5 @@
 server:
-  port: ${NOTIFICATION_PORT:8090}
+  port: ${SERVER_PORT:8080}
 
 spring:
   application:

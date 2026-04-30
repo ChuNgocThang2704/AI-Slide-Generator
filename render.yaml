@@ -53,10 +53,16 @@ services:
     plan: free
     envVars:
       - fromGroup: ai-slide-common-secrets
-      - key: USER_SERVICE_URL
-        value: http://user-service:8080
-      - key: DOCUMENT_SERVICE_URL
-        value: http://document-service:8080
+      - key: USER_SERVICE_HOST
+        fromService:
+          name: user-service
+          type: web
+          property: host
+      - key: DOCUMENT_SERVICE_HOST
+        fromService:
+          name: document-service
+          type: web
+          property: host
       - key: JWT_SECRET
         value: ${JWT_SIGNER_KEY}
 
@@ -125,3 +131,4 @@ services:
           name: api-gateway
           type: web
           property: host
+      - fromGroup: ai-slide-common-secrets

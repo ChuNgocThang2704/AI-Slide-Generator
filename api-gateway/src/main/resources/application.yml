@@ -13,10 +13,22 @@ spring:
       timeout: 5000ms
   cloud:
     gateway:
+      globalcors:
+        add-to-chain: true
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            maxAge: 3600
       routes:
-        # Route cho Authentication
         - id: auth-route
-          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          uri: http://${USER_SERVICE_HOST:localhost}:8080
           predicates:
             - Path=/api/auth/**
           filters:
@@ -27,25 +39,22 @@ spring:
                 redis-rate-limiter.burstCapacity: 20
                 key-resolver: "#{@ipKeyResolver}"
 
-        # Route cho Users
         - id: users-route
-          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          uri: http://${USER_SERVICE_HOST:localhost}:8080
           predicates:
             - Path=/api/users/**
           filters:
             - StripPrefix=1
 
-        # Route cho Roles/Permissions
         - id: identity-route
-          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          uri: http://${USER_SERVICE_HOST:localhost}:8080
           predicates:
             - Path=/api/roles/**, /api/permissions/**
           filters:
             - StripPrefix=1
 
-        # Route cho Document Service
         - id: document-service-route
-          uri: ${DOCUMENT_SERVICE_URL:http://localhost:8082}
+          uri: http://${DOCUMENT_SERVICE_HOST:localhost}:8080
           predicates:
             - Path=/api/document/**
           filters:
