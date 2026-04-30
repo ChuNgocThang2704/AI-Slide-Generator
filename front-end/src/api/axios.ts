@@ -1,19 +1,16 @@
 import axios from 'axios';
 
-let BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
-
-// Đảm bảo BASE_URL là một URL tuyệt đối và có đầy đủ https://
-if (BASE_URL && !BASE_URL.startsWith('http')) {
-    BASE_URL = `https://${BASE_URL}.onrender.com`;
-}
+// Chuỗi mật mã này sẽ được Docker thay thế bằng URL thật lúc khởi chạy trên Render
+const BASE_URL = '__API_URL_PLACEHOLDER__';
 
 const api = axios.create({
-    baseURL: `${BASE_URL}/api`,
-    headers: {
-        'Content-Type': 'application/json',
-    },
+  baseURL: `${BASE_URL}/api`,
+  headers: {
+    'Content-Type': 'application/json',
+  },
 });
 
+// Add a request interceptor to attach JWT token
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
