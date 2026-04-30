@@ -1,0 +1,127 @@
+envVarGroups:
+  - name: ai-slide-common-secrets
+    envVars:
+      - key: USER_DB_URL
+        sync: false
+      - key: USER_DB_USERNAME
+        sync: false
+      - key: USER_DB_PASSWORD
+        sync: false
+      - key: DOC_DB_URL
+        sync: false
+      - key: DOC_DB_USERNAME
+        sync: false
+      - key: DOC_DB_PASSWORD
+        sync: false
+      - key: JWT_SIGNER_KEY
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: RABBIT_HOST
+        sync: false
+      - key: RABBIT_USER
+        sync: false
+      - key: RABBIT_PORT
+        sync: false
+      - key: RABBIT_PASS
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_SECRET
+        sync: false
+      - key: AWS_ACCESS_KEY
+        sync: false
+      - key: AWS_SECRET_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_S3_BUCKET
+        sync: false
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+
+services:
+  # 1. API Gateway
+  - type: web
+    name: api-gateway
+    env: docker
+    rootDir: api-gateway
+    dockerContext: api-gateway
+    dockerfilePath: Dockerfile
+    plan: free
+    envVars:
+      - fromGroup: ai-slide-common-secrets
+      - key: USER_SERVICE_URL
+        fromService:
+          name: user-service
+          type: web
+          property: host
+      - key: DOCUMENT_SERVICE_URL
+        fromService:
+          name: document-service
+          type: web
+          property: host
+      - key: JWT_SECRET
+        value: ${JWT_SIGNER_KEY}
+
+  # 2. User Service
+  - type: web
+    name: user-service
+    env: docker
+    rootDir: user-service
+    dockerContext: user-service
+    dockerfilePath: Dockerfile
+    plan: free
+    envVars:
+      - fromGroup: ai-slide-common-secrets
+      - key: DB_URL
+        value: ${USER_DB_URL}
+      - key: DB_USERNAME
+        value: ${USER_DB_USERNAME}
+      - key: DB_PASSWORD
+        value: ${USER_DB_PASSWORD}
+
+  # 3. Document Service
+  - type: web
+    name: document-service
+    env: docker
+    rootDir: document-service
+    dockerContext: document-service
+    dockerfilePath: Dockerfile
+    plan: free
+    envVars:
+      - fromGroup: ai-slide-common-secrets
+      - key: DB_URL
+        value: ${DOC_DB_URL}
+      - key: DB_USERNAME
+        value: ${DOC_DB_USERNAME}
+      - key: DB_PASSWORD
+        value: ${DOC_DB_PASSWORD}
+
+  # 4. Notification Service
+  - type: web
+    name: notification-service
+    env: docker
+    rootDir: notification-service
+    dockerContext: notification-service
+    dockerfilePath: Dockerfile
+    plan: free
+    envVars:
+      - fromGroup: ai-slide-common-secrets
+
+  # 5. Frontend
+  - type: web
+    name: ai-frontend
+    env: docker
+    rootDir: front-end
+    dockerContext: front-end
+    dockerfilePath: Dockerfile
+    plan: free
+    envVars:
+      - key: VITE_API_BASE_URL
+        fromService:
+          name: api-gateway
+          type: web
+          property: host
