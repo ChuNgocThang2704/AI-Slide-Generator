@@ -58,7 +58,7 @@ services:
       - key: USER_SERVICE_URL
         value: https://user-service-9z6t.onrender.com
       - key: DOCUMENT_SERVICE_URL
-        value: https://document-service-f376.onrender.com
+        value: https://document-service-fxs7.onrender.com
       - key: JWT_SECRET
         value: ${JWT_SIGNER_KEY}
 
