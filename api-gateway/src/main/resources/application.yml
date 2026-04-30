@@ -13,19 +13,6 @@ spring:
       timeout: 5000ms
   cloud:
     gateway:
-      globalcors:
-        add-to-chain: true
-        cors-configurations:
-          '[/**]':
-            allowedOrigins: "*"
-            allowedMethods:
-              - GET
-              - POST
-              - PUT
-              - DELETE
-              - OPTIONS
-            allowedHeaders: "*"
-            maxAge: 3600
       routes:
         # Route cho Authentication
         - id: auth-route
