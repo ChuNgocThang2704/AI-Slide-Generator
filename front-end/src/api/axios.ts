@@ -1,7 +1,8 @@
 import axios from 'axios';
 
-// Chuỗi mật mã này sẽ được Docker thay thế bằng URL thật lúc khởi chạy trên Render
-const BASE_URL = '__API_URL_PLACEHOLDER__';
+// Giữ nguyên chuỗi localhost này. 
+// Nó sẽ được Docker tự động thay thế bằng: https:// + tên-host + .onrender.com
+const BASE_URL = 'http://localhost:8080';
 
 const api = axios.create({
   baseURL: `${BASE_URL}/api`,
