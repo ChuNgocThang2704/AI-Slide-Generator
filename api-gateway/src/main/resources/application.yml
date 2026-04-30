@@ -27,18 +27,36 @@ spring:
             allowedHeaders: "*"
             maxAge: 3600
       routes:
-        - id: user-service-route
+        # Route cho Authentication
+        - id: auth-route
           uri: ${USER_SERVICE_URL:http://localhost:8081}
           predicates:
-            - Path=/api/users/**, /api/auth/**, /api/roles/**, /api/permissions/**
+            - Path=/api/auth/**
           filters:
             - StripPrefix=1
             - name: RequestRateLimiter
               args:
                 redis-rate-limiter.replenishRate: 10
                 redis-rate-limiter.burstCapacity: 20
-                redis-rate-limiter.requestedTokens: 1
                 key-resolver: "#{@ipKeyResolver}"
+
+        # Route cho Users
+        - id: users-route
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/users/**
+          filters:
+            - StripPrefix=1
+
+        # Route cho Roles/Permissions
+        - id: identity-route
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/roles/**, /api/permissions/**
+          filters:
+            - StripPrefix=1
+
+        # Route cho Document Service
         - id: document-service-route
           uri: ${DOCUMENT_SERVICE_URL:http://localhost:8082}
           predicates:
