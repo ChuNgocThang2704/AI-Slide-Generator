@@ -55,14 +55,10 @@ services:
     plan: free
     envVars:
       - fromGroup: ai-slide-common-secrets
-      - key: USER_SERVICE_HOST
-        value: user-service
-      - key: USER_SERVICE_PORT
-        value: 8080
-      - key: DOCUMENT_SERVICE_HOST
-        value: document-service
-      - key: DOCUMENT_SERVICE_PORT
-        value: 8080
+      - key: USER_SERVICE_URL
+        value: https://user-service-9z6t.onrender.com
+      - key: DOCUMENT_SERVICE_URL
+        value: https://document-service-f376.onrender.com
       - key: JWT_SECRET
         value: ${JWT_SIGNER_KEY}
 

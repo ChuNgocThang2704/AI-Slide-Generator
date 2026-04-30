@@ -28,7 +28,7 @@ spring:
             maxAge: 3600
       routes:
         - id: auth-route
-          uri: http://${USER_SERVICE_HOST:user-service}:8080
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
           predicates:
             - Path=/api/auth/**
           filters:
@@ -40,21 +40,21 @@ spring:
                 key-resolver: "#{@ipKeyResolver}"
 
         - id: users-route
-          uri: http://${USER_SERVICE_HOST:user-service}:8080
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
           predicates:
             - Path=/api/users/**
           filters:
             - StripPrefix=1
 
         - id: identity-route
-          uri: http://${USER_SERVICE_HOST:user-service}:8080
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
           predicates:
             - Path=/api/roles/**, /api/permissions/**
           filters:
             - StripPrefix=1
 
         - id: document-service-route
-          uri: http://${DOCUMENT_SERVICE_HOST:document-service}:8080
+          uri: ${DOCUMENT_SERVICE_URL:http://localhost:8082}
           predicates:
             - Path=/api/document/**
           filters:
