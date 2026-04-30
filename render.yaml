@@ -121,7 +121,4 @@ services:
     plan: free
     envVars:
       - key: VITE_API_BASE_URL
-        fromService:
-          name: api-gateway
-          type: web
-          property: url
+        value: https://${api-gateway.host}

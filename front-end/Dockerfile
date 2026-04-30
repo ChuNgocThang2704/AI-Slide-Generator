@@ -5,9 +5,7 @@ COPY package*.json ./
 RUN npm install
 COPY . .
 
-# Khai báo ARG để nhận biến từ Render lúc Build
 ARG VITE_API_BASE_URL
-# Chuyển ARG thành ENV để Vite có thể đọc được
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 RUN npm run build
