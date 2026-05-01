@@ -7,29 +7,52 @@ spring:
   data:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
+      ssl:
+        enabled: true
       connect-timeout: 5000ms
       timeout: 5000ms
   cloud:
     gateway:
       globalcors:
+        add-to-chain: true
         cors-configurations:
           '[/**]':
             allowedOrigins: "*"
-            allowedMethods: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
             allowedHeaders: "*"
+            maxAge: 3600
       routes:
-        - id: user-service-route
+        - id: auth-route
           uri: ${USER_SERVICE_URL:http://localhost:8081}
           predicates:
-            - Path=/api/users/**,/api/auth/**,/api/roles/**,/api/permissions/**
+            - Path=/api/auth/**
           filters:
             - StripPrefix=1
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 5
-                redis-rate-limiter.burstCapacity: 10
-                redis-rate-limiter.requestedTokens: 1
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
                 key-resolver: "#{@ipKeyResolver}"
+
+        - id: users-route
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/users/**
+          filters:
+            - StripPrefix=1
+
+        - id: identity-route
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/roles/**, /api/permissions/**
+          filters:
+            - StripPrefix=1
+
         - id: document-service-route
           uri: ${DOCUMENT_SERVICE_URL:http://localhost:8082}
           predicates:
@@ -37,5 +60,11 @@ spring:
           filters:
             - StripPrefix=0
 
+        - id: template-service-route
+          uri: ${TEMPLATE_SERVICE_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/template/**
+          filters:
+            - StripPrefix=0
 jwt:
   signerKey: ${JWT_SECRET}
