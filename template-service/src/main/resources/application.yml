@@ -1,5 +1,5 @@
 server:
-  port: ${TEMPLATE_PORT:8083}
+  port: ${TEMPLATE_SERVICE_PORT:8083}
   servlet:
     context-path: /api/template
 
