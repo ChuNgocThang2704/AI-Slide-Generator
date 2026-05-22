@@ -12,6 +12,7 @@ services:
     environment:
       - USER_SERVICE_URL=${USER_SERVICE_URL}
       - DOCUMENT_SERVICE_URL=${DOCUMENT_SERVICE_URL}
+      - TEMPLATE_SERVICE_URL=${TEMPLATE_SERVICE_URL}
       - REDIS_URL=${REDIS_URL}
       - JWT_SECRET=${JWT_SIGNER_KEY}
     networks:
@@ -56,6 +57,27 @@ services:
       - RABBIT_PORT=${RABBIT_PORT}
       - RABBIT_USER=${RABBIT_USER}
       - RABBIT_PASS=${RABBIT_PASS}
+    networks:
+      - ai-slide-net
+
+  template-service:
+    build:
+      context: ./template-service
+    container_name: ai-template-service
+    ports:
+      - "${TEMPLATE_SERVICE_PORT:-8083}:8083"
+    env_file:
+      - .env
+    environment:
+      - DB_URL=${TEMPLATE_DB_URL}
+      - DB_USERNAME=${TEMPLATE_DB_USERNAME}
+      - DB_PASSWORD=${TEMPLATE_DB_PASSWORD}
+      - TEMPLATE_SERVICE_URL=${TEMPLATE_SERVICE_URL}
+      - JWT_SIGNER_KEY=${JWT_SIGNER_KEY}
+      - AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
+      - AWS_SECRET_KEY=${AWS_SECRET_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
     networks:
       - ai-slide-net
 
