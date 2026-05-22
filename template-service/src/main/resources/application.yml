@@ -24,6 +24,11 @@ spring:
         jdbc:
           time_zone: UTC
 
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
 jwt:
   signerKey: ${JWT_SIGNER_KEY}
 

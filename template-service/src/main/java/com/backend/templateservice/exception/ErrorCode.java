@@ -13,6 +13,7 @@ public enum ErrorCode {
     ACCESS_DENIED(403, "You do not have permission to access this resource", HttpStatus.FORBIDDEN),
     TEMPLATE_NOT_FOUND(404, "Template not found", HttpStatus.NOT_FOUND),
     CATEGORY_NOT_FOUND(404, "Category not found", HttpStatus.NOT_FOUND),
+    INVALID_FILE_FORMAT(400, "Invalid file format. Only .pptx is allowed", HttpStatus.BAD_REQUEST),
     ;
 
     ErrorCode(int code, String message, HttpStatusCode statusCode) {
