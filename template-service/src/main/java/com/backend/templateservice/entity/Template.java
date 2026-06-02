@@ -47,9 +47,6 @@ public class Template extends AbstractAuditingEntity {
     @JoinColumn(name = "category_id")
     private Category category;
 
-    @OneToMany(mappedBy = "template", cascade = CascadeType.ALL)
-    private List<SlideLayout> layouts;
 
-    @OneToMany(mappedBy = "template", cascade = CascadeType.ALL)
-    private List<TemplatePreview> previews;
+
 }
