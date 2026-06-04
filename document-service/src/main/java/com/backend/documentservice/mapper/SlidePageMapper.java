@@ -6,5 +6,6 @@ import org.mapstruct.Mapper;
 import org.mapstruct.ReportingPolicy;
 
 @Mapper(unmappedTargetPolicy = ReportingPolicy.IGNORE, componentModel = "spring")
-public interface SlidePageMapper extends EntityMapper<SlidePageResponse, SlidePage> {
+public interface SlidePageMapper {
+    // SlidePage mapping is handled manually in ProjectService to properly convert JSON strings to/from objects.
 }

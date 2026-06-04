@@ -6,6 +6,10 @@ server:
 spring:
   application:
     name: document-service
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
 
   datasource:
     url: ${DB_URL}
@@ -24,6 +28,9 @@ spring:
         dialect: org.hibernate.dialect.MySQL8Dialect
         jdbc:
           time_zone: UTC
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
 
   data:
     redis:
@@ -46,6 +53,8 @@ jwt:
 app:
   rabbitmq:
     queue: ${RABBIT_QUEUE:notification_queue}
+  ai:
+    url: ${AI_URL:http://20.196.129.89:8000}
 
 aws:
   access-key: ${AWS_ACCESS_KEY}
