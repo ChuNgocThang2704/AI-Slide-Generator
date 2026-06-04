@@ -42,12 +42,27 @@ public class SlidePage extends AbstractAuditingEntity {
     @Column(name = "title")
     private String title;
 
-    @Column(name = "content", columnDefinition = "TEXT")
-    private String content;
+    @Column(name = "bullets", columnDefinition = "TEXT")
+    private String bullets;
 
-    @Column(name = "image_prompt", columnDefinition = "TEXT")
-    private String imagePrompt;
+    @Column(name = "notes", columnDefinition = "TEXT")
+    private String notes;
+
+    @Column(name = "chart", columnDefinition = "TEXT")
+    private String chart;
+
+    @Column(name = "table_data", columnDefinition = "TEXT")
+    private String table;
 
     @Column(name = "image_url")
     private String imageUrl;
+
+    @Column(name = "layout")
+    private String layout;
+
+    @Column(name = "primary_visual")
+    private String primaryVisual;
+
+    @Column(name = "likely_multi_pptx_slides")
+    private Boolean likelyMultiPptxSlides;
 }

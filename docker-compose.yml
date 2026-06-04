@@ -57,6 +57,7 @@ services:
       - RABBIT_PORT=${RABBIT_PORT}
       - RABBIT_USER=${RABBIT_USER}
       - RABBIT_PASS=${RABBIT_PASS}
+      - AI_URL=${AI_URL}
     networks:
       - ai-slide-net
 

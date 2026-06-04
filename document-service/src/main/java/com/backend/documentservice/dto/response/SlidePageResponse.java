@@ -17,9 +17,14 @@ public class SlidePageResponse {
     private UUID projectId;
     private Integer pageIndex;
     private String title;
-    private String content;
-    private String imagePrompt;
+    private Object bullets;
+    private String notes;
+    private Object chart;
+    private Object table;
     private String imageUrl;
+    private String layout;
+    private String primaryVisual;
+    private Boolean likelyMultiPptxSlides;
     private Instant createdAt;
     private Instant updatedAt;
 }
