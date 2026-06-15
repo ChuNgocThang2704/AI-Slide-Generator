@@ -13,6 +13,7 @@ services:
       - USER_SERVICE_URL=${USER_SERVICE_URL}
       - DOCUMENT_SERVICE_URL=${DOCUMENT_SERVICE_URL}
       - TEMPLATE_SERVICE_URL=${TEMPLATE_SERVICE_URL}
+      - SUBSCRIPTION_SERVICE_URL=${SUBSCRIPTION_SERVICE_URL}
       - REDIS_URL=${REDIS_URL}
       - JWT_SECRET=${JWT_SIGNER_KEY}
     networks:
@@ -95,6 +96,27 @@ services:
       - RABBIT_PASS=${RABBIT_PASS}
       - MAIL_USERNAME=${MAIL_USERNAME}
       - MAIL_PASSWORD=${MAIL_PASSWORD}
+    networks:
+      - ai-slide-net
+
+  subscription-service:
+    build:
+      context: ./subscription-service
+    container_name: ai-subscription-service
+    ports:
+      - "${SUBSCRIPTION_SERVICE_PORT:-8084}:8084"
+    env_file:
+      - .env
+    environment:
+      - DB_URL=${SUB_DB_URL}
+      - DB_USERNAME=${SUB_DB_USERNAME}
+      - DB_PASSWORD=${SUB_DB_PASSWORD}
+      - JWT_SIGNER_KEY=${JWT_SIGNER_KEY}
+      - REDIS_URL=${REDIS_URL}
+      - RABBIT_HOST=${RABBIT_HOST}
+      - RABBIT_PORT=${RABBIT_PORT}
+      - RABBIT_USER=${RABBIT_USER}
+      - RABBIT_PASS=${RABBIT_PASS}
     networks:
       - ai-slide-net
 

@@ -68,5 +68,12 @@ spring:
             - Path=/api/template/**
           filters:
             - StripPrefix=0
+
+        - id: subscription-service-route
+          uri: ${SUBSCRIPTION_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/subscription/**
+          filters:
+            - StripPrefix=0
 jwt:
   signerKey: ${JWT_SECRET}

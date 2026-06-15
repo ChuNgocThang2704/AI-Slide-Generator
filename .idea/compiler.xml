@@ -30,6 +30,15 @@
         </processorPath>
         <module name="api-gateway" />
       </profile>
+      <profile name="Annotation profile for subscription-service" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <processorPath useClasspath="false">
+          <entry name="$MAVEN_REPOSITORY$/org/projectlombok/lombok/1.18.32/lombok-1.18.32.jar" />
+        </processorPath>
+        <module name="subscription-service" />
+      </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
       <module name="BackEnd" target="21" />
@@ -43,6 +52,7 @@
       <module name="document-service" options="-parameters" />
       <module name="notificaiton-service" options="-parameters" />
       <module name="notification-service" options="-parameters" />
+      <module name="subscription-service" options="-parameters" />
       <module name="template-service" options="-parameters" />
       <module name="user-service" options="-parameters" />
     </option>
