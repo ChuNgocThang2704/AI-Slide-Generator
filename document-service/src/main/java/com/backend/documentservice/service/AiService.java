@@ -1,6 +1,7 @@
 package com.backend.documentservice.service;
 
-import com.backend.documentservice.entity.AIConfig;
+import com.backend.documentservice.util.Constants;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -55,7 +56,7 @@ public class AiService {
         this.restTemplate.getMessageConverters().add(0, new StringHttpMessageConverter(StandardCharsets.UTF_8));
     }
 
-    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, AIConfig config) {
+    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole) throws JsonProcessingException {
         String aiURLGenerate = aiUrl;
         if (aiURLGenerate != null && !aiURLGenerate.endsWith("/generate-spec")) {
             aiURLGenerate = aiURLGenerate.endsWith("/") ? aiURLGenerate + "generate-spec" : aiURLGenerate + "/generate-spec";
@@ -72,10 +73,23 @@ public class AiService {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
+            // Xác định plan ("free", "pro" hay "extra") dựa theo role tài khoản
+            String plan = "free";
+            if (userRole != null) {
+                if (userRole.equalsIgnoreCase(Constants.USER_ROLES.USER_PRO) || userRole.toLowerCase().contains("pro")) {
+                    plan = "pro";
+                } else if (userRole.equalsIgnoreCase(Constants.USER_ROLES.USER_EXTRA) || userRole.toLowerCase().contains("extra")) {
+                    plan = "extra";
+                }
+            }
+
+            // Phân tích slide_count từ prompt, mặc định là 10
+            String slideCount = parseSlideCount(prompt);
+
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             body.add("text", prompt != null ? prompt : "");
-            body.add("plan", "pro");
-            body.add("slide_count", "10"); // Ép cứng slide_count là 10
+            body.add("plan", plan);
+            body.add("slide_count", slideCount);
             body.add("slide_theme", "modern");
             body.add("generate_images", "true");
             body.add("include_image_base64", "false");
@@ -111,8 +125,6 @@ public class AiService {
             return objectMapper.readTree(responseStr);
         } catch (HttpStatusCodeException e) {
             throw new RuntimeException("Lỗi gọi AI API (" + e.getStatusCode() + "): " + e.getResponseBodyAsString(), e);
-        } catch (Exception e) {
-            throw new RuntimeException("Lỗi gọi AI API: " + e.getMessage(), e);
         } finally {
             // Delete temp file after execution
             if (tempFile != null && tempFile.exists()) {
@@ -185,5 +197,28 @@ public class AiService {
             log.error("Lỗi trích xuất S3 Key từ URL: {}", url);
             return null;
         }
+    }
+
+    private String parseSlideCount(String prompt) {
+        if (prompt == null || prompt.isBlank()) {
+            return "10";
+        }
+        // Tìm số trang từ prompt tiếng Việt và tiếng Anh (ví dụ: "15 trang", "8 slide", "12 pages")
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "\\b(\\d+)\\s*(trang|slide|slides|page|pages)\\b", 
+                java.util.regex.Pattern.CASE_INSENSITIVE
+        );
+        java.util.regex.Matcher matcher = pattern.matcher(prompt);
+        if (matcher.find()) {
+            try {
+                int count = Integer.parseInt(matcher.group(1));
+                if (count > 0 && count <= 50) { // Giới hạn từ 1 đến 50 slide
+                    return String.valueOf(count);
+                }
+            } catch (NumberFormatException e) {
+                // ignore
+            }
+        }
+        return "10";
     }
 }

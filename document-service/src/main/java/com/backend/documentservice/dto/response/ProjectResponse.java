@@ -19,7 +19,6 @@ public class ProjectResponse implements Serializable {
     private UUID ownerId;
     private UUID sourceDocId;
     private UUID templateId;
-    private UUID aiConfigId;
     private String initialPrompt;
     private String slideUrl;
     private Integer status;

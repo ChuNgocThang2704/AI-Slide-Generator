@@ -4,7 +4,6 @@ import com.backend.documentservice.dto.request.ProjectCreateRequest;
 import com.backend.documentservice.dto.request.ProjectUpdateRequest;
 import com.backend.documentservice.dto.response.ProjectResponse;
 import com.backend.documentservice.dto.response.PageResponse;
-import com.backend.documentservice.entity.AIConfig;
 import com.backend.documentservice.entity.Project;
 import com.backend.documentservice.entity.SourceDocument;
 import com.backend.documentservice.exception.AppException;
@@ -18,8 +17,11 @@ import com.backend.documentservice.entity.SlidePage;
 import com.backend.documentservice.repository.SlidePageRepository;
 import com.backend.documentservice.repository.AITaskLogRepository;
 import com.backend.documentservice.repository.ProjectExportRepository;
+import com.backend.documentservice.client.SubscriptionClient;
+import com.backend.documentservice.dto.request.InternalQuotaRequest;
+import com.backend.documentservice.dto.response.ApiResponse;
+import com.backend.documentservice.dto.response.QuotaCheckResponse;
 import com.backend.documentservice.mapper.ProjectMapper;
-import com.backend.documentservice.repository.AiConfigRepository;
 import com.backend.documentservice.repository.ProjectRepository;
 import com.backend.documentservice.repository.SourceDocumentRepository;
 import com.backend.documentservice.util.Constants;
@@ -63,7 +65,6 @@ import java.util.stream.Collectors;
 public class ProjectService {
 
     private final ProjectRepository projectRepository;
-    private final AiConfigRepository aiConfigRepository;
     private final SourceDocumentRepository sourceDocumentRepository;
     private final AITaskLogRepository aiTaskLogRepository;
     private final ProjectExportRepository projectExportRepository;
@@ -71,6 +72,7 @@ public class ProjectService {
     private final ProjectMapper projectMapper;
     private final AiService aiService;
     private final ObjectMapper objectMapper;
+    private final SubscriptionClient subscriptionClient;
 
     @Value("${app.ai.url}")
     private String aiUrl;
@@ -79,6 +81,12 @@ public class ProjectService {
     @CacheEvict(allEntries = true)
     public ProjectResponse createProject(ProjectCreateRequest request, String userRole) {
         log.info("[document-service] tạo project mới cho user: {}, role: {}", request.getOwnerId(), userRole);
+
+        // 1. Kiểm tra hạn mức (Quota) của user trước khi tạo project
+        ApiResponse<QuotaCheckResponse> quotaCheckResponse = subscriptionClient.checkQuota(request.getOwnerId(), "MAX_SLIDES_PER_DAY");
+        if (quotaCheckResponse == null || quotaCheckResponse.getData() == null || !quotaCheckResponse.getData().isAllowed()) {
+            throw new AppException(ErrorCode.QUOTA_EXCEEDED);
+        }
 
         String fileNameForName = null;
 
@@ -108,22 +116,11 @@ public class ProjectService {
 
         String generatedName = generateProjectName(request.getPrompt(), fileNameForName);
 
-        log.info("[document-service] lấy config mặc định cho role: {}", userRole);
-        UUID configId = aiConfigRepository.findByRoleCode(userRole)
-                .map(AIConfig::getId)
-                .orElseGet(() -> aiConfigRepository.findByRoleCode(Constants.USER_ROLES.USER_FREE)
-                        .map(AIConfig::getId)
-                        .orElseThrow(() -> new AppException(ErrorCode.CONFIG_NOT_FOUND)));
-
-        AIConfig config = aiConfigRepository.findById(configId)
-                .orElseThrow(() -> new AppException(ErrorCode.CONFIG_NOT_FOUND));
-
         Project project = Project.builder()
                 .name(generatedName)
                 .ownerId(request.getOwnerId())
                 .sourceDocId(request.getSourceDocId())
                 .templateId(request.getTemplateId())
-                .aiConfigId(configId)
                 .initialPrompt(request.getPrompt())
                 .status(Constants.PROJECT_STATUS.PROCESSING)
                 .build();
@@ -151,7 +148,7 @@ public class ProjectService {
         textTaskLog = aiTaskLogRepository.save(textTaskLog);
 
         try {
-            JsonNode aiResponse = aiService.generateSlides(project.getInitialPrompt(), documentUrl, fileName, config);
+            JsonNode aiResponse = aiService.generateSlides(project.getInitialPrompt(), documentUrl, fileName, userRole);
             aiResponse = fixJsonNodeEncoding(aiResponse);
             
             // Cập nhật tên project từ title do AI trả về
@@ -228,6 +225,18 @@ public class ProjectService {
             project.setStatus(Constants.PROJECT_STATUS.DONE);
             projectRepository.save(project);
             log.info("[document-service] Đã lưu thành công các slide.");
+
+            // 2. Trừ 1 hạn mức của User cho lượt tạo slide deck này
+            try {
+                InternalQuotaRequest quotaRequest = InternalQuotaRequest.builder()
+                        .userId(project.getOwnerId())
+                        .featureKey("MAX_SLIDES_PER_DAY")
+                        .amount(1)
+                        .build();
+                subscriptionClient.consumeQuota(quotaRequest);
+            } catch (Exception ex) {
+                log.error("[document-service] Lỗi khi trừ hạn mức của user {}", project.getOwnerId(), ex);
+            }
         } catch (Exception e) {
             log.error("[document-service] Thất bại khi sinh slide từ AI cho project ID: {}", project.getId(), e);
             
