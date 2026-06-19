@@ -47,10 +47,6 @@ public class Project extends AbstractAuditingEntity {
     @JdbcTypeCode(Types.VARCHAR)
     private UUID templateId;
 
-    @Column(name = "ai_config_id")
-    @JdbcTypeCode(Types.VARCHAR)
-    private UUID aiConfigId;
-
     @Column(name = "initial_prompt", columnDefinition = "TEXT")
     private String initialPrompt;
 
