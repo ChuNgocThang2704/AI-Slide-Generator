@@ -1,0 +1,79 @@
+server:
+  port: ${GATEWAY_PORT:8080}
+
+spring:
+  application:
+    name: api-gateway
+  codec:
+    max-in-memory-size: 50MB
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+      ssl:
+        enabled: true
+      connect-timeout: 5000ms
+      timeout: 5000ms
+  cloud:
+    gateway:
+      globalcors:
+        add-to-chain: true
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            maxAge: 3600
+      routes:
+        - id: auth-route
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - StripPrefix=1
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+                key-resolver: "#{@ipKeyResolver}"
+
+        - id: users-route
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/users/**
+          filters:
+            - StripPrefix=1
+
+        - id: identity-route
+          uri: ${USER_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/roles/**, /api/permissions/**
+          filters:
+            - StripPrefix=1
+
+        - id: document-service-route
+          uri: ${DOCUMENT_SERVICE_URL:http://localhost:8082}
+          predicates:
+            - Path=/api/document/**
+          filters:
+            - StripPrefix=0
+
+        - id: template-service-route
+          uri: ${TEMPLATE_SERVICE_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/template/**
+          filters:
+            - StripPrefix=0
+
+        - id: subscription-service-route
+          uri: ${SUBSCRIPTION_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/subscription/**
+          filters:
+            - StripPrefix=0
+jwt:
+  signerKey: ${JWT_SECRET}
