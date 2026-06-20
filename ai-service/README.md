@@ -323,15 +323,44 @@ curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/health
 ## Phát triển tiếp
 
 Các chức năng quản lý web sẽ được triển khai sau:
+
+Sau khi đổi IP/port, restart `main.py` và `worker.py`.
+
+### 6) Kiểm tra image server trước khi gọi từ backend
+
+```bash
+curl http://<GPU_SERVER_IP>:8080/ping
+curl http://<GPU_SERVER_IP>:8080/health
+```
+
+Windows (tránh proxy):
+
+```bash
+curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/ping
+curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/health
+```
+
+### 7) Trình tự chạy khuyến nghị
+
+1. Máy GPU: chạy `scripts/sdxl_api_server.py`.
+2. Máy backend: set `IMAGE_GEN_API_BASE_URL`.
+3. Chạy `backend/main.py`.
+4. Chạy `backend/worker.py`.
+5. Gọi API với `generate_images=true`.
+
+## Phát triển tiếp
+
+Các chức năng quản lý web sẽ được triển khai sau:
 - Quản lý người dùng
 - Quản lý tài liệu và slide
 - Chức năng dùng thử
 - Thanh toán trả phí
 
-## License
+## Hướng dẫn tự Host vLLM Server (Text Model)
 
-MIT
+Nếu tự thuê server GPU để chạy mô hình ngôn ngữ lớn (LLM), bạn có thể dùng lệnh sau để chạy **vLLM** phục vụ cho API trích xuất slide:
 
+```bash
 vllm serve Qwen/Qwen3-8B \
   --host 0.0.0.0 \
   --port 8000 \
@@ -340,3 +369,8 @@ vllm serve Qwen/Qwen3-8B \
   --max-model-len 8192 \
   --max-num-seqs 6 \
   --served-model-name Qwen3-8B
+```
+
+## License
+
+MIT
