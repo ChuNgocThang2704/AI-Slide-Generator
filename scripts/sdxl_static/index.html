@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SDXL — Sinh ảnh</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --border: #2d3a4d;
+      --text: #e7edf5;
+      --muted: #8b9cb3;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --danger: #f87171;
+      --ok: #34d399;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 1.5rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.25rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input[type="text"], input[type="number"], textarea {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0d1117;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    textarea { min-height: 88px; resize: vertical; }
+    .row { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 1rem; }
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      padding: 0.55rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-secondary { background: #334155; color: var(--text); }
+    .btn-secondary:hover:not(:disabled) { background: #475569; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .links a { color: var(--accent); margin-right: 1rem; font-size: 0.85rem; }
+    .status { font-size: 0.85rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: #0d1117; border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; }
+    .status.err { border-color: #7f1d1d; color: var(--danger); }
+    .status.ok { border-color: #14532d; color: var(--ok); }
+    .preview {
+      margin-top: 1rem;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: #0d1117;
+      min-height: 120px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .preview img { max-width: 100%; height: auto; display: block; }
+    .preview .placeholder { color: var(--muted); padding: 2rem; text-align: center; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>SDXL — Giao diện thử nhanh</h1>
+    <p class="sub">Cùng origin với API — không cần CORS. Lần đầu sinh ảnh có thể rất lâu (tải model).</p>
+    <p class="links">
+      <a href="/docs" target="_blank" rel="noopener">Swagger /docs</a>
+      <a href="/redoc" target="_blank" rel="noopener">ReDoc</a>
+    </p>
+
+    <div class="card">
+      <label>Kiểm tra máy chủ</label>
+      <div class="actions">
+        <button type="button" class="btn-secondary" id="btnPing">Ping</button>
+        <button type="button" class="btn-secondary" id="btnHealth">Health (GPU)</button>
+      </div>
+      <div id="srvStatus" class="status" style="margin-top:0.75rem;">Chưa kiểm tra.</div>
+    </div>
+
+    <div class="card">
+      <label for="prompt">Prompt *</label>
+      <textarea id="prompt" placeholder="Mô tả ảnh bằng tiếng Anh thường cho ổn định hơn…"></textarea>
+
+      <label for="neg" style="margin-top:0.75rem;">Negative prompt</label>
+      <input type="text" id="neg" placeholder="(tùy chọn) blurry, low quality…" />
+
+      <div class="row" style="margin-top:0.75rem;">
+        <div>
+          <label for="w">Rộng</label>
+          <input type="number" id="w" min="512" max="1536" value="1024" step="64" />
+        </div>
+        <div>
+          <label for="h">Cao</label>
+          <input type="number" id="h" min="512" max="1536" value="768" step="64" />
+        </div>
+        <div>
+          <label for="steps">Steps</label>
+          <input type="number" id="steps" min="1" max="80" value="25" />
+        </div>
+        <div>
+          <label for="cfg">Guidance</label>
+          <input type="number" id="cfg" min="1" max="15" value="7" step="0.5" />
+        </div>
+        <div>
+          <label for="seed">Seed (trống = random)</label>
+          <input type="number" id="seed" placeholder="optional" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn-primary" id="btnGen">Sinh ảnh</button>
+      </div>
+      <p class="hint">Nếu VRAM thấp, thử giảm width/height (vd. 512×512) và steps.</p>
+      <div id="genStatus" class="status" style="margin-top:0.75rem; display:none;"></div>
+      <div class="preview" id="preview">
+        <span class="placeholder">Ảnh sẽ hiện ở đây.</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const srvStatus = $('srvStatus');
+    const genStatus = $('genStatus');
+    const preview = $('preview');
+
+    async function safeJson(r) {
+      const t = await r.text();
+      try { return JSON.parse(t); } catch { return t; }
+    }
+
+    $('btnPing').onclick = async () => {
+      srvStatus.className = 'status';
+      srvStatus.textContent = 'Đang gọi /ping…';
+      try {
+        const r = await fetch('/ping');
+        const j = await safeJson(r);
+        srvStatus.textContent = JSON.stringify(j, null, 2);
+        srvStatus.classList.add(r.ok ? 'ok' : 'err');
+      } catch (e) {
+        srvStatus.textContent = 'Lỗi: ' + e.message;
+        srvStatus.className = 'status err';
+      }
+    };
+
+    $('btnHealth').onclick = async () => {
+      srvStatus.className = 'status';
+      srvStatus.textContent = 'Đang gọi /health…';
+      try {
+        const r = await fetch('/health');
+        const j = await safeJson(r);
+        srvStatus.textContent = JSON.stringify(j, null, 2);
+        srvStatus.classList.add(j.ok !== false ? 'ok' : 'err');
+      } catch (e) {
+        srvStatus.textContent = 'Lỗi: ' + e.message;
+        srvStatus.className = 'status err';
+      }
+    };
+
+    $('btnGen').onclick = async () => {
+      const prompt = $('prompt').value.trim();
+      if (!prompt) {
+        alert('Nhập prompt.');
+        return;
+      }
+      const w = parseInt($('w').value, 10);
+      const h = parseInt($('h').value, 10);
+      const steps = parseInt($('steps').value, 10);
+      const guidance_scale = parseFloat($('cfg').value);
+      const neg = $('neg').value.trim();
+      const seedRaw = $('seed').value.trim();
+      const body = {
+        prompt,
+        negative_prompt: neg,
+        width: w,
+        height: h,
+        steps,
+        guidance_scale,
+        return_base64: false,
+      };
+      if (seedRaw !== '') body.seed = parseInt(seedRaw, 10);
+
+      genStatus.style.display = 'block';
+      genStatus.className = 'status';
+      genStatus.textContent = 'Đang sinh ảnh — có thể vài phút lần đầu…';
+      $('btnGen').disabled = true;
+      preview.innerHTML = '<span class="placeholder">Đang xử lý…</span>';
+
+      try {
+        const r = await fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const err = await safeJson(r);
+          genStatus.className = 'status err';
+          genStatus.textContent = typeof err === 'object' ? JSON.stringify(err, null, 2) : String(err);
+          preview.innerHTML = '<span class="placeholder">Lỗi</span>';
+          return;
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        preview.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = 'Generated';
+        preview.appendChild(img);
+        genStatus.className = 'status ok';
+        genStatus.textContent = 'Xong. (' + blob.size + ' bytes)';
+      } catch (e) {
+        genStatus.className = 'status err';
+        genStatus.textContent = 'Lỗi: ' + e.message;
+        preview.innerHTML = '<span class="placeholder">Lỗi mạng / timeout</span>';
+      } finally {
+        $('btnGen').disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>

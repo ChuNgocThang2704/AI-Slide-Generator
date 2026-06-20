@@ -1,0 +1,8 @@
+﻿{
+  "prompt": "professional stock photo of a laptop on a clean desk, soft natural light, no text",
+  "negative_prompt": "text, watermark, logo, blurry, low quality",
+  "width": 1024,
+  "height": 1024,
+  "steps": 25,
+  "guidance_scale": 7.0
+}
