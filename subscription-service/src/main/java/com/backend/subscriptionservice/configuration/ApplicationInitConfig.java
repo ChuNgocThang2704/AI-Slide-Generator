@@ -38,9 +38,9 @@ public class ApplicationInitConfig {
                             .build())
             );
             initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.MAX_SLIDES_PER_DAY, 3);
-            initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.IMAGE_QUALITY, 1); // 1: SD
+            initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE, 5);
             initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.ALLOW_EXPORT_PDF, 0); // 0: False
-
+ 
             // 2. Khởi tạo Gói PRO
             SubscriptionPackage proPack = packageRepository.findByCode(Constants.PACKAGE_CODE.PRO).orElseGet(() ->
                     packageRepository.save(SubscriptionPackage.builder()
@@ -52,9 +52,9 @@ public class ApplicationInitConfig {
                             .build())
             );
             initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.MAX_SLIDES_PER_DAY, 20);
-            initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.IMAGE_QUALITY, 2); // 2: HD
+            initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE, 15);
             initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.ALLOW_EXPORT_PDF, 1); // 1: True
-
+ 
             // 3. Khởi tạo Gói ULTRA (hoặc EXTRA)
             SubscriptionPackage ultraPack = packageRepository.findByCode(Constants.PACKAGE_CODE.ULTRA).orElseGet(() ->
                     packageRepository.save(SubscriptionPackage.builder()
@@ -66,7 +66,7 @@ public class ApplicationInitConfig {
                             .build())
             );
             initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.MAX_SLIDES_PER_DAY, 999999);
-            initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.IMAGE_QUALITY, 3); // 3: Ultra
+            initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE, 35);
             initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.ALLOW_EXPORT_PDF, 1);
             initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.ALLOW_CUSTOM_TEMPLATE, 1);
 

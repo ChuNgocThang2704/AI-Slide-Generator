@@ -7,6 +7,7 @@ import com.backend.documentservice.dto.response.ApiResponse;
 import com.backend.documentservice.dto.response.AITaskLogResponse;
 import com.backend.documentservice.dto.response.ProjectExportResponse;
 import com.backend.documentservice.dto.response.ProjectResponse;
+import com.backend.documentservice.dto.response.ProjectProgressResponse;
 import com.backend.documentservice.dto.response.SlidePageResponse;
 import com.backend.documentservice.dto.response.SourceDocumentResponse;
 import com.backend.documentservice.dto.response.PageResponse;
@@ -76,6 +77,21 @@ public class DocumentController {
     public ApiResponse<ProjectResponse> getProjectById(@PathVariable UUID id) {
         return ApiResponse.<ProjectResponse>builder()
                 .data(projectService.getProjectDetail(id, currentUserId()))
+                .build();
+    }
+
+    @GetMapping("/projects/{id}/progress")
+    public ApiResponse<ProjectProgressResponse> getProjectProgress(@PathVariable UUID id) {
+        return ApiResponse.<ProjectProgressResponse>builder()
+                .data(projectService.getProjectProgress(id, currentUserId()))
+                .build();
+    }
+
+    @PostMapping("/projects/{id}/cancel")
+    public ApiResponse<String> cancelProjectTask(@PathVariable UUID id) {
+        projectService.cancelProjectTask(id, currentUserId());
+        return ApiResponse.<String>builder()
+                .data("Hủy tác vụ thành công")
                 .build();
     }
 

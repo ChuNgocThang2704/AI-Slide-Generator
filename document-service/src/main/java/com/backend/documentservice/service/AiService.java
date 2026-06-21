@@ -56,7 +56,7 @@ public class AiService {
         this.restTemplate.getMessageConverters().add(0, new StringHttpMessageConverter(StandardCharsets.UTF_8));
     }
 
-    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole) throws JsonProcessingException {
+    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole, int imageLimit) throws JsonProcessingException {
         String aiURLGenerate = aiUrl;
         if (aiURLGenerate != null && !aiURLGenerate.endsWith("/generate-spec")) {
             aiURLGenerate = aiURLGenerate.endsWith("/") ? aiURLGenerate + "generate-spec" : aiURLGenerate + "/generate-spec";
@@ -73,26 +73,23 @@ public class AiService {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
-            // Xác định plan ("free", "pro" hay "extra") dựa theo role tài khoản
+            // Xác định plan ("free", "pro" hay "ultra") dựa theo role tài khoản
             String plan = "free";
             if (userRole != null) {
                 if (userRole.equalsIgnoreCase(Constants.USER_ROLES.USER_PRO) || userRole.toLowerCase().contains("pro")) {
                     plan = "pro";
-                } else if (userRole.equalsIgnoreCase(Constants.USER_ROLES.USER_EXTRA) || userRole.toLowerCase().contains("extra")) {
-                    plan = "extra";
+                } else if (userRole.equalsIgnoreCase(Constants.USER_ROLES.USER_ULTRA) || userRole.toLowerCase().contains("ultra")) {
+                    plan = "ultra";
                 }
             }
-
-            // Phân tích slide_count từ prompt, mặc định là 10
-            String slideCount = parseSlideCount(prompt);
 
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             body.add("text", prompt != null ? prompt : "");
             body.add("plan", plan);
-            body.add("slide_count", slideCount);
             body.add("slide_theme", "modern");
             body.add("generate_images", "true");
             body.add("include_image_base64", "false");
+            body.add("image_limit", String.valueOf(imageLimit));
 
             if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
                 FileSystemResource fileResource = new FileSystemResource(tempFile);
@@ -135,6 +132,114 @@ public class AiService {
                     log.warn("[document-service] Lỗi khi xóa file tạm: {}", tempFile.getAbsolutePath(), e);
                 }
             }
+        }
+    }
+
+    public JsonNode generateSlidesAsync(String prompt, String documentUrl, String fileName, String userRole, int imageLimit) throws JsonProcessingException {
+        String aiURLGenerate = aiUrl;
+        if (aiURLGenerate != null) {
+            aiURLGenerate = aiURLGenerate.endsWith("/") ? aiURLGenerate + "api/generate-slide-full" : aiURLGenerate + "/api/generate-slide-full";
+        }
+        log.info("[document-service] Gọi AI Async tại: {} cho prompt: {}", aiURLGenerate, prompt);
+        
+        File tempFile = null;
+        if (documentUrl != null && !documentUrl.isBlank()) {
+            log.info("[document-service] Đang tải file tài liệu từ S3 để gửi sang AI: {}", documentUrl);
+            tempFile = downloadFileToTemp(documentUrl, fileName);
+        }
+
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+            // Plan mapping
+            String plan = "free";
+            if (userRole != null) {
+                if (userRole.equalsIgnoreCase(Constants.USER_ROLES.USER_PRO) || userRole.toLowerCase().contains("pro")) {
+                    plan = "pro";
+                } else if (userRole.equalsIgnoreCase(Constants.USER_ROLES.USER_ULTRA) || userRole.toLowerCase().contains("ultra")) {
+                    plan = "ultra";
+                }
+            }
+
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add("text", prompt != null ? prompt : "");
+            body.add("plan", plan);
+            body.add("slide_count", null);
+            body.add("slide_theme", "modern");
+            body.add("generate_images", "true");
+            body.add("image_limit", String.valueOf(imageLimit));
+
+            if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
+                FileSystemResource fileResource = new FileSystemResource(tempFile);
+
+                String contentType = "application/octet-stream";
+                String nameToUse = tempFile.getName();
+                if (nameToUse.toLowerCase().endsWith(".pdf")) {
+                    contentType = "application/pdf";
+                } else if (nameToUse.toLowerCase().endsWith(".docx")) {
+                    contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                }
+
+                HttpHeaders fileHeaders = new HttpHeaders();
+                fileHeaders.setContentType(MediaType.parseMediaType(contentType));
+                HttpEntity<FileSystemResource> filePart = new HttpEntity<>(fileResource, fileHeaders);
+
+                body.add("file", filePart);
+                log.info("[document-service] Đính kèm file '{}' vào request AI Async", nameToUse);
+            }
+
+            HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+
+            log.info("[document-service] Gửi request POST tới AI Async API: {}", aiURLGenerate);
+            String responseStr = restTemplate.postForObject(aiURLGenerate, requestEntity, String.class);
+            log.info("[document-service] AI Async API trả về kết quả thành công.");
+
+            return objectMapper.readTree(responseStr);
+        } catch (HttpStatusCodeException e) {
+            throw new RuntimeException("Lỗi gọi AI Async API (" + e.getStatusCode() + "): " + e.getResponseBodyAsString(), e);
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                try {
+                    boolean deleted = tempFile.delete();
+                    log.info("[document-service] Xóa file tạm S3: {}, kết quả: {}", tempFile.getAbsolutePath(), deleted);
+                } catch (Exception e) {
+                    log.warn("[document-service] Lỗi khi xóa file tạm: {}", tempFile.getAbsolutePath(), e);
+                }
+            }
+        }
+    }
+
+    public JsonNode checkAiTaskStatus(String taskId) {
+        String statusUrl = aiUrl;
+        if (statusUrl != null) {
+            statusUrl = statusUrl.endsWith("/") ? statusUrl + "api/status/" + taskId : statusUrl + "/api/status/" + taskId;
+        }
+        log.info("[document-service] Kiểm tra trạng thái AI task: {}", statusUrl);
+        try {
+            String responseStr = restTemplate.getForObject(statusUrl, String.class);
+            return objectMapper.readTree(responseStr);
+        } catch (Exception e) {
+            log.error("[document-service] Lỗi khi kiểm tra trạng thái AI task: {}", taskId, e);
+            throw new RuntimeException("Lỗi kiểm tra trạng thái AI task: " + e.getMessage(), e);
+        }
+    }
+
+    public JsonNode cancelAiTask(String taskId) {
+        String cancelUrl = aiUrl;
+        if (cancelUrl != null) {
+            cancelUrl = cancelUrl.endsWith("/") ? cancelUrl + "api/cancel/" + taskId : cancelUrl + "/api/cancel/" + taskId;
+        }
+        log.info("[document-service] Hủy AI task: {}", cancelUrl);
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<String> entity = new HttpEntity<>("{}", headers);
+            String responseStr = restTemplate.postForObject(cancelUrl, entity, String.class);
+            return objectMapper.readTree(responseStr);
+        } catch (Exception e) {
+            log.error("[document-service] Lỗi khi hủy AI task: {}", taskId, e);
+            throw new RuntimeException("Lỗi hủy AI task: " + e.getMessage(), e);
         }
     }
 
@@ -197,28 +302,5 @@ public class AiService {
             log.error("Lỗi trích xuất S3 Key từ URL: {}", url);
             return null;
         }
-    }
-
-    private String parseSlideCount(String prompt) {
-        if (prompt == null || prompt.isBlank()) {
-            return "10";
-        }
-        // Tìm số trang từ prompt tiếng Việt và tiếng Anh (ví dụ: "15 trang", "8 slide", "12 pages")
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
-                "\\b(\\d+)\\s*(trang|slide|slides|page|pages)\\b", 
-                java.util.regex.Pattern.CASE_INSENSITIVE
-        );
-        java.util.regex.Matcher matcher = pattern.matcher(prompt);
-        if (matcher.find()) {
-            try {
-                int count = Integer.parseInt(matcher.group(1));
-                if (count > 0 && count <= 50) { // Giới hạn từ 1 đến 50 slide
-                    return String.valueOf(count);
-                }
-            } catch (NumberFormatException e) {
-                // ignore
-            }
-        }
-        return "10";
     }
 }

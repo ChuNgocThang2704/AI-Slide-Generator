@@ -13,7 +13,6 @@ public class Constants {
     public interface BILLING_CYCLE {
         int MONTHLY = 0;
         int YEARLY = 1;
-        int LIFETIME = 2;
     }
 
     public interface SUBSCRIPTION_STATUS {
@@ -25,8 +24,7 @@ public class Constants {
 
     public interface FEATURE_KEY {
         String MAX_SLIDES_PER_DAY = "MAX_SLIDES_PER_DAY";
-        String MAX_IMAGES_PER_DAY = "MAX_IMAGES_PER_DAY";
-        String IMAGE_QUALITY = "IMAGE_QUALITY";
+        String MAX_IMAGES_PER_SLIDE = "MAX_IMAGES_PER_SLIDE";
         String ALLOW_EXPORT_PDF = "ALLOW_EXPORT_PDF";
         String ALLOW_CUSTOM_TEMPLATE = "ALLOW_CUSTOM_TEMPLATE";
     }

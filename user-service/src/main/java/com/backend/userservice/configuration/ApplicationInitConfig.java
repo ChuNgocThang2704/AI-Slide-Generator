@@ -74,10 +74,10 @@ public class ApplicationInitConfig {
                             .permissions(Set.of(genPro, imgHd, exportPdf, viewHistory))
                             .build()));
 
-            // ROLE USER_EXTRA: Không giới hạn, Ưu tiên cao
-            roleRepository.findByName("USER_EXTRA").orElseGet(() ->
+            // ROLE USER_ULTRA: Không giới hạn, Ưu tiên cao
+            roleRepository.findByName("USER_ULTRA").orElseGet(() ->
                     roleRepository.save(RoleEntity.builder()
-                            .name("USER_EXTRA")
+                            .name("USER_ULTRA")
                             .description("Người dùng đặc biệt")
                             .permissions(Set.of(genUltra, imgUltra, exportPdf, customTemplate, viewHistory))
                             .build()));
