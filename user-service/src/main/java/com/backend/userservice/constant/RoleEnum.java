@@ -4,5 +4,5 @@ public enum RoleEnum {
     ADMIN,
     USER_FREE,
     USER_PRO,
-    USER_EXTRA,
+    USER_ULTRA,
 }
