@@ -6,7 +6,9 @@ truncated sentences, and enforcing exact slide counts.
 """
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from services.content.prompts import MAX_BULLETS_PER_SLIDE, MAX_WORDS_PER_BULLET
@@ -191,11 +193,154 @@ def _is_generic_title(title: str) -> bool:
 
 class SlideNormalizerMixin:
 
+    def _sanitize_inline_markup(self, text: str) -> str:
+        """Normalize model output to plain slide text, without markdown formatting."""
+        if text is None:
+            return ""
+        t = unicodedata.normalize("NFKC", html.unescape(str(text))).strip()
+        if not t:
+            return ""
+        t = t.translate(str.maketrans({
+            "\u2018": "'",
+            "\u2019": "'",
+            "\u201c": '"',
+            "\u201d": '"',
+            "\u2013": "-",
+            "\u2014": "-",
+            "\u2026": "...",
+        }))
+        t = re.sub(r"<[^>\n]{1,80}>", " ", t)
+        t = re.sub(r"[•◦▪▫■□●○◆◇★☆✓✔✗✘➜→←↑↓↔]", " ", t)
+        cleaned_chars: List[str] = []
+        symbol_keep = set("$€£¥₫%‰+-=<>±×÷°")
+        for ch in t:
+            if ch == "\ufffd":
+                continue
+            cat = unicodedata.category(ch)
+            if cat[0] == "C":
+                cleaned_chars.append(" ")
+                continue
+            if cat[0] == "S" and ch not in symbol_keep:
+                cleaned_chars.append(" ")
+                continue
+            cleaned_chars.append(ch)
+        t = "".join(cleaned_chars)
+        t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
+        t = re.sub(r"^\s*\*+", "", t)
+        t = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", t)
+        t = re.sub(r"__([^_\n]+)__", r"\1", t)
+        t = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", t)
+        t = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", t)
+        t = re.sub(r"\*{2,}", "", t)
+        t = re.sub(r"_{2,}", "", t)
+        t = re.sub(r"\*+\s*:", ":", t)
+        t = re.sub(r":\s*\*+\s*", ": ", t)
+        t = re.sub(r"\s+\*+\s+", " ", t)
+        t = re.sub(r"\s{2,}", " ", t)
+        return t.strip()
+
+    def _sanitize_title(self, title: str) -> str:
+        """Dọn dẹp tiêu đề: loại bỏ markdown, quotes, và ký tự thừa."""
+        if not title:
+            return ""
+        t = self._sanitize_inline_markup(str(title).strip())
+        t = re.sub(r"^\s*#{1,6}\s*", "", t)
+        t = re.sub(r"^\s*[-*•]\s*", "", t)
+        t = re.sub(r"^\s*[→>]+\s*", "", t)
+        t = re.sub(r"^\s*\d+(\.\d+)*\s*[-:.)]\s*", "", t)
+        t = t.replace('"', '').replace("'", "").strip(".,;:!-“”‘’\"' ")
+        return t
+
+    def _derive_slide_title_from_bullets(
+        self,
+        bullets: List[Any],
+        fallback: str = "Nội dung chính",
+        *,
+        max_words: int = 11,
+    ) -> str:
+        """Create a concrete slide title from the chunk's own bullets."""
+        fallback_clean = self._sanitize_title(str(fallback or "Nội dung chính")) or "Nội dung chính"
+        fallback_clean = re.sub(r"\s+-\s+Ph\S*\s+\d+\s*$", "", fallback_clean, flags=re.IGNORECASE).strip() or fallback_clean
+        fallback_norm = re.sub(r"\W+", " ", fallback_clean.lower()).strip()
+
+        for raw in bullets or []:
+            text = self._sanitize_title(str(raw or ""))
+            if not text:
+                continue
+            text = re.sub(r"^\s*(?:[-*•]|\d+[\).:-])\s*", "", text).strip()
+            text = re.sub(
+                r"^(?:điểm|ý|noi dung|nội dung|van de|vấn đề|luan diem|luận điểm)\s+\d+\s*[:.-]\s*",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            ).strip()
+            if ":" in text and text.find(":") <= 48:
+                candidate = text.split(":", 1)[0].strip()
+            else:
+                first_clause = re.split(r"[.;!?]", text, maxsplit=1)[0].strip()
+                comma_clause = first_clause.split(",", 1)[0].strip()
+                if len(comma_clause.split()) >= 4:
+                    first_clause = comma_clause
+                words = first_clause.split()
+                candidate = " ".join(words[:max_words]).strip()
+            candidate = self._sanitize_title(candidate)
+            candidate_norm = re.sub(r"\W+", " ", candidate.lower()).strip()
+            if len(candidate.split()) >= 3 and candidate_norm and candidate_norm != fallback_norm:
+                return candidate[:90]
+
+        return fallback_clean[:90]
+
+    _VN_DIACRITIC_SAFE_RE = re.compile(
+        "["
+        "\u00e0\u00e1\u1ea3\u00e3\u1ea1"
+        "\u0103\u1eb1\u1eaf\u1eb3\u1eb5\u1eb7"
+        "\u00e2\u1ea7\u1ea5\u1ea9\u1eab\u1ead"
+        "\u00e8\u00e9\u1ebb\u1ebd\u1eb9"
+        "\u00ea\u1ec1\u1ebf\u1ec3\u1ec5\u1ec7"
+        "\u00ec\u00ed\u1ec9\u0129\u1ecb"
+        "\u00f2\u00f3\u1ecf\u00f5\u1ecd"
+        "\u00f4\u1ed3\u1ed1\u1ed5\u1ed7\u1ed9"
+        "\u01a1\u1edd\u1edb\u1edf\u1ee1\u1ee3"
+        "\u00f9\u00fa\u1ee7\u0169\u1ee5"
+        "\u01b0\u1eeb\u1ee9\u1eed\u1eef\u1ef1"
+        "\u1ef3\u00fd\u1ef7\u1ef9\u1ef5"
+        "\u0111\u0110"
+        "]",
+        re.IGNORECASE,
+    )
+    _EN_FUNCTION_SAFE_RE = re.compile(
+        r"\b(the|and|or|of|for|with|to|from|in|on|at|by|as|is|are|was|were|be|this|that|which|will|can|should|would|could)\b",
+        re.IGNORECASE,
+    )
+
+    def _detect_slide_language(self, title: str, bullets: List[str]) -> str:
+        text = " ".join([str(title or "")] + [str(b or "") for b in (bullets or [])])
+        if len(self._VN_DIACRITIC_SAFE_RE.findall(text)) >= 2:
+            return "vi"
+        if len(self._EN_FUNCTION_SAFE_RE.findall(text)) >= 3:
+            return "en"
+        if len(re.findall(r"[A-Za-z]{3,}", text)) >= 5:
+            return "en"
+        return "vi"
+
     def _build_default_speaker_notes(self, title: str, bullets: List[str]) -> str:
         clean_title = str(title or "").strip()
         clean_bullets = [str(b or "").strip().rstrip(".") for b in (bullets or []) if str(b or "").strip()]
         if not clean_bullets:
             return ""
+        if self._detect_slide_language(clean_title, clean_bullets) == "en":
+            opener = f"On this slide, I will present {clean_title}." if clean_title else "On this slide, I will present the main points."
+            body_parts = []
+            for idx, bullet in enumerate(clean_bullets[:4]):
+                if idx == 0:
+                    body_parts.append(f"The first point to note is that {bullet}.")
+                elif idx == 1:
+                    body_parts.append(f"Next, {bullet}.")
+                elif idx == 2:
+                    body_parts.append(f"In addition, {bullet}.")
+                else:
+                    body_parts.append(f"Finally, {bullet}.")
+            return " ".join([opener] + body_parts).strip()
         opener = f"Ở slide này, em sẽ trình bày về {clean_title}." if clean_title else "Ở slide này, em sẽ trình bày nội dung chính."
         body_parts = []
         for idx, bullet in enumerate(clean_bullets[:4]):
@@ -230,6 +375,48 @@ class SlideNormalizerMixin:
         slides_in = structured_content.get("slides", [])
         if not isinstance(slides_in, list):
             slides_in = []
+
+        if structured_content.get("_explicit_slide_mode"):
+            explicit_slides: List[Dict[str, Any]] = []
+            for idx, slide in enumerate(slides_in):
+                if not isinstance(slide, dict):
+                    continue
+                raw_title = str(slide.get("title") or f"Slide {idx + 1}").strip()
+                title_clean = self._sanitize_title(raw_title)[:120] or f"Slide {idx + 1}"
+                raw_bullets = slide.get("bullets") or slide.get("content") or []
+                if isinstance(raw_bullets, str):
+                    bullet_items = [raw_bullets]
+                elif isinstance(raw_bullets, list):
+                    bullet_items = raw_bullets
+                else:
+                    bullet_items = []
+                bullets_clean = [
+                    self._sanitize_inline_markup(str(b).strip())
+                    for b in bullet_items
+                    if self._sanitize_inline_markup(str(b).strip())
+                ]
+                if not bullets_clean:
+                    bullets_clean = [title_clean]
+                notes = self._sanitize_inline_markup(
+                    str(slide.get("script") or slide.get("speaker_notes") or slide.get("notes") or "").strip()
+                )
+                if not notes:
+                    notes = self._build_default_speaker_notes(title_clean, bullets_clean)
+                out_slide: Dict[str, Any] = {
+                    "title": title_clean,
+                    "bullets": bullets_clean[:MAX_BULLETS_PER_SLIDE],
+                    "notes": notes,
+                    "script": notes,
+                }
+                for visual_key in ("table", "chart", "image_url"):
+                    if slide.get(visual_key):
+                        out_slide[visual_key] = slide.get(visual_key)
+                explicit_slides.append(out_slide)
+            return {
+                "title": self._sanitize_title(str(title).strip())[:120],
+                "slides": explicit_slides,
+                "_explicit_slide_mode": True,
+            }
 
         def _clean_bullet(text: str, _max_words: int) -> str:
             """Strip artifacts, repair tails, hard-cut tại _max_words để giữ bullet súc tích."""
@@ -343,6 +530,7 @@ class SlideNormalizerMixin:
                 if not b.strip():
                     continue
                 cb = _clean_bullet(b.strip(), MAX_WORDS_PER_BULLET)
+                cb = self._sanitize_inline_markup(cb)
                 if not cb or self._is_truncated_bullet(cb):
                     continue
                 cleaned_bullets.append(cb)
@@ -407,16 +595,20 @@ class SlideNormalizerMixin:
             notes = slide.get("script") or slide.get("speaker_notes") or slide.get("notes")
             if not isinstance(notes, str):
                 notes = str(notes)
-            notes = notes.strip()
+            notes = self._sanitize_inline_markup(notes.strip())
             if not notes:
                 notes = self._build_default_speaker_notes(slide_title, bullets_list)
 
-            slides_out.append({
+            out_slide = {
                 "title": self._sanitize_title(slide_title.strip())[:120],
                 "bullets": bullets_list,
                 "notes": notes,
                 "script": notes,
-            })
+            }
+            for visual_key in ("table", "chart", "image_url"):
+                if slide.get(visual_key):
+                    out_slide[visual_key] = slide.get(visual_key)
+            slides_out.append(out_slide)
 
         slides_out = self._balance_deck(slides_out)
         # Global bullet dedup across the whole deck (reduce "repetition across slides").
@@ -445,11 +637,58 @@ class SlideNormalizerMixin:
             if not isinstance(s, dict):
                 continue
             notes = str(s.get("script") or s.get("speaker_notes") or s.get("notes") or "").strip()
+            notes = self._sanitize_inline_markup(notes)
             if not notes:
                 notes = self._build_default_speaker_notes(str(s.get("title") or ""), s.get("bullets") or [])
             s["notes"] = notes
             s["script"] = notes
-        return {"title": self._sanitize_title(title.strip())[:120], "slides": slides_out}
+        title_counts: Dict[str, int] = {}
+        for s in slides_out:
+            if not isinstance(s, dict):
+                continue
+            original_title = str(s.get("title") or "Nội dung").strip()
+            base_title = re.sub(
+                r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+                "",
+                original_title,
+                flags=re.IGNORECASE,
+            ).strip() or original_title
+            title_counts[base_title] = title_counts.get(base_title, 0) + 1
+            count = title_counts[base_title]
+            s["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
+        final_seen_titles: set[str] = set()
+        for s in slides_out:
+            if not isinstance(s, dict):
+                continue
+            current_title = str(s.get("title") or "").strip()
+            key = re.sub(r"\W+", " ", current_title.lower()).strip()
+            if " - Ph" in current_title or key in final_seen_titles or self._is_truncated_bullet(current_title):
+                s["title"] = self._derive_slide_title_from_bullets(
+                    s.get("bullets") or [],
+                    fallback=current_title,
+                    max_words=11,
+                )
+                key = re.sub(r"\W+", " ", str(s.get("title") or "").lower()).strip()
+            final_seen_titles.add(key)
+        normalized = {"title": self._sanitize_title(title.strip())[:120], "slides": slides_out}
+        if structured_content.get("_explicit_slide_mode"):
+            normalized["_explicit_slide_mode"] = True
+        return normalized
+
+    def _slide_content_tokens(self, slide: Dict[str, Any]) -> set[str]:
+        """Tách các từ (tokens) từ tiêu đề và bullets của slide để đo độ trùng lặp."""
+        if not isinstance(slide, dict):
+            return set()
+        words: List[str] = []
+        title = slide.get("title") or ""
+        if isinstance(title, str):
+            words.extend(re.findall(r"\w+", title.lower()))
+        bullets = slide.get("bullets") or []
+        if isinstance(bullets, list):
+            for bullet in bullets:
+                if isinstance(bullet, str):
+                    words.extend(re.findall(r"\w+", bullet.lower()))
+        return set(words)
 
     def _balance_deck(self, slides: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Post-process slide list: dedup by title + semantic similarity, drop empties, rescue sparse slides."""
@@ -850,7 +1089,13 @@ class SlideNormalizerMixin:
 
                 slide["bullets"] = [left]
                 new_slide = dict(slide)
-                new_slide["title"] = f"{slide.get('title', 'Nội dung')} (tiếp)"
+                base_title = re.sub(
+                    r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+                    "",
+                    str(slide.get("title") or "Nội dung"),
+                    flags=re.IGNORECASE,
+                ).strip() or str(slide.get("title") or "Nội dung")
+                new_slide["title"] = f"{base_title} - Phần 2"
                 new_slide["bullets"] = [right]
                 slides_list.insert(idx + 1, new_slide)
                 return True
@@ -868,7 +1113,13 @@ class SlideNormalizerMixin:
 
             slide["bullets"] = left
             new_slide = dict(slide)
-            new_slide["title"] = f"{slide.get('title', 'Nội dung')} (tiếp)"
+            base_title = re.sub(
+                r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+                "",
+                str(slide.get("title") or "Nội dung"),
+                flags=re.IGNORECASE,
+            ).strip() or str(slide.get("title") or "Nội dung")
+            new_slide["title"] = f"{base_title} - Phần 2"
             new_slide["bullets"] = right
             # Insert after current slide.
             slides_list.insert(idx + 1, new_slide)
@@ -887,7 +1138,13 @@ class SlideNormalizerMixin:
                 if not slides:
                     break
                 last = dict(slides[-1])
-                last["title"] = f"{last.get('title', 'Nội dung')} (tiếp)"
+                base_title = re.sub(
+                    r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+                    "",
+                    str(last.get("title") or "Nội dung"),
+                    flags=re.IGNORECASE,
+                ).strip() or str(last.get("title") or "Nội dung")
+                last["title"] = f"{base_title} - Phần 2"
                 slides.append(last)
                 break
 
@@ -940,5 +1197,35 @@ class SlideNormalizerMixin:
             if LLM_FINAL_QUALITY_GATE and hasattr(self, "_run_final_quality_gate"):
                 print(f"[slide_normalizer] re-running quality gate on forced deck")
                 structured_content = await self._run_final_quality_gate(structured_content)
+
+        title_counts: Dict[str, int] = {}
+        for slide in structured_content.get("slides") or []:
+            if not isinstance(slide, dict):
+                continue
+            original_title = str(slide.get("title") or "Nội dung").strip()
+            base_title = re.sub(
+                r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+                "",
+                original_title,
+                flags=re.IGNORECASE,
+            ).strip() or original_title
+            title_counts[base_title] = title_counts.get(base_title, 0) + 1
+            count = title_counts[base_title]
+            slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
+
+        final_seen_titles: set[str] = set()
+        for slide in structured_content.get("slides") or []:
+            if not isinstance(slide, dict):
+                continue
+            current_title = str(slide.get("title") or "").strip()
+            key = re.sub(r"\W+", " ", current_title.lower()).strip()
+            if " - Ph" in current_title or key in final_seen_titles or self._is_truncated_bullet(current_title):
+                slide["title"] = self._derive_slide_title_from_bullets(
+                    slide.get("bullets") or [],
+                    fallback=current_title,
+                    max_words=11,
+                )
+                key = re.sub(r"\W+", " ", str(slide.get("title") or "").lower()).strip()
+            final_seen_titles.add(key)
 
         return structured_content

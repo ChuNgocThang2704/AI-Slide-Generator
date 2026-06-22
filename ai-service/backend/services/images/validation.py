@@ -133,6 +133,21 @@ def _image_acceptance_policy(
     """
     content_type = str(semantic.get("content_type") or "normal").strip().lower()
     domain = str(semantic.get("domain") or "general").strip().lower()
+    risk = str(semantic.get("risk") or "").strip().lower()
+    sensitive_risks = {
+        "historical",
+        "person_protected",
+        "religious",
+        "cultural",
+        "medical_diagram",
+        "political_sensitive",
+        "crisis_sensitive",
+        "legal_sensitive",
+        "identity_sensitive",
+        "child_sensitive",
+        "map_symbol_sensitive",
+        "finance_sensitive",
+    }
 
     if is_stock_photo:
         policy = {
@@ -146,19 +161,22 @@ def _image_acceptance_policy(
         }
         if content_type in {"process", "definition"} or domain in {"technology", "cybersecurity", "software"}:
             policy["min_relevance"] = 0.55
-        if content_type in {"historical", "cultural", "religious"}:
-            policy["min_relevance"] = 0.45
+        if content_type in {"historical", "cultural", "religious"} or risk in sensitive_risks:
+            policy["min_relevance"] = 0.72
+            policy["max_artifact"] = 0.50
+            policy["min_style"] = 0.70
+            policy["notes"] = "sensitive stock/reference image: require specific event, person, place, group, era, symbol, or domain fit, not just a broad theme"
         return policy
 
-    if content_type in {"historical", "cultural", "religious", "medical_diagram"}:
+    if content_type in {"historical", "cultural", "religious", "medical_diagram"} or risk in sensitive_risks:
         return {
             "expected_style": "historical_or_special_illustration",
-            "min_relevance": 0.65,
-            "max_artifact": 0.50,
-            "min_style": 0.65,
+            "min_relevance": 0.82,
+            "max_artifact": 0.35,
+            "min_style": 0.82,
             "allow_soft_text_artifacts": True,
             "hard_text_reject": True,
-            "notes": "sensitive/special visual: allow clean illustration and soft paper texture",
+            "notes": "AI-generated sensitive/special visual: require very specific context fit, respectful representation, and very clean low-artifact rendering",
         }
 
     if content_type in {"data"}:
@@ -257,8 +275,9 @@ async def _vlm_judge_image(
             "2. GEOGRAPHICAL & MAP ACCURACY: If the image contains a map of a country (e.g., Vietnam) but the outline is distorted or clearly resembles a different country, set relevance_score below 0.35.\n"
             "3. LOGICAL INCONSISTENCIES: If there are logical contradictions between the slide content and the image, set relevance_score below 0.35.\n"
             "4. PRODUCT & SUBJECT RELEVANCE: The main subject in the image must match the core nouns and intent of the slide. Set relevance_score below 0.40 if completely irrelevant.\n"
-            "5. TEXT & WATERMARKS: Since this is a curated stock/historical photo, visible text, labels, captions, or historical diagram elements are ALLOWED and should NOT cause rejection. Set artifact_score to 0.10.\n"
-            "6. QUALITY: If the image is completely corrupt or unusable, set artifact_score to 0.80.\n\n"
+            "5. HISTORICAL SPECIFICITY: For historical slides, the image must match the named event, era, country, and period implied by the slide. A modern factory, generic training room, unrelated monument, or broad thematic proxy must get relevance_score below 0.55 even if it is from the right country.\n"
+            "6. TEXT & WATERMARKS: Since this is a curated stock/historical photo, visible text, labels, captions, or historical diagram elements are ALLOWED and should NOT cause rejection. Set artifact_score to 0.10.\n"
+            "7. QUALITY: If the image is completely corrupt or unusable, set artifact_score to 0.80.\n\n"
             "Return JSON only with the following keys:\n"
             "{\n"
             "  \"relevance_score\": number,   // 0.0 to 1.0\n"
@@ -277,10 +296,11 @@ async def _vlm_judge_image(
             "2. GEOGRAPHICAL & MAP ACCURACY: If the image contains a map of a country (e.g., Vietnam) but the outline is distorted, incorrect, or clearly resembles a different country or random blobs, it is inaccurate. Set relevance_score below 0.40.\n"
             "3. LOGICAL INCONSISTENCIES: If there are logical contradictions between the slide content and the image (e.g., the slide discusses agricultural development but the image shows a high-tech office, or the slide is about a war but the image shows a modern business meeting), set relevance_score below 0.35.\n"
             "4. PRODUCT & SUBJECT RELEVANCE: The main subject in the image must match the core nouns and intent of the slide. If the image is a generic stock photo (like a person holding a book or looking at a wall) that has no direct thematic connection to the specific points on the slide, set relevance_score below 0.50.\n"
-            "5. TEXT & WATERMARKS: If the image contains any visible text, labels, fake words, signatures, watermarks, or infographic elements, set artifact_score to 0.70 or higher (reject).\n"
-            "6. ANATOMY & QUALITY: If there are distorted faces, unnatural hands/limbs, weird merged objects, or creepy anatomy, set artifact_score to 0.60 or higher.\n\n"
-            "7. STYLE FIT: If Expected style is professional_photo, reject cartoon, anime, manga, comic-book, graphic-novel, hand-drawn, cel-shaded, flat illustration, painterly, or overly stylized images unless the slide explicitly asks for illustration. Set style_match_score below 0.50.\n"
-            "8. CLEAR FOCUS: Reject images that are crowded, visually cluttered, contain too many people/objects, or have no clear focal subject. Set artifact_score to 0.60 or higher or relevance_score below 0.55.\n\n"
+            "5. HISTORICAL SPECIFICITY: For historical slides, the image must match the named event, era, country, and period implied by the slide. Reject invented documentary-looking scenes, modern settings, or broad proxies that only match one keyword. Set relevance_score below 0.55 or artifact_score above 0.60.\n"
+            "6. TEXT & WATERMARKS: If the image contains any visible text, labels, fake words, signatures, watermarks, or infographic elements, set artifact_score to 0.70 or higher (reject).\n"
+            "7. ANATOMY & QUALITY: If there are distorted faces, repeated/duplicated faces, cloned-looking people, unnatural hands/limbs, weird merged objects, or creepy anatomy, set artifact_score to 0.60 or higher.\n\n"
+            "8. STYLE FIT: If Expected style is professional_photo, reject cartoon, anime, manga, comic-book, graphic-novel, hand-drawn, cel-shaded, flat illustration, painterly, or overly stylized images unless the slide explicitly asks for illustration. Set style_match_score below 0.50.\n"
+            "9. CLEAR FOCUS: Reject images that are crowded, visually cluttered, contain too many people/objects, look like a synthetic collage, or have no clear focal subject. Set artifact_score to 0.60 or higher or relevance_score below 0.55.\n\n"
             "Return strict JSON only with the following keys:\n"
             "{\n"
             "  \"relevance_score\": number,   // 0.0 (irrelevant/inaccurate) to 1.0 (fully matches the slide, accurate, and relevant)\n"
@@ -556,12 +576,16 @@ def _write_image_quality_report(task_id: str, records: List[Dict[str, Any]]) -> 
             if vals
         }
         top_missed = sorted(missed_counter.items(), key=lambda x: x[1], reverse=True)[:5]
+        saved_statuses = {"saved", "saved_ai_fallback", "saved_external_fallback"}
+        saved_total = sum(statuses.get(status, 0) for status in saved_statuses)
 
         report = {
             "task_id": task_id,
             "total_records": len(records),
             "statuses": statuses,
-            "saved_images": statuses.get("saved", 0),
+            "saved_images": saved_total,
+            "saved_primary": statuses.get("saved", 0),
+            "saved_ai_fallback": statuses.get("saved_ai_fallback", 0),
             "saved_external_fallback": statuses.get("saved_external_fallback", 0),
             "output_validation_failed": statuses.get("output_validation_failed", 0),
             "external_output_validation_failed": statuses.get("external_output_validation_failed", 0),

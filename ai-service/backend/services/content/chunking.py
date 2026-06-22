@@ -222,12 +222,31 @@ class ChunkingMixin:
             expanded.insert(
                 split_index + 1,
                 {
-                    "title": f"{source['title']} (tiếp)",
+                    "title": f"{self._strip_continued_suffix(str(source.get('title') or 'Nội dung'))} - Phần 2",
                     "bullets": right,
                     "notes": source["notes"],
                 },
             )
 
+        title_counts: Dict[str, int] = {}
+        for slide in expanded:
+            base_title = self._strip_continued_suffix(str(slide.get("title") or "Nội dung"))
+            title_counts[base_title] = title_counts.get(base_title, 0) + 1
+            count = title_counts[base_title]
+            derived_title = self._derive_slide_title_from_bullets(
+                slide.get("bullets") or [],
+                fallback=base_title,
+            )
+            slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
+        final_title_counts: Dict[str, int] = {}
+        for slide in expanded:
+            base_title = self._strip_continued_suffix(str(slide.get("title") or "Nội dung"))
+            final_title_counts[base_title] = final_title_counts.get(base_title, 0) + 1
+            if final_title_counts[base_title] > 1 or " - Ph" in base_title:
+                slide["title"] = self._derive_slide_title_from_bullets(
+                    slide.get("bullets") or [],
+                    fallback=base_title,
+                )
         return expanded
 
     def _build_deck_from_chunk_summaries(
@@ -277,10 +296,30 @@ class ChunkingMixin:
             desired_slides = min(desired_slides, max_slides_for_bullets)
 
             for part_idx, part in enumerate(self._partition_bullets(bullets, desired_slides), start=1):
-                slide_title = section_title if part_idx == 1 else f"{section_title} (tiếp)"
+                base_title = self._strip_continued_suffix(section_title)
+                slide_title = base_title if part_idx == 1 else f"{base_title} - Phần {part_idx}"
                 slides.append({"title": slide_title, "bullets": part, "notes": ""})
 
         min_slides = max(1, int(slide_plan.get("min") or 1))
+        title_counts: Dict[str, int] = {}
+        for slide in slides:
+            base_title = self._strip_continued_suffix(str(slide.get("title") or "Nội dung"))
+            title_counts[base_title] = title_counts.get(base_title, 0) + 1
+            count = title_counts[base_title]
+            derived_title = self._derive_slide_title_from_bullets(
+                slide.get("bullets") or [],
+                fallback=base_title,
+            )
+            slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
+        final_title_counts: Dict[str, int] = {}
+        for slide in slides:
+            base_title = self._strip_continued_suffix(str(slide.get("title") or "Nội dung"))
+            final_title_counts[base_title] = final_title_counts.get(base_title, 0) + 1
+            if final_title_counts[base_title] > 1 or " - Ph" in base_title:
+                slide["title"] = self._derive_slide_title_from_bullets(
+                    slide.get("bullets") or [],
+                    fallback=base_title,
+                )
         expanded_slides = self._expand_compact_slides(slides, min_slides=min_slides)
         return self._normalize_structured_content({"title": doc_title, "slides": expanded_slides})
 

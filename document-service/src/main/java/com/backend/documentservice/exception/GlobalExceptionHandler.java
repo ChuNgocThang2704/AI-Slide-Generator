@@ -16,7 +16,10 @@ public class GlobalExceptionHandler {
         ApiResponse<?> apiResponse = new ApiResponse<>();
 
         apiResponse.setCode(ErrorCode.UNCATEGORIZED_EXCEPTION.getCode());
-        apiResponse.setMessage(ErrorCode.UNCATEGORIZED_EXCEPTION.getMessage());
+        String detail = exception.getMessage();
+        apiResponse.setMessage(ErrorCode.UNCATEGORIZED_EXCEPTION.getMessage()
+                + " - " + exception.getClass().getSimpleName()
+                + (detail == null || detail.isBlank() ? "" : ": " + detail));
 
         return ResponseEntity.status(ErrorCode.UNCATEGORIZED_EXCEPTION.getStatusCode()).body(apiResponse);
     }

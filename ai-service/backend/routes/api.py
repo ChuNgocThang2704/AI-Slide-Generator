@@ -3,9 +3,11 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
+import html
 import json
 import httpx
-import base64
+import re
+import unicodedata
 
 from services.file_processor import FileProcessor
 from services.content_extractor import ContentExtractor, TaskCancelledError
@@ -47,6 +49,51 @@ file_processor = FileProcessor()
 content_extractor = ContentExtractor(model_name=LLM_MODEL)
 slide_generator = SlideGenerator()
 redis_queue = RedisQueue()
+
+
+def _plain_slide_text(value: Any) -> str:
+    """Return user-visible slide text without markdown formatting markers."""
+    t = unicodedata.normalize("NFKC", html.unescape(str(value or ""))).strip()
+    if not t:
+        return ""
+    t = t.translate(str.maketrans({
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2026": "...",
+    }))
+    t = re.sub(r"<[^>\n]{1,80}>", " ", t)
+    t = re.sub(r"[•◦▪▫■□●○◆◇★☆✓✔✗✘➜→←↑↓↔]", " ", t)
+    cleaned_chars: List[str] = []
+    symbol_keep = set("$€£¥₫%‰+-=<>±×÷°")
+    for ch in t:
+        if ch == "\ufffd":
+            continue
+        cat = unicodedata.category(ch)
+        if cat[0] == "C":
+            cleaned_chars.append(" ")
+            continue
+        if cat[0] == "S" and ch not in symbol_keep:
+            cleaned_chars.append(" ")
+            continue
+        cleaned_chars.append(ch)
+    t = "".join(cleaned_chars)
+    t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
+    t = re.sub(r"^\s*\*+", "", t)
+    t = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", t)
+    t = re.sub(r"__([^_\n]+)__", r"\1", t)
+    t = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", t)
+    t = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", t)
+    t = re.sub(r"\*{2,}", "", t)
+    t = re.sub(r"_{2,}", "", t)
+    t = re.sub(r"\*+\s*:", ":", t)
+    t = re.sub(r":\s*\*+\s*", ": ", t)
+    t = re.sub(r"\s+\*+\s+", " ", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip()
 
 
 def _form_wants_slide_images(generate_images: Optional[str]) -> bool:
@@ -134,7 +181,7 @@ def _validate_plan_limits(
         )
         
     # 2. Resolve slide count & check slide limits
-    if plan_norm == "free":
+    if plan_norm == "free" and not (slide_count and slide_count > 0):
         target_slides_override = FREE_SLIDE_LIMIT
         resolved_slide_count = FREE_SLIDE_LIMIT
     else:
@@ -186,6 +233,17 @@ _MAX_BULLETS_BEFORE_PPTX_SPLIT = 6
 _SLIDE_SPEC_VERSION = "1.2"
 
 
+def _mime_from_image_path(path_str: str) -> Optional[str]:
+    ext = Path(path_str or "").suffix.lower()
+    if ext in (".jpg", ".jpeg"):
+        return "image/jpeg"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".webp":
+        return "image/webp"
+    return None
+
+
 def _resolve_visual_theme(structured_content: dict, slide_theme: Optional[str]) -> Tuple[str, Optional[str]]:
     """Trả về (color_theme_key, slide_preset_or_none) — logic tương tự create_slide."""
     preset_raw = (slide_theme or "").strip().lower() or None
@@ -224,8 +282,8 @@ def _build_slide_spec_payload(
     chart_specs: Optional[dict],
     table_specs: Optional[dict],
     image_paths: Optional[dict],
-    include_image_base64: bool,
     slide_theme: Optional[str] = None,
+    **kwargs,
 ) -> dict:
     slides = structured_content.get("slides") or []
     color_theme, slide_preset = _resolve_visual_theme(structured_content, slide_theme)
@@ -235,16 +293,19 @@ def _build_slide_spec_payload(
             continue
         row: Dict[str, Any] = {
             "index": idx,
-            "title": str(slide.get("title") or ""),
-            "bullets": [str(x) for x in (slide.get("bullets") or slide.get("content") or [])],
-            "notes": str(slide.get("notes") or ""),
-            "script": str(slide.get("script") or slide.get("notes") or ""),
+            "title": _plain_slide_text(slide.get("title") or ""),
+            "bullets": [_plain_slide_text(x) for x in (slide.get("bullets") or slide.get("content") or []) if _plain_slide_text(x)],
+            "notes": _plain_slide_text(slide.get("notes") or slide.get("script") or ""),
+            "script": _plain_slide_text(slide.get("script") or slide.get("notes") or ""),
             "chart": None,
             "table": None,
             "image": None,
         }
         if chart_specs and idx in chart_specs:
-            row["chart"] = chart_specs[idx]
+            c_spec = dict(chart_specs[idx])
+            c_spec["type"] = c_spec.get("chart_type")
+            c_spec["categories"] = c_spec.get("labels")
+            row["chart"] = c_spec
         if table_specs and idx in table_specs:
             row["table"] = table_specs[idx]
         if image_paths and idx in image_paths:
@@ -253,24 +314,16 @@ def _build_slide_spec_payload(
             img = {
                 "path": img_path,
                 "url": img_url,
-                "base64": None,
-                "mime": None,
+                "mime": _mime_from_image_path(img_path),
             }
-            if include_image_base64:
-                try:
-                    raw = Path(img_path).read_bytes()
-                    ext = Path(img_path).suffix.lower()
-                    mime = "image/png"
-                    if ext in (".jpg", ".jpeg"):
-                        mime = "image/jpeg"
-                    elif ext == ".webp":
-                        mime = "image/webp"
-                    img["base64"] = base64.b64encode(raw).decode("ascii")
-                    img["mime"] = mime
-                except Exception:
-                    img["base64"] = None
-                    img["mime"] = None
             row["image"] = img
+        elif slide.get("image_url"):
+            row["image"] = {
+                "path": None,
+                "url": _plain_slide_text(slide.get("image_url")),
+                "mime": None,
+                "source": "user_url",
+            }
         layout, primary = _infer_slide_layout(row.get("chart"), row.get("image"), row.get("table"))
         row["layout"] = layout
         row["primary_visual"] = primary
@@ -336,6 +389,8 @@ async def upload_text(text: str = Form(...)):
             "message": "Text received successfully",
             "status": "pending",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -363,6 +418,8 @@ async def upload_file(file: UploadFile = File(...)):
             "message": "File uploaded successfully",
             "status": "pending",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -388,127 +445,21 @@ async def extract_content(task_id: str = Form(...)):
             "content": structured_content,
             "status": "completed",
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/api/generate-slide")
-async def generate_slide(
-    task_id: str = Form(...),
-    content: Optional[str] = Form(None),
-    plan: str = Form("pro"),
-    slide_count: Optional[int] = Form(None),
-    image_limit: Optional[int] = Form(None),
-    slide_theme: str = Form("modern"),
-    generate_images: str = Form("false"),
-):
-    try:
-        plan_norm = (plan or "pro").strip().lower()
-        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count)
-        force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
-        slide_preset = SlideGenerator.normalize_slide_preset(slide_theme) or "modern"
-
-        if not content:
-            file_path = None
-            for ext in [".txt", ".docx", ".pdf"]:
-                potential_path = UPLOAD_DIR / f"{task_id}{ext}"
-                if potential_path.exists():
-                    file_path = potential_path
-                    break
-
-            if file_path:
-                raw_content = await file_processor.process_file(file_path)
-                target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=raw_content)
-                force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
-                structured_content = await content_extractor.extract_and_structure(
-                    raw_content,
-                    target_slides_override=target_slides_override,
-                    force_exact_slide_count=force_exact_slide_count,
-                )
-            else:
-                raise HTTPException(status_code=404, detail="Content not found")
-        else:
-            if isinstance(content, str):
-                try:
-                    structured_content = json.loads(content)
-                except Exception:
-                    raise HTTPException(status_code=400, detail="Invalid JSON in 'content'")
-            else:
-                structured_content = content
-
-        if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
-            structured_content = await content_extractor._force_slide_count_exact(structured_content, int(target_slides_override))
-        structured_content = await improve_slide_text_quality(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            max_refines=8,
-        )
-
-        want_img = _form_wants_slide_images(generate_images)
-        resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
-        image_paths = None
-        table_specs = await build_table_specs_for_slides(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            raw_content=raw_content or "",
-        )
-        chart_specs = await build_chart_specs_for_slides(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            table_indices=set(table_specs.keys()),
-            raw_content=raw_content or "",
-        )
-        if want_img:
-            try:
-                image_paths = await build_image_paths_for_slides(
-                    content_extractor,
-                    structured_content,
-                    task_id,
-                    chart_specs=chart_specs,
-                    table_specs=table_specs,
-                    image_limit=resolved_image_limit,
-                    plan=plan_norm,
-                )
-            except Exception as image_error:
-                print(f"[generate] image generation failed, continue without images: {image_error!r}")
-                image_paths = None
-
-        output_path = pptx_path_for_task(OUTPUT_DIR, structured_content.get("title", ""), task_id)
-        await slide_generator.create_slide(
-            structured_content,
-            output_path,
-            generate_images=bool(image_paths),
-            image_paths=image_paths,
-            chart_specs=chart_specs,
-            table_specs=table_specs,
-            preset=slide_preset,
-        )
-
-        name = output_path.name
-        return {
-            "task_id": task_id,
-            "status": "completed",
-            "download_url": f"/outputs/{name}",
-            "view_url": f"/api/view-slide/{task_id}",
-        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/generate-slide-spec")
 async def generate_slide_spec(
+    background_tasks: BackgroundTasks,
     text: Optional[str] = Form(None),
     file: UploadFile = File(None),
-    content: Optional[str] = Form(None),
     plan: str = Form("pro"),
     slide_count: Optional[int] = Form(None),
     image_limit: Optional[int] = Form(None),
-    slide_theme: str = Form("modern"),
     generate_images: str = Form("false"),
-    include_image_base64: str = Form("false"),
 ):
     """Generate AI slide output as JSON spec (no PPTX rendering)."""
     try:
@@ -516,84 +467,225 @@ async def generate_slide_spec(
         plan_norm = (plan or "pro").strip().lower()
         target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count)
         force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
+        resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
+        slide_preset = "modern"
+        want_images_flag = _form_wants_slide_images(generate_images)
 
-        if content:
-            try:
-                structured_content = json.loads(content) if isinstance(content, str) else content
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid JSON in 'content'")
+        raw_content = None
+        structured_content = None
+
+        if file:
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext not in [".docx", ".pdf", ".txt"]:
+                raise HTTPException(status_code=400, detail="File type not supported")
+            file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
+            with open(file_path, "wb") as f:
+                f.write(await file.read())
+            raw_content = await file_processor.process_file(file_path)
+        elif text:
+            raw_content = text
         else:
-            if file:
-                file_ext = Path(file.filename).suffix.lower()
-                if file_ext not in [".docx", ".pdf", ".txt"]:
-                    raise HTTPException(status_code=400, detail="File type not supported")
-                file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
-                with open(file_path, "wb") as f:
-                    f.write(await file.read())
-                raw_content = await file_processor.process_file(file_path)
-            elif text:
-                raw_content = text
-            else:
-                raise HTTPException(status_code=400, detail="Provide one of: text, file, content")
+            raise HTTPException(status_code=400, detail="Provide one of: text, file")
 
-            target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=raw_content)
-            force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
-            structured_content = await content_extractor.extract_and_structure(
-                raw_content,
-                target_slides_override=target_slides_override,
-                force_exact_slide_count=force_exact_slide_count,
-            )
+        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=raw_content)
+        force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
 
-        if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
-            structured_content = await content_extractor._force_slide_count_exact(
-                structured_content, int(target_slides_override)
-            )
-        structured_content = await improve_slide_text_quality(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            max_refines=8,
-        )
+        worker_ready = bool(redis_queue.redis_client and await redis_queue.has_active_worker())
 
-        table_specs = await build_table_specs_for_slides(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            raw_content=raw_content or "",
-        )
-        chart_specs = await build_chart_specs_for_slides(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            table_indices=set(table_specs.keys()),
-            raw_content=raw_content or "",
-        )
-        image_paths = None
-        if _form_wants_slide_images(generate_images):
-            resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
+        async def _process_spec_in_background(
+            task_id_bg: str,
+            raw_content_bg: Optional[str],
+            structured_content_bg: Optional[dict],
+            slide_theme_bg: str,
+            want_images_bg: bool,
+            image_limit_bg: int,
+        ):
             try:
-                image_paths = await build_image_paths_for_slides(
-                    content_extractor,
-                    structured_content,
-                    task_id,
-                    chart_specs=chart_specs,
-                    table_specs=table_specs,
-                    image_limit=resolved_image_limit,
-                    plan=plan_norm,
-                )
-            except Exception as image_error:
-                print(f"[generate-spec] image generation failed, continue without images: {image_error!r}")
-                image_paths = None
+                await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
 
-        return _build_slide_spec_payload(
-            task_id=task_id,
-            structured_content=structured_content,
-            chart_specs=chart_specs,
-            table_specs=table_specs,
-            image_paths=image_paths,
-            include_image_base64=_as_bool_flag(include_image_base64, default=False),
-            slide_theme=slide_theme,
+                async def should_stop() -> bool:
+                    return await redis_queue.is_task_cancelled(task_id_bg)
+
+                if structured_content_bg:
+                    structured = structured_content_bg
+                    if force_exact_slide_count and target_slides_override and isinstance(structured, dict):
+                        structured = await content_extractor._force_slide_count_exact(structured, int(target_slides_override))
+                    if not structured.get("_explicit_slide_mode"):
+                        structured = await improve_slide_text_quality(
+                            content_extractor,
+                            structured,
+                            task_id=task_id_bg,
+                            max_refines=8,
+                            source_language=(
+                                content_extractor._detect_output_language_hint(raw_content_bg or "")
+                                if raw_content_bg
+                                else getattr(content_extractor, "_slide_lang_hint", "auto")
+                            ),
+                        )
+                        if force_exact_slide_count and target_slides_override and isinstance(structured, dict):
+                            structured = await content_extractor._force_slide_count_exact(
+                                structured, int(target_slides_override)
+                            )
+                else:
+                    async def on_chunk(done: int, total: int):
+                        if total <= 0:
+                            return
+                        progress = 10 + int(55 * done / total)
+                        await redis_queue.update_task_status(
+                            task_id_bg,
+                            "processing",
+                            progress=progress,
+                            result={"chunks": {"done": done, "total": total}},
+                        )
+
+                    structured = await content_extractor.extract_and_structure(
+                        raw_content_bg,
+                        progress_cb=on_chunk,
+                        should_stop=should_stop,
+                        target_slides_override=target_slides_override,
+                        force_exact_slide_count=force_exact_slide_count,
+                    )
+
+                    if await should_stop():
+                        return
+
+                    if not structured.get("_explicit_slide_mode"):
+                        structured = await improve_slide_text_quality(
+                            content_extractor,
+                            structured,
+                            task_id=task_id_bg,
+                            max_refines=8,
+                            source_language=(
+                                content_extractor._detect_output_language_hint(raw_content_bg or "")
+                                if raw_content_bg
+                                else getattr(content_extractor, "_slide_lang_hint", "auto")
+                            ),
+                        )
+                        if force_exact_slide_count and target_slides_override and isinstance(structured, dict):
+                            structured = await content_extractor._force_slide_count_exact(
+                                structured, int(target_slides_override)
+                            )
+
+                await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
+                table_specs_bg = await build_table_specs_for_slides(
+                    content_extractor,
+                    structured,
+                    task_id=task_id_bg,
+                    should_stop=should_stop,
+                    raw_content=raw_content_bg or "",
+                )
+                chart_specs_bg = await build_chart_specs_for_slides(
+                    content_extractor,
+                    structured,
+                    task_id=task_id_bg,
+                    should_stop=should_stop,
+                    table_indices=set(table_specs_bg.keys()),
+                    raw_content=raw_content_bg or "",
+                )
+                image_paths_bg = None
+                if want_images_bg:
+                    await redis_queue.update_task_status(
+                        task_id_bg, "processing", progress=68,
+                        result={"images": {"done": 0, "total": 0}},
+                    )
+                    async def on_image_progress(done: int, total: int):
+                        pct = 68 + int(11 * done / total) if total > 0 else 68
+                        await redis_queue.update_task_status(
+                            task_id_bg, "processing", progress=pct,
+                            result={"images": {"done": done, "total": total}},
+                        )
+                    try:
+                        image_paths_bg = await build_image_paths_for_slides(
+                            content_extractor,
+                            structured,
+                            task_id_bg,
+                            chart_specs=chart_specs_bg,
+                            table_specs=table_specs_bg,
+                            image_limit=image_limit_bg,
+                            should_stop=should_stop,
+                            progress_cb=on_image_progress,
+                            plan=plan_norm,
+                        )
+                    except Exception as image_error:
+                        print(
+                            f"[generate-spec:bg] image generation failed, continue without images: {image_error!r}"
+                        )
+                        image_paths_bg = None
+
+                if await should_stop():
+                    return
+
+                await redis_queue.update_task_status(task_id_bg, "processing", progress=80)
+                spec_payload = _build_slide_spec_payload(
+                    task_id=task_id_bg,
+                    structured_content=structured,
+                    chart_specs=chart_specs_bg,
+                    table_specs=table_specs_bg,
+                    image_paths=image_paths_bg,
+                    slide_theme=slide_theme_bg,
+                )
+
+                if await should_stop():
+                    return
+
+                await redis_queue.update_task_status(
+                    task_id_bg,
+                    "completed",
+                    progress=100,
+                    result=spec_payload,
+                )
+            except TaskCancelledError:
+                await redis_queue.update_task_status(
+                    task_id_bg,
+                    "cancelled",
+                    progress=0,
+                    result={"message": "Task cancelled by user"},
+                )
+            except Exception as e:
+                await redis_queue.update_task_status(
+                    task_id_bg,
+                    "error",
+                    progress=0,
+                    result={"error": exc_to_error_message(e)},
+                )
+
+        if worker_ready and REDIS_OFFLOAD_WHEN_WORKER_ALIVE:
+            task_data = {
+                "action": "generate_slide_spec",
+                "raw_content": raw_content,
+                "content": structured_content,
+                "plan": plan_norm,
+                "slide_count": target_slides_override,
+                "slide_theme": slide_preset,
+                "generate_images": generate_images,
+                "image_limit": resolved_image_limit,
+            }
+            await redis_queue.add_task(task_id, task_data)
+            return {
+                "task_id": task_id,
+                "status": "processing",
+                "message": "Processing JSON Spec via Redis worker...",
+                "check_status_url": f"/api/status/{task_id}",
+            }
+
+        await redis_queue.update_task_status(task_id, "pending", progress=0)
+        background_tasks.add_task(
+            _process_spec_in_background,
+            task_id,
+            raw_content,
+            structured_content,
+            slide_preset,
+            want_images_flag,
+            resolved_image_limit,
         )
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "message": "Processing JSON Spec asynchronously in BackgroundTasks.",
+            "check_status_url": f"/api/status/{task_id}",
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -704,12 +796,18 @@ async def generate_slide_full(
                 if await should_stop():
                     return
 
-                structured = await improve_slide_text_quality(
-                    content_extractor,
-                    structured,
-                    task_id=task_id_bg,
-                    max_refines=8,
-                )
+                if not structured.get("_explicit_slide_mode"):
+                    structured = await improve_slide_text_quality(
+                        content_extractor,
+                        structured,
+                        task_id=task_id_bg,
+                        max_refines=8,
+                        source_language=(
+                            content_extractor._detect_output_language_hint(raw_content_bg or "")
+                            if raw_content_bg
+                            else getattr(content_extractor, "_slide_lang_hint", "auto")
+                        ),
+                    )
 
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 table_specs_bg = await build_table_specs_for_slides(
@@ -729,6 +827,16 @@ async def generate_slide_full(
                 )
                 image_paths_bg = None
                 if want_images_bg:
+                    await redis_queue.update_task_status(
+                        task_id_bg, "processing", progress=68,
+                        result={"images": {"done": 0, "total": 0}},
+                    )
+                    async def on_image_progress(done: int, total: int):
+                        pct = 68 + int(11 * done / total) if total > 0 else 68
+                        await redis_queue.update_task_status(
+                            task_id_bg, "processing", progress=pct,
+                            result={"images": {"done": done, "total": total}},
+                        )
                     try:
                         image_paths_bg = await build_image_paths_for_slides(
                             content_extractor,
@@ -738,6 +846,7 @@ async def generate_slide_full(
                             table_specs=table_specs_bg,
                             image_limit=image_limit_bg,
                             should_stop=should_stop,
+                            progress_cb=on_image_progress,
                             plan=plan_norm,
                         )
                     except Exception as image_error:
@@ -806,141 +915,23 @@ async def generate_slide_full(
                 "check_status_url": f"/api/status/{task_id}",
             }
 
-        if content_length > REDIS_QUEUE_MIN_CHARS:
-            await redis_queue.update_task_status(task_id, "pending", progress=0)
-            background_tasks.add_task(
-                _process_in_background,
-                task_id,
-                raw_content,
-                slide_preset,
-                want_images_flag,
-                resolved_image_limit,
-            )
-            return {
-                "task_id": task_id,
-                "status": "processing",
-                "message": "Long content, processing asynchronously in BackgroundTasks.",
-                "check_status_url": f"/api/status/{task_id}",
-            }
-
-        print(f"[generate] {task_id}: extract start")
-        structured_content = await content_extractor.extract_and_structure(
+        # Luôn chạy bất đồng bộ qua BackgroundTasks nếu không có Redis worker
+        await redis_queue.update_task_status(task_id, "pending", progress=0)
+        background_tasks.add_task(
+            _process_in_background,
+            task_id,
             raw_content,
-            target_slides_override=target_slides_override,
-            force_exact_slide_count=force_exact_slide_count,
+            slide_preset,
+            want_images_flag,
+            resolved_image_limit,
         )
-        print(
-            f"[generate] {task_id}: extract done "
-            f"slides={len(structured_content.get('slides') or []) if isinstance(structured_content, dict) else 'n/a'}"
-        )
-        print(f"[generate] {task_id}: text quality start")
-        structured_content = await improve_slide_text_quality(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-        )
-        print(f"[generate] {task_id}: text quality done")
-
-        want_img = _form_wants_slide_images(generate_images)
-        image_paths = None
-        print(f"[generate] {task_id}: table specs start")
-        table_specs = await build_table_specs_for_slides(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            raw_content=raw_content or "",
-        )
-        print(f"[generate] {task_id}: table specs done count={len(table_specs)}")
-        print(f"[generate] {task_id}: chart specs start")
-        chart_specs = await build_chart_specs_for_slides(
-            content_extractor,
-            structured_content,
-            task_id=task_id,
-            table_indices=set(table_specs.keys()),
-            raw_content=raw_content or "",
-        )
-        print(f"[generate] {task_id}: chart specs done count={len(chart_specs)}")
-        if want_img:
-            print(f"[generate] {task_id}: image generation start")
-            try:
-                image_paths = await build_image_paths_for_slides(
-                    content_extractor,
-                    structured_content,
-                    task_id,
-                    chart_specs=chart_specs,
-                    table_specs=table_specs,
-                    image_limit=resolved_image_limit,
-                )
-            except Exception as image_error:
-                print(f"[generate] image generation failed, continue without images: {image_error!r}")
-                image_paths = None
-            print(f"[generate] {task_id}: image generation done count={len(image_paths or {})}")
-
-        output_path = pptx_path_for_task(OUTPUT_DIR, structured_content.get("title", ""), task_id)
-        print(f"[generate] {task_id}: pptx create start")
-        await slide_generator.create_slide(
-            structured_content,
-            output_path,
-            generate_images=bool(image_paths),
-            image_paths=image_paths,
-            chart_specs=chart_specs,
-            table_specs=table_specs,
-            preset=slide_preset,
-        )
-        print(f"[generate] {task_id}: pptx create done {output_path}")
         return {
             "task_id": task_id,
-            "status": "completed",
-            "download_url": f"/outputs/{output_path.name}",
-            "view_url": f"/api/view-slide/{task_id}",
+            "status": "processing",
+            "message": "Processing asynchronously in BackgroundTasks.",
+            "check_status_url": f"/api/status/{task_id}",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/generate")
-async def generate(
-    background_tasks: BackgroundTasks,
-    text: Optional[str] = Form(None),
-    file: UploadFile = File(None),
-    plan: str = Form("pro"),
-    slide_count: Optional[int] = Form(None),
-    image_limit: Optional[int] = Form(None),
-    slide_theme: str = Form("modern"),
-    generate_images: str = Form("false"),
-):
-    return await generate_slide_full(
-        background_tasks=background_tasks,
-        text=text,
-        file=file,
-        plan=plan,
-        slide_count=slide_count,
-        image_limit=image_limit,
-        slide_theme=slide_theme,
-        generate_images=generate_images,
-    )
-
-
-@router.post("/generate-spec")
-async def generate_spec(
-    text: Optional[str] = Form(None),
-    file: UploadFile = File(None),
-    content: Optional[str] = Form(None),
-    plan: str = Form("pro"),
-    slide_count: Optional[int] = Form(None),
-    image_limit: Optional[int] = Form(None),
-    slide_theme: str = Form("modern"),
-    generate_images: str = Form("false"),
-    include_image_base64: str = Form("false"),
-):
-    return await generate_slide_spec(
-        text=text,
-        file=file,
-        content=content,
-        plan=plan,
-        slide_count=slide_count,
-        image_limit=image_limit,
-        slide_theme=slide_theme,
-        generate_images=generate_images,
-        include_image_base64=include_image_base64,
-    )

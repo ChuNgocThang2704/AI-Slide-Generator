@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 
@@ -73,6 +74,25 @@ def _vlm_has_severe_failure(reasons: List[str]) -> bool:
         "unreadable",
         "corrupt",
         "multiple faces distorted",
+        "repeated faces",
+        "duplicated faces",
+        "duplicate faces",
+        "cloned faces",
+        "cloned-looking people",
+        "same face repeated",
+        "synthetic collage",
+        "invented documentary",
+        "modern setting",
+        "contemporary setting",
+        "broad thematic proxy",
+        "generic proxy",
+        "doesn't specifically depict",
+        "does not specifically depict",
+        "not period-correct",
+        "crowded",
+        "visually cluttered",
+        "too many people",
+        "no clear focal subject",
         "extra limbs",
         "missing limb",
     )
@@ -146,7 +166,26 @@ def _word_in_text(word: str, text: str) -> bool:
 
 
 def _any_word_in_text(words: List[str], text: str) -> bool:
-    return any(_word_in_text(w, text) for w in words)
+    if any(_word_in_text(w, text) for w in words):
+        return True
+    normalized_text = _strip_diacritics(text)
+    if normalized_text == text:
+        return False
+    normalized_stop = {"phat", "phat ", "thanh"}
+    for word in words:
+        normalized_word = _strip_diacritics(word).strip().lower()
+        if normalized_word in normalized_stop:
+            continue
+        if _word_in_text(normalized_word, normalized_text):
+            return True
+    return False
+
+
+def _strip_diacritics(text: str) -> str:
+    """ASCII-ish copy for robust Vietnamese keyword matching."""
+    s = unicodedata.normalize("NFD", str(text or ""))
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    return s.replace("đ", "d").replace("Đ", "D")
 
 
 def _looks_like_person_reference(text: str) -> bool:
@@ -187,6 +226,20 @@ def _classify_risk(slide: Dict[str, Any], semantic: Dict[str, Any], content_type
         body = str(bullets)
     full_text = f"{title}. {body}"
 
+    if _any_word_in_text(_MAP_SYMBOL_KEYWORDS, full_text):
+        return "map_symbol_sensitive"
+    if _any_word_in_text(_CHILD_KEYWORDS, full_text):
+        return "child_sensitive"
+    if _any_word_in_text(_POLITICAL_KEYWORDS, full_text):
+        return "political_sensitive"
+    if _any_word_in_text(_CRISIS_KEYWORDS, full_text):
+        return "crisis_sensitive"
+    if _any_word_in_text(_LEGAL_CRIME_KEYWORDS, full_text):
+        return "legal_sensitive"
+    if _any_word_in_text(_IDENTITY_SOCIAL_KEYWORDS, full_text):
+        return "identity_sensitive"
+    if _any_word_in_text(_HIGH_TRUST_FINANCE_KEYWORDS, full_text):
+        return "finance_sensitive"
     if _any_word_in_text(_RELIGIOUS_KEYWORDS, full_text):
         return "religious"
     if _any_word_in_text(_CULTURAL_KEYWORDS, full_text):
@@ -198,6 +251,29 @@ def _classify_risk(slide: Dict[str, Any], semantic: Dict[str, Any], content_type
             return "person_protected"
         return "historical"
     return None
+
+
+def _looks_like_historical_slide(slide: Dict[str, Any]) -> bool:
+    title = str(slide.get("title") or "")
+    bullets = slide.get("bullets") or slide.get("content") or []
+    if isinstance(bullets, list):
+        body = " ".join(str(b) for b in bullets[:5])
+    else:
+        body = str(bullets)
+    text = f"{title}. {body}".lower()
+    if re.search(r"\b(18|19|20)\d{2}\b", text):
+        return True
+    history_terms = (
+        "history", "historical", "war", "revolution", "battle", "treaty",
+        "agreement", "accord", "geneva", "indochina", "colonial",
+        "chien tranh", "khang chien", "hiep dinh", "cach mang",
+        "mien bac", "mien nam", "hai mien", "viet minh", "viet cong",
+        "chiến tranh", "kháng chiến", "hiệp định", "cách mạng",
+        "miền bắc", "miền nam", "hai miền",
+        "chiáº¿n tranh", "khÃ¡ng chiáº¿n", "hiá»‡p", "cÃ¡ch máº¡ng",
+        "miá»n báº¯c", "miá»n nam", "hai miá»n",
+    )
+    return any(term in text for term in history_terms)
 
 
 
@@ -783,12 +859,22 @@ _METAPHOR_VISUAL_RE = re.compile(
 async def _get_image_semantic(content_extractor, slide: Dict[str, Any]) -> Dict[str, Any]:
     fallback = _extract_semantic(slide)
     if not hasattr(content_extractor, "extract_image_semantic"):
+        if _looks_like_historical_slide(slide):
+            fallback["content_type"] = "historical"
+            fallback["context"] = "historical"
+            fallback["contexts"] = "historical"
+            fallback["source"] = "rule_historical_heuristic"
         return fallback
     try:
         raw = await content_extractor.extract_image_semantic(
             {"context": _slide_prompt_context(slide, max_chars=900), "slide": slide}
         )
         semantic = _normalize_llm_semantic(raw, fallback)
+        if semantic.get("content_type") == "normal" and _looks_like_historical_slide(slide):
+            semantic["content_type"] = "historical"
+            semantic["context"] = "historical"
+            semantic["contexts"] = "historical"
+            semantic["source"] = f"{semantic.get('source')}_historical_heuristic"
         print(
             "[slide_images] semantic "
             f"source={semantic.get('source')} confidence={semantic.get('confidence')} "
@@ -797,6 +883,11 @@ async def _get_image_semantic(content_extractor, slide: Dict[str, Any]) -> Dict[
         return semantic
     except Exception as e:
         print(f"[slide_images] semantic error: {e}")
+        if _looks_like_historical_slide(slide):
+            fallback["content_type"] = "historical"
+            fallback["context"] = "historical"
+            fallback["contexts"] = "historical"
+            fallback["source"] = "rule_historical_heuristic"
         return fallback
 
 
@@ -1079,6 +1170,13 @@ _RISK_STYLE_OVERRIDES: Dict[str, str] = {
     "religious": "respectful illustration style, soft watercolor, calm hand-painted look",
     "cultural": "traditional folk illustration style, hand-painted look, warm hues",
     "medical_diagram": "clean educational illustration, flat hand-drawn style, soft palette",
+    "political_sensitive": "neutral documentary editorial photography style",
+    "crisis_sensitive": "respectful documentary editorial photography style, non-graphic",
+    "legal_sensitive": "neutral professional documentary photography style",
+    "identity_sensitive": "respectful documentary photography style, dignified representation",
+    "child_sensitive": "safe educational stock photography style",
+    "map_symbol_sensitive": "neutral documentary reference image style",
+    "finance_sensitive": "neutral professional business photography style",
 }
 
 _RELIGIOUS_KEYWORDS = [
@@ -1108,6 +1206,63 @@ _MEDICAL_DIAGRAM_KEYWORDS = [
     "phan tu", "molecule", "công thức hóa học", "cong thuc hoa hoc", "mạch máu", "mach mau",
     "blood vessel", "neuron", "synapse", "bệnh án", "benh an", "patient case", "chẩn đoán",
     "chan doan",
+]
+
+_POLITICAL_KEYWORDS = [
+    "politics", "political", "government", "state", "election", "vote", "voting",
+    "campaign", "parliament", "congress", "senate", "minister", "president",
+    "prime minister", "policy", "public policy", "diplomacy", "sanction",
+    "political party", "communist party", "democratic party", "republican party",
+    "bầu cử", "bau cu", "chính trị", "chinh tri", "nhà nước", "nha nuoc",
+    "chính phủ", "chinh phu", "quốc hội", "quoc hoi", "đảng phái", "dang phai",
+    "ngoại giao", "ngoai giao", "chính sách", "chinh sach",
+]
+
+_CRISIS_KEYWORDS = [
+    "war", "conflict", "invasion", "attack", "terrorism", "terrorist", "bombing",
+    "massacre", "genocide", "refugee", "disaster", "earthquake", "flood", "wildfire",
+    "pandemic", "epidemic", "accident", "crash", "explosion", "violence", "violent",
+    "weapon", "gun", "military operation", "humanitarian crisis",
+    "chiến tranh", "chien tranh", "xung đột", "xung dot", "khủng bố", "khung bo",
+    "thảm họa", "tham hoa", "thiên tai", "thien tai", "tai nạn", "tai nan",
+    "bạo lực", "bao luc", "vũ khí", "vu khi", "người tị nạn", "nguoi ti nan",
+]
+
+_LEGAL_CRIME_KEYWORDS = [
+    "law", "legal", "court", "trial", "judge", "lawsuit", "crime", "criminal",
+    "police", "prison", "arrest", "fraud", "corruption", "bribery", "scam",
+    "tòa án", "toa an", "pháp luật", "phap luat", "luật", "luat", "tội phạm",
+    "toi pham", "cảnh sát", "canh sat", "tham nhũng", "tham nhung", "lừa đảo",
+    "lua dao",
+]
+
+_IDENTITY_SOCIAL_KEYWORDS = [
+    "ethnicity", "ethnic", "race", "racial", "religious minority", "minority",
+    "gender", "lgbt", "lgbtq", "sexual orientation", "disability", "disabled",
+    "poverty", "homeless", "migration", "migrant", "immigration", "indigenous",
+    "dân tộc", "dan toc", "sắc tộc", "sac toc", "giới tính", "gioi tinh",
+    "khuyết tật", "khuyet tat", "nghèo đói", "ngheo doi", "vô gia cư", "vo gia cu",
+    "di cư", "di cu", "nhập cư", "nhap cu",
+]
+
+_CHILD_KEYWORDS = [
+    "child", "children", "kid", "kids", "minor", "teenager", "student children",
+    "trẻ em", "tre em", "thiếu nhi", "thieu nhi", "học sinh tiểu học",
+    "hoc sinh tieu hoc", "mầm non", "mam non",
+]
+
+_MAP_SYMBOL_KEYWORDS = [
+    "map", "territory", "border", "sovereignty", "national flag", "flag",
+    "national emblem", "coat of arms", "anthem", "disputed territory",
+    "bản đồ", "ban do", "lãnh thổ", "lanh tho", "biên giới", "bien gioi",
+    "chủ quyền", "chu quyen", "quốc kỳ", "quoc ky", "quốc huy", "quoc huy",
+]
+
+_HIGH_TRUST_FINANCE_KEYWORDS = [
+    "investment advice", "financial advice", "stock recommendation", "crypto",
+    "cryptocurrency", "loan", "debt", "insurance claim", "tax", "bankruptcy",
+    "đầu tư", "dau tu", "tài chính cá nhân", "tai chinh ca nhan", "tiền số",
+    "tien so", "vay nợ", "vay no", "bảo hiểm", "bao hiem", "thuế", "thue",
 ]
 
 _CATASTROPHIC_FLAG_KEYWORDS = [

@@ -6,10 +6,10 @@ spring:
     name: user-service
 
   datasource:
-    url: ${DB_URL}
+    url: ${USER_DB_URL:${DB_URL}}
     driverClassName: org.postgresql.Driver
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
+    username: ${USER_DB_USERNAME:${DB_USERNAME}}
+    password: ${USER_DB_PASSWORD:${DB_PASSWORD}}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5
@@ -35,7 +35,7 @@ spring:
     password: ${RABBIT_PASS}
     virtual-host: ${RABBIT_VHOST}
     ssl:
-      enabled: true
+      enabled: ${RABBIT_SSL_ENABLED:false}
   mail:
     host: smtp.gmail.com
     port: 587

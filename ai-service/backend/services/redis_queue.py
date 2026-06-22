@@ -135,8 +135,8 @@ class RedisQueue:
                 status_key, _TASK_TTL,
                 json.dumps({"status": "pending", "progress": 0})
             )
-            # lpush → BLPOP sẽ lấy từ đuôi (rpop) — dùng nhất quán
-            await self.redis_client.lpush("task_queue", task_id)
+            # rpush → BLPOP sẽ lấy từ đầu (fifo) — dùng nhất quán
+            await self.redis_client.rpush("task_queue", task_id)
         else:
             self.memory_queue[task_id] = task_data
             self.memory_status[task_id] = {"status": "pending", "progress": 0}
@@ -163,9 +163,38 @@ class RedisQueue:
             status_key = f"status:{task_id}"
             status_json = await self.redis_client.get(status_key)
             if status_json:
-                return json.loads(status_json)
+                data = json.loads(status_json)
+                # Nếu task đang pending, tính toán vị trí trong hàng đợi
+                if data.get("status") == "pending":
+                    try:
+                        queue_list = await self.redis_client.lrange("task_queue", 0, -1)
+                        queue_ids = [q.decode("utf-8") if isinstance(q, bytes) else str(q) for q in queue_list]
+                        if task_id in queue_ids:
+                            idx = queue_ids.index(task_id)
+                            data["queue_position"] = idx + 1
+                            data["queue_total"] = len(queue_ids)
+                        else:
+                            data["queue_position"] = 0
+                            data["queue_total"] = len(queue_list)
+                    except Exception as e:
+                        print(f"Error calculating queue position: {e}")
+                return data
             return {"status": "not_found", "progress": 0}
-        return self.memory_status.get(task_id, {"status": "not_found", "progress": 0})
+        
+        data = self.memory_status.get(task_id, {"status": "not_found", "progress": 0})
+        if data.get("status") == "pending":
+            try:
+                queue_ids = list(self.memory_queue.keys())
+                if task_id in queue_ids:
+                    idx = queue_ids.index(task_id)
+                    data["queue_position"] = idx + 1
+                    data["queue_total"] = len(queue_ids)
+                else:
+                    data["queue_position"] = 0
+                    data["queue_total"] = len(queue_ids)
+            except Exception:
+                pass
+        return data
 
     async def update_task_status(
         self,
@@ -250,6 +279,8 @@ class RedisQueue:
                 await self._process_slide_full(task_id, task_data)
             elif action == "generate_slide_with_images":
                 await self._process_slide_with_images(task_id, task_data)
+            elif action == "generate_slide_spec":
+                await self._process_slide_spec(task_id, task_data)
             else:
                 print(f"[queue] Unknown action '{action}' for task {task_id}")
                 await self.update_task_status(
@@ -283,8 +314,9 @@ class RedisQueue:
                 except Exception:
                     slide_count_int = None
 
-            target_slides_override = FREE_SLIDE_LIMIT if free_mode else (
-                slide_count_int if (slide_count_int and slide_count_int > 0) else None
+            target_slides_override = (
+                slide_count_int if (slide_count_int and slide_count_int > 0)
+                else (FREE_SLIDE_LIMIT if free_mode else None)
             )
             force_exact_slide_count = bool(free_mode or (target_slides_override is not None))
             resolved_image_limit = _resolve_plan_image_limit(
@@ -325,7 +357,16 @@ class RedisQueue:
                 structured_content,
                 task_id=task_id,
                 max_refines=8,
+                source_language=(
+                    content_extractor._detect_output_language_hint(raw_content or "")
+                    if raw_content
+                    else getattr(content_extractor, "_slide_lang_hint", "auto")
+                ),
             )
+            if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+                structured_content = await content_extractor._force_slide_count_exact(
+                    structured_content, int(target_slides_override)
+                )
 
             if await self.is_task_cancelled(task_id):
                 return
@@ -464,6 +505,185 @@ class RedisQueue:
             )
             print(f"[worker] Task {task_id}: done (with_images path) -> {output_path.name}")
 
+        except Exception as e:
+            print(f"[worker] Task {task_id} error: {e}")
+            await self.update_task_status(
+                task_id, "error", progress=0,
+                result={"error": exc_to_error_message(e)},
+            )
+
+    async def _process_slide_spec(self, task_id: str, task_data: Dict[str, Any]):
+        """Xử lý tạo slide spec trong Redis worker."""
+        from services.content_extractor import ContentExtractor, TaskCancelledError
+        from config import LLM_MODEL
+        from routes.api import _resolve_plan_image_limit, _build_slide_spec_payload
+        from services.slide_text_quality import improve_slide_text_quality
+
+        try:
+            await self.update_task_status(task_id, "processing", progress=10)
+
+            plan_norm = (task_data.get("plan") or "pro").strip().lower()
+            free_mode = plan_norm == "free"
+
+            slide_count_raw = task_data.get("slide_count")
+            slide_count_int = None
+            if slide_count_raw is not None:
+                try:
+                    slide_count_int = int(slide_count_raw)
+                except Exception:
+                    slide_count_int = None
+
+            target_slides_override = (
+                slide_count_int if (slide_count_int and slide_count_int > 0)
+                else (FREE_SLIDE_LIMIT if free_mode else None)
+            )
+            force_exact_slide_count = bool(free_mode or (target_slides_override is not None))
+            resolved_image_limit = _resolve_plan_image_limit(
+                plan_norm,
+                target_slides_override,
+                task_data.get("image_limit"),
+            )
+
+            async def should_stop() -> bool:
+                return await self.is_task_cancelled(task_id)
+
+            content_extractor = ContentExtractor(model_name=LLM_MODEL)
+            structured_content = task_data.get("content")
+
+            if structured_content:
+                # Nếu đã có content structured sẵn
+                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+                    structured_content = await content_extractor._force_slide_count_exact(structured_content, int(target_slides_override))
+                structured_content = await improve_slide_text_quality(
+                    content_extractor,
+                    structured_content,
+                    task_id=task_id,
+                    max_refines=8,
+                    source_language=getattr(content_extractor, "_slide_lang_hint", "auto"),
+                )
+                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+                    structured_content = await content_extractor._force_slide_count_exact(
+                        structured_content, int(target_slides_override)
+                    )
+                raw_content = ""
+            else:
+                raw_content = task_data.get("raw_content")
+                await self.update_task_status(task_id, "processing", progress=20)
+                
+                async def on_chunk(done: int, total: int):
+                    if total <= 0:
+                        return
+                    progress = 20 + int(35 * done / total)  # 20 → 55
+                    await self.update_task_status(
+                        task_id, "processing", progress=progress,
+                        result={"chunks": {"done": done, "total": total}},
+                    )
+
+                structured_content = await content_extractor.extract_and_structure(
+                    raw_content,
+                    progress_cb=on_chunk,
+                    should_stop=should_stop,
+                    target_slides_override=target_slides_override,
+                    force_exact_slide_count=force_exact_slide_count,
+                )
+
+                structured_content = await improve_slide_text_quality(
+                    content_extractor,
+                    structured_content,
+                    task_id=task_id,
+                    max_refines=8,
+                    source_language=(
+                        content_extractor._detect_output_language_hint(raw_content or "")
+                        if raw_content
+                        else getattr(content_extractor, "_slide_lang_hint", "auto")
+                    ),
+                )
+                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+                    structured_content = await content_extractor._force_slide_count_exact(
+                        structured_content, int(target_slides_override)
+                    )
+
+            if await self.is_task_cancelled(task_id):
+                return
+
+            # ── Chart & Table specs ───────────────────────────────────
+            await self.update_task_status(task_id, "processing", progress=58)
+            from services.slide_charts import build_chart_specs_for_slides
+            from services.slide_tables import build_table_specs_for_slides
+
+            table_specs = await build_table_specs_for_slides(
+                content_extractor, structured_content,
+                task_id=task_id, should_stop=should_stop,
+                raw_content=raw_content or "",
+            )
+            chart_specs = await build_chart_specs_for_slides(
+                content_extractor, structured_content,
+                task_id=task_id, should_stop=should_stop,
+                table_indices=set(table_specs.keys()),
+                raw_content=raw_content or "",
+            )
+
+            # ── Image generation (tuỳ chọn) ───────────────────────────
+            want_img = str(task_data.get("generate_images") or "").strip().lower() in (
+                "1", "true", "yes", "on",
+            ) and bool((IMAGE_GEN_API_BASE_URL or "").strip())
+
+            image_paths = None
+            if want_img:
+                await self.update_task_status(
+                    task_id, "processing", progress=68,
+                    result={"images": {"done": 0, "total": 0}},
+                )
+                from services.images import build_image_paths_for_slides
+
+                async def on_image_progress(done: int, total: int):
+                    pct = 68 + int(11 * done / total) if total > 0 else 68
+                    await self.update_task_status(
+                        task_id, "processing", progress=pct,
+                        result={"images": {"done": done, "total": total}},
+                    )
+
+                try:
+                    image_paths = await build_image_paths_for_slides(
+                        content_extractor, structured_content, task_id,
+                        chart_specs=chart_specs, table_specs=table_specs,
+                        image_limit=resolved_image_limit,
+                        should_stop=should_stop,
+                        progress_cb=on_image_progress,
+                        plan=plan_norm,
+                    )
+                except Exception as image_error:
+                    print(
+                        f"[worker:spec] image generation failed: {image_error!r}"
+                    )
+                    image_paths = None
+
+            if await self.is_task_cancelled(task_id):
+                return
+
+            # ── Build Spec Payload ────────────────────────────────────
+            await self.update_task_status(task_id, "processing", progress=80)
+
+            spec_payload = _build_slide_spec_payload(
+                task_id=task_id,
+                structured_content=structured_content,
+                chart_specs=chart_specs,
+                table_specs=table_specs,
+                image_paths=image_paths,
+                slide_theme=task_data.get("slide_theme")
+            )
+
+            await self.update_task_status(
+                task_id, "completed", progress=100,
+                result=spec_payload,
+            )
+            print(f"[worker] Task {task_id}: JSON Spec done")
+
+        except TaskCancelledError:
+            await self.update_task_status(
+                task_id, "cancelled", progress=0,
+                result={"message": "Task cancelled by user"},
+            )
         except Exception as e:
             print(f"[worker] Task {task_id} error: {e}")
             await self.update_task_status(

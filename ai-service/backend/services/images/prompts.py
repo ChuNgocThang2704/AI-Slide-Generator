@@ -486,6 +486,8 @@ def _vlm_reasons_to_negative(reasons: List[str]) -> str:
         neg_terms.append("blurry, low quality, out of focus")
     if any(k in combined for k in ("artifact", "distort", "deform", "malform", "glitch")):
         neg_terms.append("distorted, artifact, deformed, glitchy")
+    if any(k in combined for k in ("repeated face", "duplicated face", "duplicate face", "cloned", "same face", "too many people", "crowded", "cluttered", "collage")):
+        neg_terms.append("duplicated faces, cloned people, crowded scene, synthetic collage")
     if any(k in combined for k in ("hand", "finger", "fingers", "anatomy", "anatomical")):
         neg_terms.append("bad hands, malformed fingers, fused fingers, extra fingers")
     if any(k in combined for k in ("keyboard", "trackpad", "laptop surface")):

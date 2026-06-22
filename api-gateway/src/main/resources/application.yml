@@ -10,7 +10,7 @@ spring:
     redis:
       url: ${REDIS_URL:redis://localhost:6379}
       ssl:
-        enabled: true
+        enabled: ${REDIS_SSL_ENABLED:false}
       connect-timeout: 5000ms
       timeout: 5000ms
   cloud:
@@ -76,4 +76,4 @@ spring:
           filters:
             - StripPrefix=0
 jwt:
-  signerKey: ${JWT_SECRET}
+  signerKey: ${JWT_SIGNER_KEY}

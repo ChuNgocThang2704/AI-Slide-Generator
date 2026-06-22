@@ -22,10 +22,16 @@ function useSlideGenerator() {
 
   const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
 
-  const done = useCallback((url) => {
+  const done = useCallback((url, payload) => {
     stopPoll(); setProgress(null)
-    setStatus({ type: 'success', msg: '✅ Slide đã được tạo thành công!' })
-    setDownloadUrl(url); setActiveTaskId(null); setBusy(false)
+    if (url) {
+      setStatus({ type: 'success', msg: '✅ Slide đã được tạo thành công!' })
+      setDownloadUrl(url)
+    } else {
+      setStatus({ type: 'success', msg: '✅ JSON Spec đã được tạo thành công!' })
+      console.log('JSON Spec Payload:', payload)
+    }
+    setActiveTaskId(null); setBusy(false)
   }, [])
 
   const fail = useCallback((msg) => {
@@ -40,7 +46,11 @@ function useSlideGenerator() {
         const r = await fetch(`${API}/api/status/${taskId}`)
         const d = await r.json()
         if (d.status === 'completed') {
-          done(`${API}${d.result?.download_url}`)
+          if (d.result?.download_url) {
+            done(`${API}${d.result.download_url}`, d.result)
+          } else {
+            done(null, d.result)
+          }
         } else if (d.status === 'cancelled') {
           stopPoll(); setProgress(null)
           setStatus({ type: 'info', msg: '⏹️ Đã dừng quá trình tạo slide.' })
@@ -48,6 +58,15 @@ function useSlideGenerator() {
         } else if (d.status === 'error') {
           const raw = d.result?.error ?? d.result?.message ?? d.detail ?? (typeof d.result === 'string' ? d.result : null)
           fail(typeof raw === 'string' && raw.trim() ? raw.trim() : raw != null ? JSON.stringify(raw) : 'Lỗi không rõ — kiểm tra log API.')
+        } else if (d.status === 'pending') {
+          setProgress(0)
+          const pos = d.queue_position
+          const tot = d.queue_total
+          if (pos !== undefined && pos > 0) {
+            setStatus({ type: 'info', msg: `⏳ Đang xếp hàng đợi: Vị trí ${pos}/${tot}. Vui lòng chờ...` })
+          } else {
+            setStatus({ type: 'info', msg: '⏳ Đang chờ hệ thống xử lý...' })
+          }
         } else {
           const pct = d.progress || 0
           setProgress(pct)

@@ -7,6 +7,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from services.visual_data_review import review_visual_data_specs
+
 _DATA_KEYWORDS = (
     "%", "percent", "tỷ lệ", "ty le", "kpi", "metric", "statistics",
     "thống kê", "thong ke", "số liệu", "so lieu", "growth", "tăng trưởng",
@@ -28,6 +30,7 @@ _TIME_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 _MD_SEPARATOR_RE = re.compile(r"^\s*:?-{2,}:?\s*$")
+_NUMERIC_TOKEN_RE = re.compile(r"[-+]?\d+(?:[.,]\d+)*(?:\s*%|\s*/\s*\d+)?", re.IGNORECASE)
 
 
 def _fold_text(text: str) -> str:
@@ -111,6 +114,51 @@ def _looks_like_data_slide(slide: Dict[str, Any]) -> bool:
     if len(_TIME_VALUE_RE.findall(text)) >= 2:
         return True
     return False
+
+
+def _has_comparable_numeric_evidence(text: str) -> bool:
+    """Generic chart gate: at least two numeric facts tied to nearby labels."""
+    folded = _fold_text(text)
+    if folded.count("|") >= 4:
+        return True
+    if len(_CATEGORY_NUMBER_RE.findall(folded)) >= 2:
+        return True
+    if len(_TIME_VALUE_RE.findall(folded)) >= 2:
+        return True
+    return len(_NUMERIC_TOKEN_RE.findall(folded)) >= 3 and any(
+        token in folded for token in ("%", "ty le", "score", "diem", "doanh", "chi phi", "kpi", "growth", "rate")
+    )
+
+
+def _chart_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
+    """Validate that labels and numeric values are supported by the slide/raw text."""
+    folded = _fold_text(text)
+    folded_numeric = re.sub(r"[^\d%.,/\-+]", " ", folded)
+    compact_numeric = re.sub(r"[^\d]", "", folded)
+    labels = [str(x) for x in (spec.get("labels") or []) if str(x).strip()]
+    values = spec.get("values") or []
+    if len(labels) < 2 or len(values) < 2:
+        return False
+    label_hits = 0
+    for label in labels[:8]:
+        lf = _fold_text(label)
+        if lf and (lf in folded or any(tok in folded for tok in lf.split() if len(tok) >= 3)):
+            label_hits += 1
+    numeric_hits = 0
+    for value in values[:8]:
+        value_text = str(value)
+        parsed = _parse_float_cell(value_text)
+        if parsed is None:
+            continue
+        candidates = {str(int(parsed)) if float(parsed).is_integer() else str(parsed).rstrip("0").rstrip(".")}
+        if 0 < parsed < 1 and spec.get("is_percent"):
+            candidates.add(str(int(round(parsed * 100))))
+        if any(
+            c and (c in folded_numeric or c.replace(".", "").replace(",", "") in compact_numeric)
+            for c in candidates
+        ):
+            numeric_hits += 1
+    return label_hits >= min(2, len(labels)) and numeric_hits >= min(2, len(values))
 
 
 _ALLOWED_CHART_TYPES = frozenset(
@@ -259,8 +307,6 @@ def _raw_chart_candidates(raw_content: str) -> List[Dict[str, Any]]:
         context = _fold_text(" ".join([current_heading] + section_lines))
         fake_slide = {"title": current_heading, "content": "\n".join(section_lines)}
         chart_type = chart_intent_from_slide(fake_slide)
-        if not chart_type:
-            return
 
         i = 0
         while i < len(section_lines):
@@ -278,10 +324,9 @@ def _raw_chart_candidates(raw_content: str) -> List[Dict[str, Any]]:
             if spec:
                 candidates.append({"source": "raw_markdown", "heading": current_heading, "context": table_context, "spec": spec})
 
-        if any(k in context for k in ("bieu do", "chart", "graph", "radar", "cot", "bar", "line")):
-            spec = _pair_chart_from_lines(current_heading, section_lines, chart_type)
-            if spec:
-                candidates.append({"source": "raw_pairs", "heading": current_heading, "context": context, "spec": spec})
+        spec = _pair_chart_from_lines(current_heading, section_lines, chart_type or "bar")
+        if spec and (chart_type or len(spec.get("labels") or []) >= 2):
+            candidates.append({"source": "raw_pairs", "heading": current_heading, "context": context, "spec": spec})
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -294,6 +339,15 @@ def _raw_chart_candidates(raw_content: str) -> List[Dict[str, Any]]:
             section_lines.append(line)
     flush_section()
     return candidates
+
+
+def _raw_has_table_only_intent(raw_content: str) -> bool:
+    folded = _fold_text(raw_content or "")
+    if folded.count("|") < 4:
+        return False
+    wants_table = any(k in folded for k in ("tao bang", "bang so sanh", "comparison table", "table", "thong so ky thuat"))
+    wants_chart = any(k in folded for k in ("bieu do", "chart", "graph", "radar", "cot", "duong", "tron", "pie", "bar", "line"))
+    return wants_table and not wants_chart
 
 
 def _slide_match_score(slide: Dict[str, Any], candidate: Dict[str, Any]) -> int:
@@ -485,8 +539,34 @@ async def build_chart_specs_for_slides(
 ) -> Dict[int, Dict[str, Any]]:
     """Return {slide_index: editable chart spec} for data-heavy slides."""
     slides = structured.get("slides") or []
-    if not slides or not hasattr(content_extractor, "extract_chart_spec"):
+    if not slides:
         return {}
+
+    if structured.get("_explicit_slide_mode"):
+        out: Dict[int, Dict[str, Any]] = {}
+        debug_records: list[Dict[str, Any]] = []
+        for idx, slide in enumerate(slides):
+            if not isinstance(slide, dict):
+                continue
+            user = _user_chart_from_slide(slide)
+            if not user:
+                continue
+            out[idx] = user
+            debug_records.append(
+                {
+                    "slide_index": idx,
+                    "title": str(slide.get("title") or ""),
+                    "context": "explicit_inline_chart",
+                    "raw": slide.get("chart"),
+                    "spec": user,
+                    "status": "created",
+                }
+            )
+            print(f"[slide_charts] slide {idx} chart: explicit inline {user['chart_type']} {len(user['labels'])} point(s)")
+        if task_id:
+            _write_debug_json(task_id, debug_records)
+            _write_quality_report(task_id, debug_records)
+        return out
 
     skip: Set[int] = set(table_indices or ())
 
@@ -495,6 +575,11 @@ async def build_chart_specs_for_slides(
     assigned_raw: Set[int] = set()
 
     raw_candidates = _raw_chart_candidates(raw_content)
+    if not raw_candidates and _raw_has_table_only_intent(raw_content):
+        if task_id:
+            _write_debug_json(task_id, [])
+            _write_quality_report(task_id, [])
+        return {}
     if raw_candidates:
         used_slides: Set[int] = set()
         for cand_idx, candidate in enumerate(raw_candidates):
@@ -507,13 +592,7 @@ async def build_chart_specs_for_slides(
                 if score > best_score:
                     best_score = score
                     best_idx = idx
-            if best_idx < 0:
-                for idx, slide in enumerate(slides):
-                    if idx not in used_slides and idx not in skip and isinstance(slide, dict):
-                        best_idx = idx
-                        best_score = 1
-                        break
-            if best_idx < 0:
+            if best_idx < 0 or best_score < 1:
                 debug_records.append(
                     {
                         "slide_index": None,
@@ -526,6 +605,25 @@ async def build_chart_specs_for_slides(
                 )
                 continue
             spec = candidate.get("spec")
+            evidence_text = " ".join([
+                str(candidate.get("heading") or ""),
+                str(candidate.get("context") or ""),
+                _slide_context(slides[best_idx], max_chars=1200),
+                raw_content[:4000],
+            ])
+            if not isinstance(spec, dict) or not _chart_spec_has_text_evidence(spec, evidence_text):
+                debug_records.append(
+                    {
+                        "slide_index": best_idx,
+                        "title": str((slides[best_idx] or {}).get("title") or candidate.get("heading") or ""),
+                        "context": candidate.get("context"),
+                        "raw": candidate,
+                        "spec": spec,
+                        "status": "no_text_evidence",
+                        "match_score": best_score,
+                    }
+                )
+                continue
             out[best_idx] = spec
             assigned_raw.add(best_idx)
             used_slides.add(best_idx)
@@ -590,14 +688,45 @@ async def build_chart_specs_for_slides(
 
         if idx in skip:
             continue
+        if raw_candidates:
+            continue
 
-        if not _looks_like_data_slide(slide):
+        pair_chart = _pair_chart_from_lines(
+            str(slide.get("title") or ""),
+            [str(x) for x in (slide.get("bullets") or slide.get("content") or [])]
+            if not isinstance(slide.get("bullets") or slide.get("content") or [], str)
+            else str(slide.get("bullets") or slide.get("content") or "").splitlines(),
+            chart_intent_from_slide(slide) or "bar",
+        )
+        if pair_chart:
+            out[idx] = pair_chart
+            debug_records.append(
+                {
+                    "slide_index": idx,
+                    "title": str(slide.get("title") or ""),
+                    "context": "pair_lines",
+                    "raw": _slide_context(slide),
+                    "spec": pair_chart,
+                    "status": "created",
+                }
+            )
+            print(
+                f"[slide_charts] slide {idx} chart: pairs {pair_chart['chart_type']} "
+                f"{len(pair_chart['labels'])} point(s)"
+            )
+            continue
+
+        if not hasattr(content_extractor, "extract_chart_spec"):
             continue
         context = _slide_context(slide)
+        if not _has_comparable_numeric_evidence(" ".join([context, raw_content[:1200]])):
+            continue
         raw = await content_extractor.extract_chart_spec(
             {"context": context, "slide": slide}
         )
         spec = normalize_chart_spec(raw)
+        if spec and not _chart_spec_has_text_evidence(spec, " ".join([context, raw_content[:4000]])):
+            spec = None
         debug_record: Dict[str, Any] = {
             "slide_index": idx,
             "title": str(slide.get("title") or ""),
@@ -613,6 +742,15 @@ async def build_chart_specs_for_slides(
                 f"[slide_charts] slide {idx} chart: "
                 f"{spec['chart_type']} {len(spec['labels'])} point(s)"
             )
+    out, debug_records = await review_visual_data_specs(
+        content_extractor,
+        structured,
+        out,
+        debug_records,
+        kind="chart",
+        raw_content=raw_content,
+    )
+
     if task_id:
         _write_debug_json(task_id, debug_records)
         _write_quality_report(task_id, debug_records)

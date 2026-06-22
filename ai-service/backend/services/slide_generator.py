@@ -134,6 +134,29 @@ class SlideGenerator:
         t = re.sub(r'^#+\s*', '', t)  # remove leading # ## ### etc.
         return t.strip()
 
+    def _derive_chunk_title(self, bullets: List[Any], fallback: str) -> str:
+        fallback_clean = self._clean_title(str(fallback or "Nội dung chính")).strip() or "Nội dung chính"
+        fallback_clean = re.sub(r"\s+-\s+Ph\S*\s+\d+\s*$", "", fallback_clean, flags=re.IGNORECASE).strip() or fallback_clean
+        fallback_norm = re.sub(r"\W+", " ", fallback_clean.lower()).strip()
+        for raw in bullets or []:
+            text = self._clean_title(str(raw or "")).strip()
+            if not text:
+                continue
+            text = re.sub(r"^\s*(?:[-*•]|\d+[\).:-])\s*", "", text).strip()
+            if ":" in text and text.find(":") <= 48:
+                candidate = text.split(":", 1)[0].strip()
+            else:
+                first_clause = re.split(r"[.;!?]", text, maxsplit=1)[0].strip()
+                comma_clause = first_clause.split(",", 1)[0].strip()
+                if len(comma_clause.split()) >= 4:
+                    first_clause = comma_clause
+                candidate = " ".join(first_clause.split()[:11]).strip()
+            candidate = self._clean_title(candidate).strip(".,;:!-“”‘’\"' ")
+            candidate_norm = re.sub(r"\W+", " ", candidate.lower()).strip()
+            if len(candidate.split()) >= 3 and candidate_norm and candidate_norm != fallback_norm:
+                return candidate[:90]
+        return fallback_clean[:90]
+
     @staticmethod
     def _to_inches_f(length) -> float:
         """Chuyen Length pptx hoac int EMU (sau phep tru) sang inch float."""
@@ -477,7 +500,7 @@ class SlideGenerator:
 
             if len(chunks) > 1:
                 for chunk_idx, chunk in enumerate(chunks):
-                    chunk_title = title_text if chunk_idx == 0 else f"{title_text} (tiếp {chunk_idx + 1})"
+                    chunk_title = title_text if chunk_idx == 0 else self._derive_chunk_title(chunk, title_text)
                     base_img_path = image_paths[idx] if (generate_images and image_paths and idx in image_paths and chunk_idx == 0) else None
                     img_path = base_img_path if self._should_show_image(chunk, base_img_path) else None
                     chart_spec = None

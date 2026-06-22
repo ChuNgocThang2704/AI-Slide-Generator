@@ -1,201 +1,382 @@
-# Tài Liệu Tích Hợp API — AI Slide Generator
+# AI Service API Specification
 
-Tài liệu này mô tả chi tiết các API của hệ thống AI Slide Generator để lập trình viên Frontend (FE) dễ dàng tích hợp.
+Tài liệu này chỉ mô tả các API BE/FE cần tích hợp. Các API/debug endpoint nội bộ không nằm trong tài liệu này.
 
-* **Base URL:** `http://20.196.129.89:8000`
-* **Kiểu truyền dữ liệu đầu vào (Request):** Hỗ trợ `multipart/form-data` hoặc `application/x-www-form-urlencoded`.
+Base URL ví dụ:
 
----
+```txt
+http://localhost:8000
+```
 
-## 1. API Sinh Dữ Liệu JSON Cấu Trúc Slide (Không Sinh File PPTX)
+Trong môi trường deploy, thay bằng domain/IP của AI Service.
 
-API này dùng để lấy về cấu trúc slide chi tiết định dạng JSON (tiêu đề, các đầu mục chữ, bố cục layout gợi ý, bảng biểu, biểu đồ và ảnh). Dữ liệu này cực kỳ thích hợp để FE dựng giao diện Preview, hiển thị slide trực tiếp trên trang web.
+## Tổng Quan Luồng Tích Hợp
 
-* **Endpoint:** `/api/generate-slide-spec` (hoặc alias `/generate-spec`)
-* **Method:** `POST`
-* **Content-Type:** `multipart/form-data` hoặc `application/x-www-form-urlencoded`
+FE/BE nên dùng luồng bất đồng bộ:
 
-### Tham số đầu vào (Request Body)
+1. Gửi yêu cầu tạo slide bằng `POST /api/generate-slide-spec` hoặc `POST /api/generate-slide-full`.
+2. API trả ngay `task_id`.
+3. FE poll `GET /api/status/{task_id}` để cập nhật tiến độ.
+4. Khi `status = completed`, đọc `result`.
+5. Nếu sinh PPTX, dùng `download_url` hoặc `GET /api/view-slide/{task_id}` để tải file.
 
-| Tham số | Kiểu dữ liệu | Bắt buộc | Mô tả |
-| :--- | :--- | :--- | :--- |
-| `text` | String | Không * | Nội dung bài viết thô cần tạo slide. |
-| `file` | File | Không * | File tài liệu nguồn tải lên (hỗ trợ `.docx`, `.pdf`, `.txt`). |
-| `content` | String (JSON) | Không * | Chuỗi JSON chứa cấu trúc slide đã có sẵn nếu muốn Backend chỉ định dạng lại. |
-| `plan` | String | Không | Gói dịch vụ: `free` (giới hạn 10 slide), `pro` (tối đa 30 slide - mặc định), `ultra` (tối đa 50 slide). |
-| `slide_count` | Integer | Không | Số lượng slide mong muốn tạo (chỉ áp dụng cho gói `pro` và `ultra`). |
-| `slide_theme` | String | Không | Giao diện slide: `modern` (indigo), `corporate` (navy), `minimal` (white). |
-| `generate_images` | String | Không | Có sinh ảnh minh họa bằng AI không: `"true"` hoặc `"false"` (mặc định). |
-| `image_limit` | Integer | Không | Giới hạn số lượng ảnh sinh ra. |
-| `include_image_base64` | String | Không | Trả về dữ liệu ảnh trực tiếp dạng base64 trong JSON: `"true"` hoặc `"false"` (mặc định). |
+Các trạng thái chính:
 
-*\* Lưu ý: Bắt buộc phải truyền ít nhất 1 trong 3 trường `text`, `file` hoặc `content`.*
+```txt
+pending | processing | completed | error | cancelled
+```
 
-### Ví dụ Request (CURL)
+## 1. Tạo Slide JSON Cho FE
+
+API này tạo slide dạng JSON để FE render/preview/edit.
+
+```txt
+POST /api/generate-slide-spec
+Content-Type: multipart/form-data
+```
+
+### Request Fields
+
+Truyền ít nhất một trong hai field: `text`, `file`.
+
+| Field | Type | Required | Mô tả |
+|---|---:|---:|---|
+| `text` | string | No | Prompt hoặc nội dung đầu vào dạng text. |
+| `file` | file | No | File nguồn. Hỗ trợ `.docx`, `.pdf`, `.txt`. |
+| `plan` | string | No | Gói giới hạn tài nguyên: `free`, `pro`, `ultra`. Mặc định `pro`. |
+| `slide_count` | integer | No | Số slide mong muốn. Nếu truyền, service cố gắng trả đúng số slide. |
+| `generate_images` | string | No | `"true"` hoặc `"false"`. Mặc định `"false"`. |
+| `image_limit` | integer | No | Số ảnh tối đa được gắn vào deck. Chỉ có ý nghĩa khi `generate_images=true`. |
+
+### Request Ví Dụ
+
 ```bash
-curl -X POST "http://20.196.129.89:8000/api/generate-slide-spec" \
-  -H "accept: application/json" \
-  -H "Content-Type: multipart/form-data" \
-  -F "text=Lịch sử phát triển của trí tuệ nhân tạo qua các thời kỳ từ năm 1950 đến nay." \
+curl -X POST "http://localhost:8000/api/generate-slide-spec" \
+  -F "text=Tạo 4 slide tiếng Việt về bãi đỗ xe thông minh trong trường đại học" \
   -F "plan=pro" \
-  -F "slide_theme=modern" \
-  -F "generate_images=true"
+  -F "slide_count=4" \
+  -F "generate_images=false"
 ```
 
-### Phản hồi thành công (Response 200 OK)
+### Response Ngay Khi Submit
+
+API này xử lý bất đồng bộ, nên response ban đầu chưa chứa deck cuối cùng.
+
 ```json
 {
-  "task_id": "0d9c4456-5be5-4d7a-be92-e427cf664188",
+  "task_id": "49f8685f-3971-49f6-a984-0bae0fbcb1ef",
+  "status": "processing",
+  "message": "Processing JSON Spec asynchronously in BackgroundTasks.",
+  "check_status_url": "/api/status/49f8685f-3971-49f6-a984-0bae0fbcb1ef"
+}
+```
+
+Sau đó FE poll:
+
+```txt
+GET /api/status/{task_id}
+```
+
+### Result Khi Hoàn Thành
+
+Khi `GET /api/status/{task_id}` trả `status = completed`, deck JSON nằm trong `result`.
+
+```json
+{
   "status": "completed",
-  "mode": "json_spec",
-  "spec_version": "1.2",
-  "slide_preset": "modern",
-  "color_theme": "indigo",
-  "title_slide": {
-    "title": "Lịch Sử Phát Triển Trí Tuệ Nhân Tạo",
-    "subtitle": "Tạo bởi AI Slide Generator"
-  },
-  "content_slide_footer": "AI Slide Generator",
-  "deck": {
-    "title": "Lịch Sử Phát Triển Trí Tuệ Nhân Tạo",
-    "slides": [
-      {
-        "index": 0,
-        "title": "Sự Khởi Đầu Của AI (1950 - 1956)",
-        "bullets": [
-          "Phép thử Turing (Turing Test) năm 1950 đặt nền móng định nghĩa trí tuệ máy.",
-          "Hội thảo Dartmouth năm 1956 chính thức khai sinh thuật ngữ 'Artificial Intelligence'.",
-          "Những kỳ vọng ban đầu rất lớn nhưng bị giới hạn bởi năng lực tính toán của máy tính."
-        ],
-        "notes": "Nhấn mạnh vai trò của Alan Turing và John McCarthy trong giai đoạn khai sơn phá thạch này.",
-        "layout": "text_image",
-        "primary_visual": "image",
-        "likely_multi_pptx_slides": false,
-        "table": null,
-        "chart": null,
-        "image": {
-          "path": "/home/datn/demodoan/outputs/0d9c4456_0.png",
-          "url": "/outputs/0d9c4456_0.png",
-          "base64": null,
-          "mime": "image/png"
-        }
-      },
-      {
-        "index": 1,
-        "title": "Thống Kê Ứng Dụng AI Hiện Nay",
-        "bullets": [
-          "Biểu đồ phân bổ tỷ lệ doanh nghiệp sử dụng AI theo từng lĩnh vực năm 2026."
-        ],
-        "notes": "",
-        "layout": "text_chart",
-        "primary_visual": "chart",
-        "likely_multi_pptx_slides": false,
-        "table": null,
-        "chart": {
-          "type": "column",
-          "title": "Tỷ lệ ứng dụng AI (%)",
-          "categories": ["Y tế", "Tài chính", "Sản xuất", "Giáo dục"],
-          "series": [
-            {
-              "name": "Tỷ lệ %",
-              "values": [45.2, 58.0, 35.1, 28.4]
-            }
-          ]
-        },
-        "image": null
-      }
-    ]
-  }
-}
-```
-
----
-
-## 2. API Tạo File PowerPoint `.pptx` Toàn Diện (Bất Đồng Bộ)
-
-API này dùng để gửi yêu cầu sinh file PowerPoint hoàn chỉnh. Với nội dung dài hoặc yêu cầu sinh ảnh AI nặng, API sẽ tự động đẩy vào hàng đợi bất đồng bộ (Redis Queue) để xử lý nhằm tránh timeout.
-
-* **Endpoint:** `/api/generate-slide-full` (hoặc alias `/generate`)
-* **Method:** `POST`
-* **Content-Type:** `multipart/form-data` hoặc `application/x-www-form-urlencoded`
-
-### Tham số đầu vào (Request Body)
-*(Tương tự như API ở mục 1, ngoại trừ việc không có trường `include_image_base64`)*
-
-### Ví dụ Response trả về ngay lập tức (Chờ xử lý bất đồng bộ)
-```json
-{
-  "task_id": "0d9c4456-5be5-4d7a-be92-e427cf664188",
-  "status": "processing",
-  "message": "Processing via Redis worker (vLLM)...",
-  "check_status_url": "/api/status/0d9c4456-5be5-4d7a-be92-e427cf664188"
-}
-```
-
----
-
-## 3. API Kiểm Tra Trạng Thái Sinh Slide (Polling API)
-
-FE sử dụng API này để cập nhật thanh tiến trình (progress bar) và biết khi nào slide được tạo xong hoặc gặp lỗi.
-
-* **Endpoint:** `/api/status/{task_id}`
-* **Method:** `GET`
-
-### Phản hồi mẫu khi đang xử lý (Processing):
-```json
-{
-  "task_id": "0d9c4456-5be5-4d7a-be92-e427cf664188",
-  "status": "processing",
-  "progress": 35,
+  "progress": 100,
   "result": {
-    "chunks": {
-      "done": 2,
-      "total": 6
+    "task_id": "49f8685f-3971-49f6-a984-0bae0fbcb1ef",
+    "status": "completed",
+    "mode": "json_spec",
+    "spec_version": "1.2",
+    "slide_preset": "modern",
+    "color_theme": "modern",
+    "title_slide": {
+      "title": "Bãi đỗ xe thông minh trong trường đại học",
+      "subtitle": "AI Slide Generator"
+    },
+    "content_slide_footer": "AI Slide Generator",
+    "deck": {
+      "title": "Bãi đỗ xe thông minh trong trường đại học",
+      "slides": [
+        {
+          "index": 0,
+          "title": "Tổng quan hệ thống bãi đỗ xe thông minh",
+          "bullets": [
+            "Hệ thống giúp sinh viên biết tình trạng chỗ đỗ xe theo thời gian thực.",
+            "Cảm biến IoT ghi nhận trạng thái từng vị trí đỗ và gửi dữ liệu về dashboard.",
+            "Ban quản lý có thể theo dõi tải sử dụng và tối ưu vận hành bãi xe."
+          ],
+          "notes": "Ở slide này, em sẽ trình bày tổng quan về hệ thống bãi đỗ xe thông minh...",
+          "chart": null,
+          "table": null,
+          "image": null,
+          "layout": "text_only",
+          "primary_visual": null,
+          "likely_multi_pptx_slides": false
+        }
+      ]
     }
   }
 }
 ```
 
-### Phản hồi mẫu khi hoàn thành (Completed):
+### Slide Object
+
+Mỗi item trong `result.deck.slides` có dạng:
+
+| Field | Type | Mô tả |
+|---|---:|---|
+| `index` | integer | Thứ tự slide, bắt đầu từ `0`. |
+| `title` | string | Tiêu đề slide. |
+| `bullets` | string[] | Nội dung chính để render trên slide. |
+| `notes` | string | Ghi chú/người nói. |
+| `chart` | object/null | Spec biểu đồ nếu slide có chart. |
+| `table` | object/null | Spec bảng nếu slide có table. |
+| `image` | object/null | Thông tin ảnh nếu slide có ảnh. |
+| `layout` | string | Gợi ý layout: `text_only`, `text_image`, `text_chart`, `text_table`. |
+| `primary_visual` | string/null | Visual chính: `image`, `chart`, `table`, hoặc `null`. |
+| `likely_multi_pptx_slides` | boolean | Gợi ý slide có thể bị tách khi render PPTX vì nhiều nội dung. |
+
+### Chart Object
+
+`chart` có thể khác nhẹ theo loại biểu đồ, nhưng thường có dạng:
+
 ```json
 {
-  "task_id": "0d9c4456-5be5-4d7a-be92-e427cf664188",
+  "type": "column",
+  "title": "Mức độ hài lòng",
+  "categories": ["Moodle", "Google Classroom", "Canvas"],
+  "series": [
+    {
+      "name": "Điểm",
+      "values": [7.8, 8.5, 8.2]
+    }
+  ]
+}
+```
+
+FE nên render tolerant: nếu thiếu chart hoặc chart không hỗ trợ thì bỏ qua hoặc hiển thị fallback.
+
+### Table Object
+
+`table` thường có dạng:
+
+```json
+{
+  "title": "So sánh nền tảng học trực tuyến",
+  "headers": ["Tiêu chí", "Moodle", "Google Classroom", "Canvas"],
+  "rows": [
+    ["Chi phí", "Thấp", "Miễn phí cơ bản", "Cao"],
+    ["Tùy biến", "Cao", "Trung bình", "Cao"]
+  ]
+}
+```
+
+### Image Object
+
+`image` có dạng:
+
+```json
+{
+  "path": "E:\\DemoDoan\\ai-service\\outputs\\images\\task_0_external.jpg",
+  "url": "/outputs/images/task_0_external.jpg",
+  "mime": null
+}
+```
+
+FE/BE nên dùng `image.url`. AI Service không yêu cầu FE gửi theme; giao diện/theme do FE tự quyết.
+
+## 2. Kiểm Tra Trạng Thái Task
+
+FE dùng API này để poll tiến độ và lấy kết quả cuối cùng.
+
+```txt
+GET /api/status/{task_id}
+```
+
+### Processing Response
+
+```json
+{
+  "status": "processing",
+  "progress": 65,
+  "result": {
+    "chunks": {
+      "done": 3,
+      "total": 5
+    }
+  }
+}
+```
+
+Khi đang sinh ảnh, `result` có thể có:
+
+```json
+{
+  "images": {
+    "done": 1,
+    "total": 2
+  }
+}
+```
+
+### Completed Response Cho JSON Spec
+
+```json
+{
   "status": "completed",
   "progress": 100,
   "result": {
-    "download_url": "/outputs/lich_su_phat_trien_tri_tue_nhan_tao_0d9c4456.pptx",
-    "view_url": "/api/view-slide/0d9c4456-5be5-4d7a-be92-e427cf664188"
+    "task_id": "...",
+    "mode": "json_spec",
+    "deck": {
+      "title": "...",
+      "slides": []
+    }
   }
 }
 ```
-* **`download_url`**: Đường dẫn tĩnh để người dùng tải file trực tiếp. Ghép thêm domain của server: `http://20.196.129.89:8000/outputs/lich_su_phat_trien_tri_tue_nhan_tao_0d9c4456.pptx`
-* **`view_url`**: Đường dẫn API để tải file (sẽ gọi trực tiếp đến API tải file ở mục 4).
 
-### Phản hồi mẫu khi gặp lỗi (Error):
+### Completed Response Cho PPTX
+
 ```json
 {
-  "task_id": "0d9c4456-5be5-4d7a-be92-e427cf664188",
+  "status": "completed",
+  "progress": 100,
+  "result": {
+    "download_url": "/outputs/deck_name_taskid.pptx",
+    "view_url": "/api/view-slide/taskid"
+  }
+}
+```
+
+### Error Response
+
+```json
+{
   "status": "error",
   "progress": 0,
   "result": {
-    "error": "Chi tiết thông tin lỗi từ Server..."
+    "error": "Error message"
   }
 }
 ```
 
----
+### Cancelled Response
 
-## 4. API Tải File PowerPoint (.pptx)
+```json
+{
+  "status": "cancelled",
+  "progress": 0,
+  "result": {
+    "message": "Task cancelled by user"
+  }
+}
+```
 
-* **Endpoint:** `/api/view-slide/{task_id}`
-* **Method:** `GET`
-* **Response:** Trả về file nhị phân PPTX để trình duyệt tự động kích hoạt tiến trình tải xuống.
+## 3. Tạo File PPTX
 
----
+API này tạo file PowerPoint thật. Luồng vẫn là async giống JSON spec.
 
-## 5. API Dừng / Hủy Tiến Trình Đang Chạy
+```txt
+POST /api/generate-slide-full
+Content-Type: multipart/form-data
+```
 
-Khi người dùng nhấn nút "Dừng" (Cancel) ở giao diện, FE gọi API này để báo server hủy tác vụ, giải phóng tài nguyên CPU/GPU.
+### Request Fields
 
-* **Endpoint:** `/api/cancel/{task_id}`
-* **Method:** `POST`
+| Field | Type | Required | Mô tả |
+|---|---:|---:|---|
+| `text` | string | No | Prompt hoặc nội dung đầu vào dạng text. |
+| `file` | file | No | File nguồn `.docx`, `.pdf`, `.txt`. |
+| `plan` | string | No | `free`, `pro`, `ultra`. Mặc định `pro`. |
+| `slide_count` | integer | No | Số slide mong muốn. |
+| `image_limit` | integer | No | Số ảnh tối đa. |
+| `generate_images` | string | No | `"true"` hoặc `"false"`. |
+
+Truyền ít nhất một trong hai field: `text`, `file`.
+
+### Request Ví Dụ
+
+```bash
+curl -X POST "http://localhost:8000/api/generate-slide-full" \
+  -F "text=Tạo 5 slide tiếng Việt về lịch sử phát triển Internet tại Việt Nam" \
+  -F "plan=pro" \
+  -F "slide_count=5" \
+  -F "generate_images=false"
+```
+
+### Response Ngay Khi Submit
+
+```json
+{
+  "task_id": "bc9015eb-db85-4a36-b7a8-2631f57a9525",
+  "status": "processing",
+  "message": "Processing asynchronously in BackgroundTasks.",
+  "check_status_url": "/api/status/bc9015eb-db85-4a36-b7a8-2631f57a9525"
+}
+```
+
+Sau đó poll:
+
+```txt
+GET /api/status/{task_id}
+```
+
+Khi xong:
+
+```json
+{
+  "status": "completed",
+  "progress": 100,
+  "result": {
+    "download_url": "/outputs/deck_name_taskid.pptx",
+    "view_url": "/api/view-slide/taskid"
+  }
+}
+```
+
+## 4. Tải Hoặc Xem File PPTX
+
+```txt
+GET /api/view-slide/{task_id}
+```
+
+Response là file `.pptx`.
+
+FE có thể:
+
+- mở `view_url` trong tab mới,
+- hoặc tải từ `download_url`,
+- hoặc gọi endpoint này và xử lý blob.
+
+## 5. Hủy Task
+
+```txt
+POST /api/cancel/{task_id}
+```
+
+### Response
+
+```json
+{
+  "task_id": "49f8685f-3971-49f6-a984-0bae0fbcb1ef",
+  "status": "cancelled",
+  "message": "Task cancellation requested"
+}
+```
+
+Lưu ý: hủy task là best-effort. Nếu task đã gần hoàn thành hoặc đang gọi API ngoài, việc hủy có thể không dừng ngay lập tức.
+
+## Khuyến Nghị Cho FE
+
+- Luôn poll `/api/status/{task_id}` sau khi submit.
+- Không giả định `POST /api/generate-slide-spec` trả deck ngay.
+- Với JSON spec, đọc dữ liệu tại `status.result.deck`.
+- Với PPTX, đọc `status.result.download_url` hoặc `status.result.view_url`.
+- Render tolerant: `chart`, `table`, `image` có thể là `null`.
+- Hiển thị kịch bản thuyết trình từ trường `notes`.
+- Nếu `generate_images=true`, thời gian xử lý sẽ lâu hơn đáng kể.
+- Không phụ thuộc vào field mới chưa document; service có thể thêm field nhưng sẽ cố gắng không đổi/xóa field cũ.

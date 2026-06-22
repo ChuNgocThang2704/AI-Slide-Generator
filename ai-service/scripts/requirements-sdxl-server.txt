@@ -1,13 +1,19 @@
-# Cài sau PyTorch (CUDA) — trên server GPU, trong venv:
-#   pip install -r requirements-sdxl-server.txt
-#
+# HƯỚNG DẪN CÀI ĐẶT TRÊN SERVER GPU (RTX 30/40/50 Series):
+#   1. Tạo & kích hoạt venv: 
+#      python3 -m venv sdxl-env && source sdxl-env/bin/activate
+#   2. Cài đặt PyTorch CUDA 12.1 trước (Rất quan trọng cho RTX 5060 Ti / Blackwell):
+#      pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#   3. Cài đặt các thư viện bổ trợ:
+#      pip install -r requirements-sdxl-server.txt
+
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
 pillow>=10.0.0
 httpx>=0.25.0
 diffusers>=0.30.0
-transformers>=4.44.0
+# Khóa transformers < 4.49.0 để tránh lỗi bắt nâng cấp PyTorch 2.6 (vulnerability check)
+transformers>=4.44.0,<4.49.0
 accelerate>=0.33.0
 safetensors>=0.4.0
 sentencepiece>=0.2.0

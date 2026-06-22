@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from services.images.validation import _write_debug_json as _write_debug_json_base
 from services.slide_charts import chart_intent_from_slide
+from services.visual_data_review import review_visual_data_specs
 _MAX_COLS = 8
 _MAX_DATA_ROWS = 12
 _MAX_CELL_CHARS = 120
@@ -19,7 +20,7 @@ _COMPARISON_KEYWORDS = (
     "tieu chi", "hien trang", "giai phap", "truoc", "sau", "uu diem",
     "nhuoc diem", "phuong an", "so sanh",
 )
-_PAIR_LINE_RE = re.compile(r"^\s*[^:;\-–—]{2,48}\s*[:\-–—]\s*[^:]{2,}")
+_PAIR_LINE_RE = re.compile(r"^\s*([^:;\-–—]{2,48})\s*:\s*([^:]{2,})$")
 
 
 def _fold_text(text: str) -> str:
@@ -28,6 +29,11 @@ def _fold_text(text: str) -> str:
 
 
 _MD_SEPARATOR_RE = re.compile(r"^\s*:?-{2,}:?\s*$")
+_NUMERIC_VALUE_RE = re.compile(
+    r"^\s*[-+]?\d+(?:[.,]\d+)?\s*(?:%|/10|/100|diem|score|k|m|tr|trieu|ty)?\s*$",
+    re.IGNORECASE,
+)
+_SENTENCE_END_RE = re.compile(r"[.!?。]\s*$")
 
 
 def _slide_lines(slide: Dict[str, Any]) -> List[str]:
@@ -53,16 +59,36 @@ def _table_from_markdown_lines(lines: List[str]) -> Optional[Dict[str, Any]]:
 
 
 def _table_from_pair_lines(slide: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Build a key/value table only from explicit `key: value` bullet lines.
+
+    Hyphens are common inside Vietnamese names and prose (for example Giơ-Ne),
+    so they are intentionally not treated as table separators here.
+    """
+    slide_text = _fold_text(
+        " ".join([str(slide.get("title") or "")] + _slide_lines(slide))
+    )
+    keyword_hits = sum(1 for kw in _COMPARISON_KEYWORDS if kw in slide_text)
     rows: List[List[str]] = []
     for line in _slide_lines(slide):
-        if not _PAIR_LINE_RE.search(line):
+        m = _PAIR_LINE_RE.match(line)
+        if not m:
             continue
-        key, value = re.split(r"[:\-â€“â€”]", line, maxsplit=1)
+        key, value = m.group(1), m.group(2)
         key = key.strip()
         value = value.strip()
+        key_folded = _fold_text(key)
+        if key_folded.startswith(("goi y", "suggestion", "note", "ghi chu")):
+            continue
+        if len(key.split()) > 6:
+            continue
         if key and value:
             rows.append([key, value])
     if len(rows) < 2:
+        return None
+    numeric_rows = sum(1 for row in rows if _NUMERIC_VALUE_RE.match(str(row[1] or "")))
+    if rows and numeric_rows >= 2 and numeric_rows >= len(rows) - 1:
+        return None
+    if keyword_hits < 1 and len(rows) < 3:
         return None
     return normalize_table_spec(
         {
@@ -116,11 +142,11 @@ def _raw_table_candidates(raw_content: str) -> List[Dict[str, Any]]:
                 context_lines.append(nxt)
             j += 1
         context = _fold_text(" ".join([current_heading] + table_lines + context_lines[:4]))
-        wants_table = any(k in context for k in ("bang", "table", "so sanh", "comparison", "thong so"))
+        wants_table = any(k in context for k in ("bang", "table", "tao bang", "bang so sanh", "comparison table", "thong so ky thuat"))
         wants_chart = any(k in context for k in ("bieu do", "chart", "radar", "cot", "duong", "tron", "pie", "bar", "line"))
         if wants_chart and not wants_table:
             continue
-        if not wants_table and not current_heading:
+        if not wants_table:
             continue
 
         if current_heading:
@@ -199,6 +225,43 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _table_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
+    """Generic table gate: headers/row anchors must be supported by source text."""
+    if not isinstance(spec, dict):
+        return False
+    headers = [str(h).strip() for h in (spec.get("headers") or []) if str(h).strip()]
+    rows = spec.get("rows") or []
+    if len(headers) < 2 or not isinstance(rows, list) or len(rows) < 1:
+        return False
+    folded = _fold_text(text)
+    header_hits = sum(1 for h in headers if _fold_text(h) and _fold_text(h) in folded)
+    first_col_hits = 0
+    compact_cells = 0
+    total_cells = 0
+    sentence_like_cells = 0
+    for row in rows[:8]:
+        if not isinstance(row, (list, tuple)) or not row:
+            continue
+        first = _fold_text(str(row[0] or ""))
+        if first and (first in folded or any(tok in folded for tok in first.split() if len(tok) >= 3)):
+            first_col_hits += 1
+        for cell in row[: len(headers)]:
+            cell_text = str(cell or "").strip()
+            if not cell_text:
+                continue
+            total_cells += 1
+            if len(cell_text) <= _MAX_CELL_CHARS:
+                compact_cells += 1
+            if len(cell_text.split()) >= 12 or _SENTENCE_END_RE.search(cell_text):
+                sentence_like_cells += 1
+    if total_cells == 0:
+        return False
+    if sentence_like_cells > max(2, total_cells // 2):
+        return False
+    has_grid = "|" in text and text.count("|") >= 4
+    return has_grid or first_col_hits >= min(2, len(rows)) or header_hits >= min(2, len(headers))
+
+
 def normalize_table_spec_from_slide(slide: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Đọc `slide['table']` nếu client gửi kèm deck JSON."""
     t = slide.get("table")
@@ -265,6 +328,30 @@ async def build_table_specs_for_slides(
     if not slides:
         return {}
 
+    if structured.get("_explicit_slide_mode"):
+        out: Dict[int, Dict[str, Any]] = {}
+        debug_records: list[Dict[str, Any]] = []
+        for idx, slide in enumerate(slides):
+            if not isinstance(slide, dict):
+                continue
+            inline = normalize_table_spec_from_slide(slide)
+            if not inline:
+                continue
+            out[idx] = inline
+            debug_records.append(
+                {
+                    "slide_index": idx,
+                    "title": str(slide.get("title") or ""),
+                    "source": "explicit_inline_table",
+                    "spec": inline,
+                    "status": "created",
+                }
+            )
+            print(f"[slide_tables] slide {idx} table: explicit inline {len(inline['rows'])} row(s)")
+        if task_id:
+            _write_debug_json(task_id, debug_records)
+        return out
+
     out: Dict[int, Dict[str, Any]] = {}
     debug_records: list[Dict[str, Any]] = []
 
@@ -282,9 +369,6 @@ async def build_table_specs_for_slides(
                 if score > best_score:
                     best_score = score
                     best_idx = idx
-            if best_idx < 0 and cand_idx < len(slides) and cand_idx not in used_slides:
-                best_idx = cand_idx
-                best_score = 1
             if best_idx < 0 or best_score < 1:
                 debug_records.append(
                     {
@@ -298,6 +382,24 @@ async def build_table_specs_for_slides(
                 )
                 continue
             spec = candidate.get("spec")
+            evidence_text = " ".join([
+                str(candidate.get("heading") or ""),
+                str(candidate.get("context") or ""),
+                " ".join(_slide_lines(slides[best_idx])),
+                raw_content[:5000],
+            ])
+            if not isinstance(spec, dict) or not _table_spec_has_text_evidence(spec, evidence_text):
+                debug_records.append(
+                    {
+                        "slide_index": best_idx,
+                        "title": str((slides[best_idx] or {}).get("title") or candidate.get("heading") or ""),
+                        "source": "raw_markdown",
+                        "spec": spec,
+                        "status": "no_text_evidence",
+                        "match_score": best_score,
+                    }
+                )
+                continue
             out[best_idx] = spec
             used_slides.add(best_idx)
             assigned_raw.add(best_idx)
@@ -338,7 +440,7 @@ async def build_table_specs_for_slides(
             continue
 
         deterministic = deterministic_table_spec_from_slide(slide)
-        if deterministic:
+        if deterministic and _table_spec_has_text_evidence(deterministic, " ".join(_slide_lines(slide) + [raw_content[:2500]])):
             out[idx] = deterministic
             debug_records.append(
                 {
@@ -352,12 +454,20 @@ async def build_table_specs_for_slides(
             print(f"[slide_tables] slide {idx} table: deterministic {len(deterministic['rows'])} row(s)")
             continue
 
+        # If the original prompt already contained explicit markdown tables, avoid
+        # asking the LLM to invent additional comparison tables from prose-only
+        # slides. Inline/deterministic tables above still pass through.
+        if raw_candidates:
+            continue
+
         if not _looks_like_table_slide(slide):
             continue
         if not hasattr(content_extractor, "extract_table_spec"):
             continue
         raw = await content_extractor.extract_table_spec({"slide": slide})
         spec = normalize_table_spec(raw)
+        if spec and not _table_spec_has_text_evidence(spec, " ".join(_slide_lines(slide) + [raw_content[:2500]])):
+            spec = None
         rec = {
             "slide_index": idx,
             "title": str(slide.get("title") or ""),
@@ -370,6 +480,15 @@ async def build_table_specs_for_slides(
         if spec:
             out[idx] = spec
             print(f"[slide_tables] slide {idx} table: llm {len(spec['rows'])} row(s)")
+
+    out, debug_records = await review_visual_data_specs(
+        content_extractor,
+        structured,
+        out,
+        debug_records,
+        kind="table",
+        raw_content=raw_content,
+    )
 
     if task_id:
         _write_debug_json(task_id, debug_records)

@@ -136,6 +136,28 @@ _VN_DIACRITIC_RE = re.compile(
 )
 
 
+_VN_DIACRITIC_SAFE_RE = re.compile(
+    "["
+    "\u00e0\u00e1\u1ea3\u00e3\u1ea1"
+    "\u0103\u1eb1\u1eaf\u1eb3\u1eb5\u1eb7"
+    "\u00e2\u1ea7\u1ea5\u1ea9\u1eab\u1ead"
+    "\u00e8\u00e9\u1ebb\u1ebd\u1eb9"
+    "\u00ea\u1ec1\u1ebf\u1ec3\u1ec5\u1ec7"
+    "\u00ec\u00ed\u1ec9\u0129\u1ecb"
+    "\u00f2\u00f3\u1ecf\u00f5\u1ecd"
+    "\u00f4\u1ed3\u1ed1\u1ed5\u1ed7\u1ed9"
+    "\u01a1\u1edd\u1edb\u1edf\u1ee1\u1ee3"
+    "\u00f9\u00fa\u1ee7\u0169\u1ee5"
+    "\u01b0\u1eeb\u1ee9\u1eed\u1eef\u1ef1"
+    "\u1ef3\u00fd\u1ef7\u1ef9\u1ef5"
+    "\u0111\u0110"
+    "]",
+    re.IGNORECASE,
+)
+
+AUTO_MIN_SLIDES = 5
+
+
 class ContentExtractor(
     ChunkingMixin,
     InputProcessingMixin,
@@ -174,6 +196,20 @@ class ContentExtractor(
         # Tiến độ extract (progress_cb): đếm mỗi lần vLLM trả JSON hợp lệ.
         self._extract_progress: Optional[Dict[str, Any]] = None
 
+    async def _ensure_auto_min_slide_count(
+        self,
+        structured_content: Dict[str, Any],
+        *,
+        target_slides_override: Optional[int],
+        force_exact_slide_count: bool,
+    ) -> Dict[str, Any]:
+        if force_exact_slide_count or target_slides_override:
+            return structured_content
+        slides = structured_content.get("slides") if isinstance(structured_content, dict) else None
+        if not isinstance(slides, list) or len(slides) >= AUTO_MIN_SLIDES:
+            return structured_content
+        return await self._force_slide_count_exact(structured_content, AUTO_MIN_SLIDES)
+
     async def _progress_track_bump(self) -> None:
         """Tăng tiến độ (done/total) sau mỗi lần gọi LLM thành công + parse JSON OK."""
         st = self._extract_progress
@@ -209,9 +245,12 @@ class ContentExtractor(
     def _detect_output_language_hint(self, text: str) -> str:
         """'vi' | 'en' | 'auto' — dùng để bắt model không lật sang Anh khi input Việt."""
         t = (text or "").strip()[:12000]
+        explicit = self._detect_requested_output_language(t)
+        if explicit in {"vi", "en"}:
+            return explicit
         if len(t) < 24:
             return "auto"
-        vn_hits = len(_VN_DIACRITIC_RE.findall(t))
+        vn_hits = len(_VN_DIACRITIC_SAFE_RE.findall(t))
         letters = sum(1 for c in t if c.isalpha())
         if letters < 15:
             return "auto"
@@ -221,6 +260,42 @@ class ContentExtractor(
         if vn_hits <= 1 and letters > 50:
             return "en"
         return "auto"
+
+    def _detect_requested_output_language(self, text: str) -> str:
+        """Detect explicit Vietnamese/English output-language requests in user prompt."""
+        folded = self._fold_language_text(str(text or "")[:3000])
+        if not folded:
+            return "auto"
+        en_patterns = (
+            r"\b(?:write|create|make|generate|present|output|answer|translate)\b.{0,80}\b(?:in|to)\s+english\b",
+            r"\b(?:english|eng)\s+(?:slides?|presentation|deck|output|version)\b",
+            r"\b(?:slides?|presentation|deck|output|version)\s+(?:in|to)\s+(?:english|eng)\b",
+            r"\b(?:bang|ra|sang|thanh)\s+(?:tieng\s+anh|english|eng)\b",
+            r"\b(?:lam|tao|viet|trinh bay).{0,80}\b(?:tieng\s+anh|english|eng)\b",
+        )
+        vi_patterns = (
+            r"\b(?:write|create|make|generate|present|output|answer|translate)\b.{0,80}\b(?:in|to)\s+vietnamese\b",
+            r"\b(?:vietnamese|tieng\s+viet)\s+(?:slides?|presentation|deck|output|version)\b",
+            r"\b(?:slides?|presentation|deck|output|version)\s+(?:in|to)\s+(?:vietnamese|tieng\s+viet)\b",
+            r"\b(?:bang|ra|sang|thanh)\s+(?:tieng\s+viet|vietnamese)\b",
+            r"\b(?:lam|tao|viet|trinh bay).{0,80}\b(?:tieng\s+viet|vietnamese)\b",
+        )
+        en_hit = any(re.search(p, folded, flags=re.IGNORECASE) for p in en_patterns)
+        vi_hit = any(re.search(p, folded, flags=re.IGNORECASE) for p in vi_patterns)
+        if en_hit and not vi_hit:
+            return "en"
+        if vi_hit and not en_hit:
+            return "vi"
+        return "auto"
+
+    @staticmethod
+    def _fold_language_text(text: str) -> str:
+        import unicodedata
+        s = unicodedata.normalize("NFD", str(text or ""))
+        s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+        s = s.replace("đ", "d").replace("Đ", "D").lower()
+        s = s.replace("\u0111", "d").replace("\u0110", "D").lower()
+        return re.sub(r"\s+", " ", s)
 
     def _output_language_instruction(self) -> str:
         h = getattr(self, "_slide_lang_hint", "auto") or "auto"
@@ -304,6 +379,8 @@ class ContentExtractor(
             f"- Generate enough sections and detail to cover roughly {target_slides} slides.\n"
             "- Write in a formal, informative, and engaging tone.\n"
             "- DO NOT output slide JSON or code blocks. Output ONLY raw text/markdown content."
+            "\n\n"
+            + self._output_language_instruction()
         )
         messages = [
             {"role": "system", "content": self._llm_system_prefix() + system_msg},
@@ -349,6 +426,21 @@ class ContentExtractor(
             }
         """
         target_slides = int(target_slides_override or 10)
+        original_language_hint = self._detect_output_language_hint(raw_content or "")
+        if original_language_hint in ("vi", "en"):
+            self._slide_lang_hint = original_language_hint
+            print(f"Slide language hint: {self._slide_lang_hint} (requested/source)")
+        raw_content = self._strip_meta_instruction_lines(raw_content or "")
+
+        explicit_deck = self._parse_explicit_slide_blocks(raw_content)
+        if explicit_deck:
+            print(f"Detected explicit slide blocks: {len(explicit_deck.get('slides') or [])} slide(s)")
+            structured = self._normalize_structured_content(explicit_deck)
+            if force_exact_slide_count and target_slides_override:
+                structured = await self._force_slide_count_exact(structured, target_slides_override)
+            if progress_cb:
+                await progress_cb(1, 1)
+            return structured
 
         # Nếu đầu vào là câu lệnh ngắn/dàn ý, tự động sinh nội dung chi tiết trước
         if (self.vllm_available or self.gemini_available) and self._is_prompt_input(raw_content):
@@ -363,7 +455,11 @@ class ContentExtractor(
             except Exception as e:
                 print(f"Failed to pre-generate content from prompt: {e}. Proceeding with raw prompt.")
 
-        self._slide_lang_hint = self._detect_output_language_hint(raw_content or "")
+        self._slide_lang_hint = (
+            original_language_hint
+            if original_language_hint in ("vi", "en")
+            else self._detect_output_language_hint(raw_content or "")
+        )
         if self._slide_lang_hint in ("vi", "en"):
             print(f"Slide language hint: {self._slide_lang_hint} (match source)")
         # Nếu không có vLLM, dùng fallback ngay
@@ -371,6 +467,11 @@ class ContentExtractor(
             structured = self._normalize_structured_content(self._fallback_structure(raw_content))
             if force_exact_slide_count and target_slides_override:
                 structured = await self._force_slide_count_exact(structured, target_slides_override)
+            structured = await self._ensure_auto_min_slide_count(
+                structured,
+                target_slides_override=target_slides_override,
+                force_exact_slide_count=force_exact_slide_count,
+            )
             if progress_cb:
                 await progress_cb(1, 1)
             return structured
@@ -393,6 +494,11 @@ class ContentExtractor(
                 )
                 if force_exact_slide_count and target_slides_override:
                     structured = await self._force_slide_count_exact(structured, target_slides_override)
+                structured = await self._ensure_auto_min_slide_count(
+                    structured,
+                    target_slides_override=target_slides_override,
+                    force_exact_slide_count=force_exact_slide_count,
+                )
                 return structured
 
             if should_stop and await should_stop():
@@ -422,6 +528,11 @@ class ContentExtractor(
             )
             if force_exact_slide_count and target_slides_override:
                 structured = await self._force_slide_count_exact(structured, target_slides_override)
+            structured = await self._ensure_auto_min_slide_count(
+                structured,
+                target_slides_override=target_slides_override,
+                force_exact_slide_count=force_exact_slide_count,
+            )
             return structured
         finally:
             if progress_cb:
@@ -683,7 +794,7 @@ class ContentExtractor(
         """Xử lý 1 chunk với LLM (vLLM)."""
         target_slides = self._estimate_target_slides(chunk_content, chunk_mode=True)
         if fast_mode:
-            target_slides = max(2, target_slides - 1)
+            target_slides = max(AUTO_MIN_SLIDES, target_slides - 1)
         messages = self._build_messages(
             chunk_content,
             target_slides=target_slides,
@@ -712,10 +823,10 @@ class ContentExtractor(
         if chunk_mode:
             # For chunk flow, keep output compact enough for speed but dense enough per slide.
             if length < 2500:
-                return 2
+                return AUTO_MIN_SLIDES
             if length < 5000:
-                return 3
-            return 3
+                return AUTO_MIN_SLIDES
+            return AUTO_MIN_SLIDES
 
         if length < 3500:
             n = 6

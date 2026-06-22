@@ -15,7 +15,7 @@ import java.util.UUID;
 
 @FeignClient(
         name = "subscription-service",
-        url = "${app.subscription-service.url:http://subscription-service:8084/api/subscription}",
+        url = "${app.subscription-service.url:http://localhost:8084/api/subscription}",
         configuration = FeignClientConfig.class
 )
 public interface SubscriptionClient {

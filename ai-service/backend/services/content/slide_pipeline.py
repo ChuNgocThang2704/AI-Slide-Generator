@@ -214,7 +214,7 @@ class SlidePipelineMixin:
         if not sections:
             # Fallback: treat whole content as one section.
             sections = [{"title": "Ná»™i dung", "content": ""}]
-        target_slides = max(4, int(target_slides or 10))
+        target_slides = max(5, int(target_slides or 10))
         if len(sections) > target_slides:
             original_count = len(sections)
             merged_sections: List[Dict[str, str]] = []
@@ -408,6 +408,7 @@ class SlidePipelineMixin:
         """Repair only bullets that still look truncated after refine."""
         if not isinstance(structured, dict):
             return structured
+        structured = self._canonicalize_continued_titles(structured)
         slides = structured.get("slides") or []
         if not isinstance(slides, list) or not slides:
             return structured
@@ -616,6 +617,20 @@ class SlidePipelineMixin:
         t = re.sub(r"\s*\((?:tiáº¿p|tiep|continued)\)\s*$", "", t, flags=re.IGNORECASE).strip()
         return t or (title or "").strip()
 
+    def _strip_continued_suffix(self, title: str) -> str:
+        t = (title or "").strip()
+        if not t:
+            return t
+        pattern = re.compile(
+            r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+            flags=re.IGNORECASE,
+        )
+        prev = None
+        while t and prev != t:
+            prev = t
+            t = pattern.sub("", t).strip()
+        return t or (title or "").strip()
+
     def _build_densify_slide_messages(
         self,
         deck_title: str,
@@ -752,6 +767,7 @@ class SlidePipelineMixin:
             + "You are a slide title quality reviewer.\n\n"
             "TASK: For each slide, decide if the title is GOOD or needs REWRITING.\n\n"
             "REWRITE the title if it:\n"
+            "- Contains continuation markers like '(tiếp)', '(tiep)', '(continued)', or repeats the same base title as another slide.\n"
             "- Is a generic placeholder: 'Nội dung', 'Nội dung 1', 'Slide 1', 'Tiêu đề', "
             "'Tiếp theo', 'Content', 'Title', 'Untitled', 'Next', or any numbered variant "
             "(Phần 2, Chương 3, Section 4...).\n"
@@ -773,8 +789,36 @@ class SlidePipelineMixin:
         )
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
+    def _canonicalize_continued_titles(self, structured: Dict[str, Any]) -> Dict[str, Any]:
+        slides = structured.get("slides") if isinstance(structured, dict) else None
+        if not isinstance(slides, list):
+            return structured
+        title_counts: Dict[str, int] = {}
+        for slide in slides:
+            if not isinstance(slide, dict):
+                continue
+            base_title = self._strip_continued_suffix(str(slide.get("title") or "Nội dung"))
+            title_counts[base_title] = title_counts.get(base_title, 0) + 1
+            count = title_counts[base_title]
+            slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
+        final_seen_titles: set[str] = set()
+        for slide in slides:
+            if not isinstance(slide, dict):
+                continue
+            current_title = str(slide.get("title") or "").strip()
+            key = re.sub(r"\W+", " ", current_title.lower()).strip()
+            if " - Ph" in current_title or key in final_seen_titles:
+                slide["title"] = self._derive_slide_title_from_bullets(
+                    slide.get("bullets") or [],
+                    fallback=current_title,
+                )
+                key = re.sub(r"\W+", " ", str(slide.get("title") or "").lower()).strip()
+            final_seen_titles.add(key)
+        return structured
+
     async def _repair_slide_titles(self, structured: Dict[str, Any]) -> Dict[str, Any]:
         """Dùng LLM để phát hiện và sửa tiêu đề slide generic hoặc không khớp nội dung."""
+        structured = self._canonicalize_continued_titles(structured)
         slides = structured.get("slides") or []
         if not slides:
             return structured
@@ -806,10 +850,10 @@ class SlidePipelineMixin:
                 old = slides[idx].get("title", "")
                 result["slides"][idx]["title"] = new_title
                 print(f"[title_repair] slide {idx}: {old!r} → {new_title!r}")
-            return result
+            return self._canonicalize_continued_titles(result)
         except Exception as e:
             print(f"[title_repair] skipped (error): {e}")
-            return structured
+            return self._canonicalize_continued_titles(structured)
 
 
 

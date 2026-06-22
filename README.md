@@ -1,4 +1,4 @@
-# Kiến trúc Microservices Hệ thống Tạo và Quản lý Slide Tự động (AI-Powered Slide Generator)
+﻿# Kiến trúc Microservices Hệ thống Tạo và Quản lý Slide Tự động (AI-Powered Slide Generator)
 
 ## 1. Tổng quan hệ thống
 Mục tiêu là xây dựng một hệ thống SaaS cho phép người dùng tải lên tài liệu (DOCX, PDF, Book) hoặc nhập text, sau đó hệ thống sử dụng kết hợp các mô hình AI (Text LLM và Diffusion Models) để tự động sinh ra cấu trúc slide, nội dung và hình ảnh minh họa tương ứng một cách tự động ra định dạng `.pptx`.
@@ -702,3 +702,136 @@ erDiagram
 #### Gợi ý index:
 - `notifications`: `{ user_id: 1, is_read: 1, created_at: -1 }`
 - `notification_delivery_logs`: `{ notification_id: 1, channel: 1, created_at: -1 }`
+
+---
+
+## 6. Cách chạy local hiện tại
+
+Phần backend business services và hạ tầng có thể chạy bằng Docker Compose. Riêng AI Service nên chạy local riêng để tiện debug model, API key và worker.
+
+### 6.1. Chuẩn bị
+
+Cần cài sẵn:
+- Docker Desktop
+- Java 21 nếu muốn chạy từng Spring service bằng IDE
+- Python 3.10+ cho AI Service
+- Node.js nếu cần chạy frontend riêng
+
+Khi chạy full Docker Compose, hãy tắt các Spring service đang chạy bằng IDE/Maven trước, vì các port `8080` đến `8084` sẽ bị trùng.
+
+### 6.2. Chạy AI Service local
+
+Terminal 1: chạy AI API.
+
+```powershell
+cd E:\DemoDoan\ai-service
+.\.venv\Scripts\activate
+python backend\main.py
+```
+
+Terminal 2: chạy AI worker.
+
+```powershell
+cd E:\DemoDoan\ai-service
+.\.venv\Scripts\activate
+cd backend
+python worker.py
+```
+
+Kiểm tra AI API:
+
+```text
+http://localhost:8000/docs
+```
+
+Docker services sẽ gọi AI qua biến:
+
+```env
+AI_URL_DOCKER=http://host.docker.internal:8000
+```
+
+### 6.3. Chạy full Backend bằng Docker Compose
+
+Từ thư mục root của project:
+
+```powershell
+cd E:\DemoDoan
+docker compose up -d --build
+docker compose ps
+```
+
+Docker Compose sẽ chạy các thành phần chính:
+- `api-gateway`
+- `user-service`
+- `document-service`
+- `template-service`
+- `subscription-service`
+- `notification-service`
+- `postgres`
+- `mysql`
+- `redis`
+- `rabbitmq`
+
+### 6.4. Các endpoint local
+
+Frontend nên gọi qua API Gateway:
+
+```text
+http://localhost:8080
+```
+
+Các service expose riêng để debug:
+
+```text
+API Gateway:          http://localhost:8080
+User Service:         http://localhost:8081
+Document Service:     http://localhost:8082
+Template Service:     http://localhost:8083
+Subscription Service: http://localhost:8084
+AI Service:           http://localhost:8000
+RabbitMQ UI:          http://localhost:15672
+```
+
+MySQL trong Docker dùng port container `3306`, nhưng expose ra máy host là `3307` để tránh trùng MySQL local:
+
+```text
+localhost:3307 -> mysql:3306
+```
+
+### 6.5. Luồng gọi API cho FE
+
+FE chỉ cần gọi BE qua API Gateway. Không gọi trực tiếp AI Service.
+
+Đọc spec FE tại:
+
+```text
+fe_api_spec.md
+```
+
+Luồng chính:
+1. Đăng ký/đăng nhập qua `/api/auth/**`.
+2. Tạo project slide qua `/api/document/projects`.
+3. Lấy danh sách project qua `/api/document/projects`.
+4. Lấy slide pages qua `/api/document/projects/{projectId}/pages`.
+5. Cập nhật/sync slide pages qua các API document đã ghi trong `fe_api_spec.md`.
+
+### 6.6. Xem log và dừng hệ thống
+
+Xem log các service quan trọng:
+
+```powershell
+docker compose logs -f api-gateway document-service
+```
+
+Dừng toàn bộ Docker services:
+
+```powershell
+docker compose down
+```
+
+Nếu muốn reset sạch database Docker local, lệnh sau sẽ xóa cả volume dữ liệu:
+
+```powershell
+docker compose down -v
+docker compose up -d --build
+```

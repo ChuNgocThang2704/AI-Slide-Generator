@@ -31,10 +31,15 @@ public class SecurityConfig {
         "/packages/**",    // Lấy chi tiết từng gói cước
     };
 
+    private static final String[] INTERNAL_ENDPOINTS = {
+            "/internal/**",
+    };
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity httpSecurity) throws Exception {
         httpSecurity.authorizeHttpRequests(request -> request
                 .requestMatchers(HttpMethod.GET, PUBLIC_GET_ENDPOINTS).permitAll()
+                .requestMatchers(INTERNAL_ENDPOINTS).permitAll()
                 .anyRequest().authenticated());
 
         httpSecurity.oauth2ResourceServer(oauth2 -> oauth2

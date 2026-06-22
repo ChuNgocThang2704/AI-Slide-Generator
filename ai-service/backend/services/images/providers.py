@@ -1,5 +1,6 @@
 from __future__ import annotations
 import base64
+import json
 import re
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
@@ -8,6 +9,7 @@ import httpx
 from config import (
     IMAGE_FALLBACK_MODEL,
     IMAGE_FALLBACK_TIMEOUT_SEC,
+    GEMINI_MODEL,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
     PEXELS_API_KEY,
@@ -334,9 +336,84 @@ def _stock_photo_queries(
 
 def _stock_photo_providers(content_type: str, risk: Optional[str]) -> List[str]:
     """Prefer Wikimedia for factual/historical content; Pexels for generic stock."""
-    if risk in {"person_protected", "cultural", "religious"} or content_type == "historical":
+    factual_reference_risks = {
+        "person_protected",
+        "cultural",
+        "religious",
+        "political_sensitive",
+        "crisis_sensitive",
+        "legal_sensitive",
+        "identity_sensitive",
+        "child_sensitive",
+        "map_symbol_sensitive",
+    }
+    if risk in factual_reference_risks or content_type == "historical":
         return ["wikimedia", "pexels"]
     return ["pexels", "wikimedia"]
+
+
+async def _gemini_stock_photo_queries(
+    client: httpx.AsyncClient,
+    slide: Dict[str, Any],
+    semantic: Dict[str, Any],
+    content_type: str,
+    risk: Optional[str],
+) -> List[str]:
+    """Generate short English stock/reference search queries for weak semantic cases."""
+    if not GEMINI_API_KEY:
+        return []
+    title = str(slide.get("title") or "").strip()
+    bullets = slide.get("bullets") or slide.get("content") or []
+    if isinstance(bullets, str):
+        bullet_text = bullets
+    else:
+        bullet_text = "\n".join(str(x) for x in bullets[:5])
+    prompt = (
+        "Create 5 concise English search queries for Wikimedia Commons or stock photo search.\n"
+        "Goal: find real reference images for a presentation slide, not generate an image.\n"
+        "Prefer factual event/person/place terms, official English names, years, country names, "
+        "and broad fallback queries if exact images are unlikely.\n"
+        "Avoid Vietnamese diacritics. Avoid invented scene descriptions.\n"
+        "Return ONLY a JSON array of strings.\n\n"
+        f"content_type: {content_type}\n"
+        f"risk: {risk or ''}\n"
+        f"title: {title}\n"
+        f"semantic_topic: {semantic.get('main_topic') or ''}\n"
+        f"entities: {semantic.get('entities') or []}\n"
+        f"slide_text:\n{bullet_text[:1200]}"
+    )
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{(GEMINI_MODEL or 'gemini-2.5-flash').strip()}:generateContent?key={GEMINI_API_KEY}"
+    )
+    req = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 512,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
+    try:
+        resp = await client.post(url, json=req, timeout=20.0)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        parts = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+        text = "\n".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.MULTILINE).strip()
+        parsed = json.loads(text)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    queries: List[str] = []
+    for item in parsed:
+        q = " ".join(str(item or "").strip().split())
+        if not q or not _is_mostly_ascii(q):
+            continue
+        queries.append(q[:120])
+    return queries[:5]
 
 
 
@@ -350,9 +427,26 @@ async def _try_stock_photo_fallback(
 ) -> Optional[Dict[str, Any]]:
     if not STOCK_PHOTO_ENABLE:
         return None
+    queries = _stock_photo_queries(slide, semantic, content_type, risk)
+    weak_stock_queries = not _semantic_list(semantic.get("stock_queries")) or float(semantic.get("confidence") or 0.0) < 0.5
+    if weak_stock_queries or content_type == "historical" or risk in {
+        "person_protected",
+        "cultural",
+        "religious",
+        "political_sensitive",
+        "crisis_sensitive",
+        "legal_sensitive",
+        "identity_sensitive",
+        "child_sensitive",
+        "map_symbol_sensitive",
+        "finance_sensitive",
+    }:
+        ai_queries = await _gemini_stock_photo_queries(client, slide, semantic, content_type, risk)
+        if ai_queries:
+            queries = ai_queries + queries
     return await fetch_external_image(
         client,
-        queries=_stock_photo_queries(slide, semantic, content_type, risk),
+        queries=queries,
         providers=_stock_photo_providers(content_type, risk),
         pexels_api_key=PEXELS_API_KEY,
         vlm_validate_fn=vlm_validate_fn,

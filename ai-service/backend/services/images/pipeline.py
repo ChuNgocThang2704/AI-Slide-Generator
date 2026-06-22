@@ -15,6 +15,7 @@ from config import (
     IMAGE_MAX_SLIDES_WITH_IMAGES,
     IMAGE_GEN_CONCURRENCY,
     IMAGE_MODEL_TYPE,
+    IMAGE_SENSITIVE_ALLOW_SDXL,
     IMAGE_NEGATIVE_PROMPT,
     IMAGE_STEPS,
     IMAGE_STYLE_LOCKED,
@@ -89,6 +90,44 @@ def _normalize_slide_content(slide: Dict[str, Any]) -> Dict[str, Any]:
 
 # Premium quality prompt suffix for Ultra tier
 _ULTRA_PROMPT_SUFFIX = ", exceptionally detailed, masterpiece, highly realistic, cinematic lighting, 8k resolution"
+
+_SENSITIVE_CONTENT_TYPES = frozenset({
+    "historical",
+    "cultural",
+    "religious",
+    "medical_diagram",
+})
+_SENSITIVE_RISK_TAGS = frozenset({
+    "historical",
+    "cultural",
+    "religious",
+    "medical_diagram",
+    "person_protected",
+    "political_sensitive",
+    "crisis_sensitive",
+    "legal_sensitive",
+    "identity_sensitive",
+    "child_sensitive",
+    "map_symbol_sensitive",
+    "finance_sensitive",
+})
+
+_STOCK_ONLY_RISK_TAGS = frozenset({
+    "person_protected",
+    "political_sensitive",
+    "crisis_sensitive",
+    "identity_sensitive",
+    "child_sensitive",
+    "map_symbol_sensitive",
+})
+
+
+def _is_sensitive_visual_route(content_type: str, risk: Optional[str]) -> bool:
+    return str(content_type or "").lower() in _SENSITIVE_CONTENT_TYPES or str(risk or "").lower() in _SENSITIVE_RISK_TAGS
+
+
+def _is_stock_only_sensitive_risk(risk: Optional[str]) -> bool:
+    return str(risk or "").lower() in _STOCK_ONLY_RISK_TAGS
 
 
 async def _process_single_slide(
@@ -199,6 +238,7 @@ async def _process_single_slide(
         # Still need full_prompt for VLM validation of stock photos
         domain = str(semantic.get("domain") or "general")
         risk = _classify_risk(slide, semantic, content_type)
+        semantic["risk"] = risk
         deck_ctx = _build_deck_context(
             slides,
             idx,
@@ -302,6 +342,7 @@ async def _process_single_slide(
     # Risk and Scene selection
     domain = str(semantic.get("domain") or "general")
     risk = _classify_risk(slide, semantic, content_type)
+    semantic["risk"] = risk
     deck_ctx = _build_deck_context(
         slides,
         idx,
@@ -402,15 +443,15 @@ async def _process_single_slide(
         "steps": IMAGE_STEPS,
         "guidance_scale": float(IMAGE_GUIDANCE_SCALE),
     }
-    skip_ai_generation = (
+    skip_sdxl_generation = (
         bool(prompt_quality)
         and prompt_quality.get("coverage_ok") is False
         and content_type not in {"historical"}
     )
-    if skip_ai_generation:
-        debug_record["ai_generation_skipped"] = "prompt_coverage_failed"
+    if skip_sdxl_generation:
+        debug_record["sdxl_generation_skipped"] = "prompt_coverage_failed"
         print(
-            f"[slide_images] slide {idx} skip AI generation: prompt coverage failed "
+            f"[slide_images] slide {idx} skip SDXL generation: prompt coverage failed "
             f"(score={prompt_quality.get('score_after')}, threshold={prompt_quality.get('threshold')})"
         )
 
@@ -428,6 +469,157 @@ async def _process_single_slide(
         "return_base64": False,
     }
 
+    sensitive_route = _is_sensitive_visual_route(content_type, risk)
+    saved = False
+    last_error: Optional[str] = None
+    image_path: Optional[str] = None
+
+    if sensitive_route:
+        debug_record["priority_route"] = "sensitive_stock_then_secondary_ai_then_sdxl"
+        debug_record["sensitive_allow_sdxl"] = bool(IMAGE_SENSITIVE_ALLOW_SDXL)
+        stock_only_sensitive = _is_stock_only_sensitive_risk(risk)
+        debug_record["sensitive_stock_only"] = bool(stock_only_sensitive)
+        print(f"[slide_images] slide {idx} sensitive route -> try stock before generated AI")
+
+        async def _priority_external_vlm_validate(img_bytes: bytes, meta: Dict[str, Any]) -> bool:
+            vlm_judge_res = await _vlm_judge_image(
+                client,
+                image_bytes=img_bytes,
+                prompt=full_prompt,
+                slide=slide,
+                semantic=semantic,
+                min_relevance=0.72,
+                is_stock_photo=True,
+            )
+            vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
+                "relevance_score": 0.0,
+                "artifact_score": 1.0,
+                "style_match_score": 0.0,
+                "reasons": ["VLM judge timed out or failed; rejecting unverified fallback"],
+                "pass": False,
+                "severe_failure": True,
+            }
+            meta["vlm_judge"] = vlm_judge_dict
+            tried_candidates.append({
+                "type": "external_priority",
+                "bytes": img_bytes,
+                "relevance_score": float(vlm_judge_dict.get("relevance_score") or 0.0),
+                "artifact_score": float(vlm_judge_dict.get("artifact_score") or 1.0),
+                "severe_failure": bool(vlm_judge_dict.get("severe_failure") or False),
+                "extension": str(meta.get("extension") or ".jpg"),
+                "meta": {
+                    "status": "saved_external_fallback",
+                    "external_source": meta.get("source"),
+                    "external_query": meta.get("query"),
+                    "external_page_url": meta.get("page_url"),
+                    "external_vlm_judge": vlm_judge_dict,
+                    "external_license": meta.get("license"),
+                    "external_license_url": meta.get("license_url"),
+                    "external_author": meta.get("author"),
+                },
+            })
+            return bool(vlm_judge_dict.get("pass"))
+
+        external_priority = await _try_stock_photo_fallback(
+            client,
+            slide,
+            semantic,
+            content_type,
+            risk,
+            vlm_validate_fn=_priority_external_vlm_validate,
+        )
+        if external_priority:
+            validation = _validate_output_image(external_priority["bytes"], prompt_text=full_prompt, strict=False)
+            debug_record["priority_external_output_validation"] = validation
+            if validation.get("ok"):
+                ext = str(external_priority.get("extension") or ".jpg").lower()
+                if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+                    ext = ".jpg"
+                dest_priority = IMAGE_DIR / f"{task_id}_{idx}_external{ext}"
+                dest_priority.write_bytes(external_priority["bytes"])
+                image_path = str(dest_priority.resolve())
+                debug_record["status"] = "saved_external_fallback"
+                debug_record["image_path"] = image_path
+                debug_record["response_len"] = len(external_priority["bytes"])
+                debug_record["external_source"] = external_priority.get("source")
+                debug_record["external_query"] = external_priority.get("query")
+                debug_record["external_page_url"] = external_priority.get("page_url")
+                debug_record["external_vlm_judge"] = external_priority.get("external_vlm_judge") or external_priority.get("vlm_judge")
+                debug_record["external_license"] = external_priority.get("license")
+                debug_record["external_license_url"] = external_priority.get("license_url")
+                debug_record["external_author"] = external_priority.get("author")
+                debug_record["used_attempt"] = "priority_external"
+                saved = True
+                print(f"[slide_images] slide {idx} sensitive route saved stock image first")
+            else:
+                debug_record["priority_external_rejection"] = f"output_validation_failed (reasons={validation.get('reasons')})"
+        else:
+            debug_record["priority_external_rejection"] = "no valid stock candidate"
+
+        if not saved and not stock_only_sensitive:
+            print(f"[slide_images] slide {idx} sensitive route -> try secondary AI before SDXL")
+            secondary_raw_priority = await _try_secondary_ai_image_fallback(
+                client,
+                prompt=full_prompt,
+                negative_prompt=slide_negative,
+                payload_template=base_payload,
+            )
+            if secondary_raw_priority:
+                validation = _validate_output_image(secondary_raw_priority, prompt_text=full_prompt, strict=False)
+                debug_record["priority_ai_output_validation"] = validation
+                if validation.get("ok"):
+                    clip_score = await _clip_score_image(
+                        client,
+                        base_url=base,
+                        image_bytes=secondary_raw_priority,
+                        text=full_prompt,
+                    )
+                    if clip_score is not None:
+                        debug_record["priority_ai_clip_score"] = clip_score
+                    vlm_judge = await _vlm_judge_image(
+                        client,
+                        image_bytes=secondary_raw_priority,
+                        prompt=full_prompt,
+                        slide=slide,
+                        semantic=semantic,
+                        min_relevance=0.82,
+                    )
+                    if vlm_judge is not None:
+                        debug_record["priority_ai_vlm_judge"] = vlm_judge
+                    vlm_pass = bool(vlm_judge and vlm_judge.get("pass"))
+                    if (clip_score is None or clip_score >= float(IMAGE_CLIP_MIN_SCORE)) and vlm_pass:
+                        dest_priority = IMAGE_DIR / f"{task_id}_{idx}_ai_fallback.png"
+                        dest_priority.write_bytes(secondary_raw_priority)
+                        image_path = str(dest_priority.resolve())
+                        debug_record["status"] = "saved_ai_fallback"
+                        debug_record["image_path"] = image_path
+                        debug_record["response_len"] = len(secondary_raw_priority)
+                        debug_record["ai_fallback_provider"] = "secondary_generate_api"
+                        debug_record["used_attempt"] = "priority_secondary_ai"
+                        saved = True
+                        print(f"[slide_images] slide {idx} sensitive route saved secondary AI")
+                    else:
+                        debug_record["priority_ai_rejection"] = (
+                            f"clip={clip_score}, vlm_pass={vlm_pass}, "
+                            f"relevance={(vlm_judge or {}).get('relevance_score')}, "
+                            f"artifact={(vlm_judge or {}).get('artifact_score')}"
+                        )
+                else:
+                    debug_record["priority_ai_rejection"] = f"output_validation_failed (reasons={validation.get('reasons')})"
+            else:
+                debug_record["priority_ai_rejection"] = "returned no usable image"
+        elif not saved and stock_only_sensitive:
+            debug_record["priority_ai_rejection"] = "skipped for stock-only sensitive risk"
+
+        if not saved and not IMAGE_SENSITIVE_ALLOW_SDXL:
+            debug_record["status"] = "sensitive_sdxl_skipped"
+            debug_record["error"] = "sensitive topic failed stock/secondary AI validation; SDXL fallback disabled"
+            print(
+                f"[slide_images] slide {idx} sensitive route -> skip SDXL fallback "
+                "(IMAGE_SENSITIVE_ALLOW_SDXL=false)"
+            )
+            return None, debug_record
+
     attempts_plan = [
         {
             "label": "primary",
@@ -438,13 +630,12 @@ async def _process_single_slide(
     debug_record["attempts"] = []
 
     dest = IMAGE_DIR / f"{task_id}_{idx}.png"
-    saved = False
-    last_error: Optional[str] = None
-    image_path: Optional[str] = None
 
     try:
         for attempt_idx, plan in enumerate(attempts_plan):
-            if skip_ai_generation:
+            if saved:
+                break
+            if skip_sdxl_generation:
                 last_error = "prompt_coverage_failed"
                 debug_record["status"] = "low_prompt_coverage"
                 break
@@ -549,20 +740,18 @@ async def _process_single_slide(
                 semantic=semantic,
                 min_relevance=0.70,
             )
+            if vlm_judge is None:
+                last_error = "vlm_unavailable: rejecting unverified AI image"
+                print(f"[slide_images] slide {idx} {plan['label']}: VLM unavailable -> reject unverified AI image")
+                attempt_record["status"] = "vlm_unavailable"
+                debug_record["attempts"].append(attempt_record)
+                if attempt_idx < len(attempts_plan) - 1:
+                    continue
+                debug_record["status"] = "vlm_unavailable"
+                debug_record["error"] = last_error
+                break
             if vlm_judge is not None:
                 attempt_record["vlm_judge"] = vlm_judge
-                tried_candidates.append({
-                    "type": f"ai_attempt_{plan['label']}",
-                    "bytes": raw,
-                    "relevance_score": float(vlm_judge.get("relevance_score") or 0.0),
-                    "artifact_score": float(vlm_judge.get("artifact_score") or 1.0),
-                    "severe_failure": bool(vlm_judge.get("severe_failure") or False),
-                    "extension": ".png",
-                    "meta": {
-                        "status": "saved",
-                        "used_attempt": plan["label"]
-                    }
-                })
                 if not vlm_judge.get("pass"):
                     last_error = (
                         "vlm_reject: "
@@ -595,6 +784,19 @@ async def _process_single_slide(
                     debug_record["vlm_judge"] = vlm_judge
                     break
 
+            tried_candidates.append({
+                "type": f"ai_attempt_{plan['label']}",
+                "bytes": raw,
+                "relevance_score": float(vlm_judge.get("relevance_score") or 0.0),
+                "artifact_score": float(vlm_judge.get("artifact_score") or 1.0),
+                "severe_failure": bool(vlm_judge.get("severe_failure") or False),
+                "extension": ".png",
+                "meta": {
+                    "status": "saved",
+                    "used_attempt": plan["label"]
+                }
+            })
+
             dest.write_bytes(raw)
             image_path = str(dest.resolve())
             debug_record["status"] = "saved"
@@ -620,7 +822,7 @@ async def _process_single_slide(
         debug_record["error"] = str(e)
 
     # Fallback to secondary AI
-    if not saved and not skip_ai_generation:
+    if not saved:
         if should_stop is not None and await should_stop():
             return None, None
         secondary_raw = await _try_secondary_ai_image_fallback(

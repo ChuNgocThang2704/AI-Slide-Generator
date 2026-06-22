@@ -192,6 +192,7 @@ IMAGE_PROMPT_SUFFIX = os.getenv(
 )
 
 IMAGE_MODEL_TYPE = os.getenv("IMAGE_MODEL_TYPE", "sdxl").strip().lower()  # "sdxl" or "flux"
+IMAGE_SENSITIVE_ALLOW_SDXL = os.getenv("IMAGE_SENSITIVE_ALLOW_SDXL", "false").lower() in ("1", "true", "yes")
 # 1024² ổn với nhiều service SDXL; tăng từ 896×672 để ổn định layout khi cắt vào slide.
 IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "1024"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "1024"))

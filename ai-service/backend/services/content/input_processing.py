@@ -3,10 +3,227 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 
 class InputProcessingMixin:
+    _EXPLICIT_SLIDE_RE = re.compile(
+        r"^\s*\[?\s*(?:slide|trang|page)\s*0*(\d+)(?:\s*[:\-–—]\s*([^\]\n]+))?\s*\]?\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+    def _parse_explicit_slide_blocks(self, content: str) -> Optional[Dict[str, Any]]:
+        """Parse user-authored [SLIDE n] blocks as a hard deck structure."""
+        text = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
+        matches = list(self._EXPLICIT_SLIDE_RE.finditer(text))
+        if len(matches) < 2:
+            return None
+
+        def clean_label(line: str) -> tuple[str, str]:
+            raw = str(line or "").strip().lstrip("-").strip()
+            if ":" not in raw:
+                return "", raw
+            key, value = raw.split(":", 1)
+            return key.strip().lower(), value.strip()
+
+        def split_pipe(line: str) -> List[str]:
+            return [cell.strip() for cell in str(line or "").strip().strip("|").split("|")]
+
+        def parse_number_cell(value: str) -> Optional[float]:
+            raw = str(value or "").strip()
+            m = re.search(r"[-+]?\d+(?:[.,]\d+)*", raw)
+            if not m:
+                return None
+            num = m.group(0)
+            if "." in num and "," in num:
+                if num.rfind(",") > num.rfind("."):
+                    num = num.replace(".", "").replace(",", ".")
+                else:
+                    num = num.replace(",", "")
+            elif "," in num:
+                parts = num.split(",")
+                num = "".join(parts) if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]) else num.replace(",", ".")
+            elif "." in num:
+                parts = num.split(".")
+                if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
+                    num = "".join(parts)
+            try:
+                return float(num)
+            except Exception:
+                return None
+
+        def chart_type_from_text(value: str) -> str:
+            folded = self._fold_simple(value)
+            if any(k in folded for k in ("column", "cot")):
+                return "bar"
+            if any(k in folded for k in ("line", "duong")):
+                return "line"
+            if any(k in folded for k in ("pie", "tron")):
+                return "pie"
+            if "radar" in folded:
+                return "radar"
+            return "bar"
+
+        slides: List[Dict[str, Any]] = []
+        deck_title = ""
+
+        for idx, match in enumerate(matches):
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+            block_kind = (match.group(2) or "").strip()
+            block = text[start:end].strip()
+            if not block:
+                continue
+
+            title = block_kind or f"Slide {match.group(1)}"
+            subtitle = ""
+            image_url = ""
+            bullets: List[str] = []
+            table_headers: List[str] = []
+            table_rows: List[List[str]] = []
+            chart_type = ""
+            chart_labels: List[str] = []
+            chart_series_name = ""
+            chart_values: List[float] = []
+            in_content = False
+            in_table = False
+
+            for raw_line in block.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                key, value = clean_label(line)
+                folded_key = self._fold_simple(key)
+
+                if folded_key in {"tieu de", "tieu de lon", "title", "main title"} and value:
+                    title = value
+                    continue
+                if folded_key in {"tieu de phu", "subtitle"} and value:
+                    subtitle = value
+                    continue
+                if folded_key in {"thanh vien", "members", "member"} and value:
+                    bullets.append(f"Thành viên: {value}")
+                    continue
+                if folded_key in {"image_url", "image url", "image"} and value:
+                    image_url = value
+                    continue
+                if folded_key in {"noi dung", "content"}:
+                    in_content = True
+                    in_table = False
+                    continue
+                if folded_key in {"du lieu bang", "data table", "table data", "bang"}:
+                    in_table = True
+                    in_content = False
+                    continue
+                if folded_key in {"loai bieu do", "chart type"} and value:
+                    chart_type = chart_type_from_text(value)
+                    continue
+                if folded_key in {"truc hoanh", "labels", "categories", "x axis"} and value:
+                    chart_labels = [x.strip() for x in value.split("|") if x.strip()]
+                    continue
+                if folded_key in {"chuoi du lieu", "series", "series name"} and value:
+                    chart_series_name = value
+                    continue
+                if folded_key in {"gia tri chuoi", "values"} and value:
+                    parsed_values = [parse_number_cell(x) for x in value.split("|")]
+                    chart_values = [v for v in parsed_values if v is not None]
+                    continue
+
+                if "|" in line and (in_table or not line.startswith("-")):
+                    cells = split_pipe(line)
+                    if len(cells) >= 2:
+                        if not table_headers:
+                            table_headers = cells
+                        else:
+                            table_rows.append(cells)
+                        continue
+
+                if line.startswith(("-", "•", "*")):
+                    bullets.append(line.lstrip("-•* ").strip())
+                elif in_content:
+                    bullets.append(line)
+
+            if subtitle:
+                bullets.insert(0, f"Tiêu đề phụ: {subtitle}")
+            if table_headers and table_rows:
+                bullets.append(f"Bảng dữ liệu gồm {len(table_rows)} dòng và {len(table_headers)} cột.")
+            if chart_labels and chart_values:
+                bullets.append(f"Biểu đồ {chart_series_name or title} gồm {len(chart_values)} điểm dữ liệu.")
+
+            slide: Dict[str, Any] = {
+                "title": title,
+                "bullets": bullets or [title],
+                "notes": "",
+            }
+            if image_url:
+                slide["image_url"] = image_url
+            if table_headers and table_rows:
+                slide["table"] = {
+                    "title": title,
+                    "headers": table_headers,
+                    "rows": table_rows,
+                }
+            if chart_labels and chart_values and len(chart_labels) == len(chart_values):
+                slide["chart"] = {
+                    "title": title,
+                    "chart_type": chart_type or "bar",
+                    "labels": chart_labels,
+                    "values": chart_values,
+                    "series_name": chart_series_name or title,
+                    "unit": "number",
+                    "is_percent": "%" in block,
+                }
+            slides.append(slide)
+            if not deck_title:
+                deck_title = title
+
+        if len(slides) < 2:
+            return None
+        return {"title": deck_title or "Bài thuyết trình", "slides": slides, "_explicit_slide_mode": True}
+
+    def _fold_simple(self, text: str) -> str:
+        s = unicodedata.normalize("NFD", str(text or ""))
+        s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+        return s.replace("đ", "d").replace("Đ", "D").lower().strip()
+
+    def _strip_meta_instruction_lines(self, content: str) -> str:
+        """Remove short top-level user instructions that should not become slide content."""
+        if not content:
+            return ""
+
+        def _fold(line: str) -> str:
+            s = unicodedata.normalize("NFD", str(line or ""))
+            s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+            return s.replace("đ", "d").replace("Đ", "D").lower()
+
+        lines = str(content).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        out: List[str] = []
+        for idx, line in enumerate(lines):
+            raw = line.strip()
+            folded = _fold(raw)
+            is_early = idx < 8
+            is_short = len(raw) <= 140
+            has_meta_verb = any(
+                key in folded
+                for key in (
+                    "yeu cau", "hay viet", "viet bang", "ngon ngu", "language",
+                    "output", "tra ve", "generate in", "write in",
+                )
+            )
+            has_lang = any(
+                key in folded
+                for key in (
+                    "tieng viet", "vietnamese", "viet nam", "tieng anh", "english",
+                )
+            )
+            if is_early and is_short and has_meta_verb and has_lang:
+                continue
+            out.append(line)
+        cleaned = "\n".join(out)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
+
     def _detect_heading_level(self, line: str) -> Optional[int]:
         """Detect heading level from markdown or common document patterns.
 
@@ -350,12 +567,26 @@ class InputProcessingMixin:
                 chunk = bullets[chunk_i : chunk_i + chunk_size]
                 if not chunk:
                     continue
-                chunk_title = title if chunk_i == 0 else f"{title} (tiếp)"
+                part_no = chunk_i // chunk_size + 1
+                chunk_title = title if part_no == 1 else f"{title} - Phần {part_no}"
                 slides.append({"title": chunk_title[:80], "bullets": chunk, "notes": ""})
                 slide_idx += 1
 
         if not slides:
             slides = [{"title": "Nội dung", "bullets": to_bullets(text)[:5] or ["(không tách được nội dung)"], "notes": ""}]
+
+        title_counts: Dict[str, int] = {}
+        for slide in slides:
+            original_title = str(slide.get("title") or "Nội dung").strip()
+            base_title = re.sub(
+                r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+                "",
+                original_title,
+                flags=re.IGNORECASE,
+            ).strip() or original_title
+            title_counts[base_title] = title_counts.get(base_title, 0) + 1
+            count = title_counts[base_title]
+            slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
 
         # cap for sanity
         return {"title": doc_title, "slides": slides[:20]}
