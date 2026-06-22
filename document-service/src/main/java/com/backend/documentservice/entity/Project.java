@@ -55,4 +55,7 @@ public class Project extends AbstractAuditingEntity {
 
     @Column(name = "status")
     private Integer status;
+
+    @Column(name = "ai_task_id")
+    private String aiTaskId;
 }

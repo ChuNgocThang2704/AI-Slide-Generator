@@ -22,6 +22,7 @@ public class ProjectResponse implements Serializable {
     private String initialPrompt;
     private String slideUrl;
     private Integer status;
+    private String aiTaskId;
     private Instant createdAt;
     private Instant updatedAt;
 }
