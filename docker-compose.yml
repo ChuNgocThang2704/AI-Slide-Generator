@@ -1,21 +1,82 @@
-version: '3.8'
-
 services:
-  api-gateway:
-    build:
-      context: ./api-gateway
-    container_name: ai-api-gateway
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-postgres
+    restart: unless-stopped
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
-    env_file:
-      - .env
+      - "${POSTGRES_PORT:-5432}:5432"
     environment:
-      - USER_SERVICE_URL=${USER_SERVICE_URL}
-      - DOCUMENT_SERVICE_URL=${DOCUMENT_SERVICE_URL}
-      - TEMPLATE_SERVICE_URL=${TEMPLATE_SERVICE_URL}
-      - SUBSCRIPTION_SERVICE_URL=${SUBSCRIPTION_SERVICE_URL}
-      - REDIS_URL=${REDIS_URL}
-      - JWT_SECRET=${JWT_SIGNER_KEY}
+      POSTGRES_USER: ${POSTGRES_USER:-ai_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ai_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_main}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai-slide-net
+
+  mysql:
+    image: mysql:8.4
+    container_name: ai-mysql
+    restart: unless-stopped
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ai_root_password}
+      MYSQL_USER: ${MYSQL_USER:-ai_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ai_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ai_main}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u$${MYSQL_USER} -p$${MYSQL_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - ai-slide-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai-slide-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: ai-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-ai_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-ai_password}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_DEFAULT_VHOST:-/}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
       - ai-slide-net
 
@@ -23,80 +84,29 @@ services:
     build:
       context: ./user-service
     container_name: ai-user-service
+    restart: unless-stopped
     ports:
       - "${USER_SERVICE_PORT:-8081}:8081"
     env_file:
       - .env
     environment:
-      - DB_URL=${USER_DB_URL}
-      - DB_USERNAME=${USER_DB_USERNAME}
-      - DB_PASSWORD=${USER_DB_PASSWORD}
-      - JWT_SIGNER_KEY=${JWT_SIGNER_KEY}
-      - REDIS_URL=${REDIS_URL}
-      - RABBIT_HOST=${RABBIT_HOST}
-      - RABBIT_PORT=${RABBIT_PORT}
-      - RABBIT_USER=${RABBIT_USER}
-      - RABBIT_PASS=${RABBIT_PASS}
-    networks:
-      - ai-slide-net
-
-  document-service:
-    build:
-      context: ./document-service
-    container_name: ai-document-service
-    ports:
-      - "${DOCUMENT_SERVICE_PORT:-8082}:8082"
-    env_file:
-      - .env
-    environment:
-      - DB_URL=${DOC_DB_URL}
-      - DB_USERNAME=${DOC_DB_USERNAME}
-      - DB_PASSWORD=${DOC_DB_PASSWORD}
-      - JWT_SIGNER_KEY=${JWT_SIGNER_KEY}
-      - REDIS_URL=${REDIS_URL}
-      - RABBIT_HOST=${RABBIT_HOST}
-      - RABBIT_PORT=${RABBIT_PORT}
-      - RABBIT_USER=${RABBIT_USER}
-      - RABBIT_PASS=${RABBIT_PASS}
-      - AI_URL=${AI_URL}
-      - SUBSCRIPTION_SERVICE_URL=http://subscription-service:8084/api/subscription
-    networks:
-      - ai-slide-net
-
-  template-service:
-    build:
-      context: ./template-service
-    container_name: ai-template-service
-    ports:
-      - "${TEMPLATE_SERVICE_PORT:-8083}:8083"
-    env_file:
-      - .env
-    environment:
-      - DB_URL=${TEMPLATE_DB_URL}
-      - DB_USERNAME=${TEMPLATE_DB_USERNAME}
-      - DB_PASSWORD=${TEMPLATE_DB_PASSWORD}
-      - TEMPLATE_SERVICE_URL=${TEMPLATE_SERVICE_URL}
-      - JWT_SIGNER_KEY=${JWT_SIGNER_KEY}
-      - AWS_ACCESS_KEY=${AWS_ACCESS_KEY}
-      - AWS_SECRET_KEY=${AWS_SECRET_KEY}
-      - AWS_REGION=${AWS_REGION}
-      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
-    networks:
-      - ai-slide-net
-
-  notification-service:
-    build:
-      context: ./notification-service
-    container_name: ai-notification-service
-    env_file:
-      - .env
-    environment:
-      - RABBIT_HOST=${RABBIT_HOST}
-      - RABBIT_PORT=${RABBIT_PORT}
-      - RABBIT_USER=${RABBIT_USER}
-      - RABBIT_PASS=${RABBIT_PASS}
-      - MAIL_USERNAME=${MAIL_USERNAME}
-      - MAIL_PASSWORD=${MAIL_PASSWORD}
+      USER_DB_URL: jdbc:postgresql://postgres:5432/user_service_db
+      USER_DB_USERNAME: ${USER_DB_USERNAME:-ai_user}
+      USER_DB_PASSWORD: ${USER_DB_PASSWORD:-ai_password}
+      REDIS_URL: redis://redis:6379
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: ${RABBIT_USER:-ai_user}
+      RABBIT_PASS: ${RABBIT_PASS:-ai_password}
+      RABBIT_VHOST: ${RABBIT_VHOST:-/}
+      RABBIT_SSL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - ai-slide-net
 
@@ -104,32 +114,141 @@ services:
     build:
       context: ./subscription-service
     container_name: ai-subscription-service
+    restart: unless-stopped
     ports:
       - "${SUBSCRIPTION_SERVICE_PORT:-8084}:8084"
     env_file:
       - .env
     environment:
-      - DB_URL=${SUB_DB_URL}
-      - DB_USERNAME=${SUB_DB_USERNAME}
-      - DB_PASSWORD=${SUB_DB_PASSWORD}
-      - JWT_SIGNER_KEY=${JWT_SIGNER_KEY}
-      - REDIS_URL=${REDIS_URL}
-      - RABBIT_HOST=${RABBIT_HOST}
-      - RABBIT_PORT=${RABBIT_PORT}
-      - RABBIT_USER=${RABBIT_USER}
-      - RABBIT_PASS=${RABBIT_PASS}
+      SUB_DB_URL: jdbc:postgresql://postgres:5432/subscription_service_db
+      SUB_DB_USERNAME: ${SUB_DB_USERNAME:-ai_user}
+      SUB_DB_PASSWORD: ${SUB_DB_PASSWORD:-ai_password}
+      REDIS_URL: redis://redis:6379
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: ${RABBIT_USER:-ai_user}
+      RABBIT_PASS: ${RABBIT_PASS:-ai_password}
+      RABBIT_VHOST: ${RABBIT_VHOST:-/}
+      RABBIT_SSL_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - ai-slide-net
 
-  front-end:
+  document-service:
     build:
-      context: ./front-end
-    container_name: ai-front-end
+      context: ./document-service
+    container_name: ai-document-service
+    restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-5173}:80"
+      - "${DOCUMENT_SERVICE_PORT:-8082}:8082"
+    env_file:
+      - .env
+    environment:
+      DOC_DB_URL: jdbc:mysql://mysql:3306/document_service_db
+      DOC_DB_USERNAME: ${DOC_DB_USERNAME:-ai_user}
+      DOC_DB_PASSWORD: ${DOC_DB_PASSWORD:-ai_password}
+      REDIS_URL: redis://redis:6379
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: ${RABBIT_USER:-ai_user}
+      RABBIT_PASS: ${RABBIT_PASS:-ai_password}
+      RABBIT_VHOST: ${RABBIT_VHOST:-/}
+      RABBIT_SSL_ENABLED: "false"
+      AI_URL: ${AI_URL_DOCKER:-http://host.docker.internal:8000}
+      APP_SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084/api/subscription
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      subscription-service:
+        condition: service_started
+    networks:
+      - ai-slide-net
+
+  template-service:
+    build:
+      context: ./template-service
+    container_name: ai-template-service
+    restart: unless-stopped
+    ports:
+      - "${TEMPLATE_SERVICE_PORT:-8083}:8083"
+    env_file:
+      - .env
+    environment:
+      TEMPLATE_DB_URL: jdbc:mysql://mysql:3306/template_service_db
+      TEMPLATE_DB_USERNAME: ${TEMPLATE_DB_USERNAME:-ai_user}
+      TEMPLATE_DB_PASSWORD: ${TEMPLATE_DB_PASSWORD:-ai_password}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - ai-slide-net
+
+  notification-service:
+    build:
+      context: ./notification-service
+    container_name: ai-notification-service
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RABBIT_HOST: rabbitmq
+      RABBIT_PORT: 5672
+      RABBIT_USER: ${RABBIT_USER:-ai_user}
+      RABBIT_PASS: ${RABBIT_PASS:-ai_password}
+      RABBIT_VHOST: ${RABBIT_VHOST:-/}
+      RABBIT_SSL_ENABLED: "false"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ai-slide-net
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+    container_name: ai-api-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      USER_SERVICE_URL: http://user-service:8081
+      DOCUMENT_SERVICE_URL: http://document-service:8082
+      TEMPLATE_SERVICE_URL: http://template-service:8083
+      SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084
+      REDIS_URL: redis://redis:6379
+      REDIS_SSL_ENABLED: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      document-service:
+        condition: service_started
+      template-service:
+        condition: service_started
+      subscription-service:
+        condition: service_started
     networks:
       - ai-slide-net
 
 networks:
   ai-slide-net:
     driver: bridge
+
+volumes:
+  postgres-data:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:

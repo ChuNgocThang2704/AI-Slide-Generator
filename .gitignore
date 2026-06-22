@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+*.egg
+.installed.cfg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Node/Frontend
+node_modules/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+.agents/
+*.swp
+*.swo
+*~
+
+# Uploads and outputs
+uploads/
+outputs/
+backend/outputs/debug/
+backend/_tmp_retest.py
+payload.json
+scripts/_test_sdxl_remote.py
+scripts/_poll_result.py
+scripts/_test_sdxl_out.png
+*.pptx
+*.docx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# Environment variables & Credentials
+.env
+.env.local
+backend/.env
+backend/.env.local
+!backend/.env.example
+service-account.json
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model cache
+.cache/
+models/
