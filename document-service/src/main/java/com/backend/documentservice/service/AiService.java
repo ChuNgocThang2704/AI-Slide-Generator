@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.util.function.Consumer;
 
 @Service
 @Slf4j
@@ -60,7 +61,7 @@ public class AiService {
         this.restTemplate.getMessageConverters().add(0, new StringHttpMessageConverter(StandardCharsets.UTF_8));
     }
 
-    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole) throws JsonProcessingException {
+    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole, int imageLimit, Consumer<String> taskIdConsumer) throws JsonProcessingException {
         String submitUrl = buildAiUrl("/api/generate-slide-spec");
         log.info("[document-service] Calling AI submit endpoint: {}", submitUrl);
 
@@ -79,6 +80,7 @@ public class AiService {
             body.add("plan", resolveAiPlan(userRole));
             body.add("slide_count", parseSlideCount(prompt));
             body.add("generate_images", "true");
+            body.add("image_limit", String.valueOf(imageLimit));
 
             if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
                 FileSystemResource fileResource = new FileSystemResource(tempFile);
@@ -116,10 +118,33 @@ public class AiService {
                 throw new RuntimeException("AI submit response does not contain task_id: " + responseStr);
             }
 
+            if (taskIdConsumer != null) {
+                try {
+                    taskIdConsumer.accept(taskId);
+                } catch (Exception e) {
+                    log.warn("[document-service] Error invoking taskIdConsumer", e);
+                }
+            }
+
             log.info("[document-service] AI task submitted, task_id={}", taskId);
             return waitForCompletedSpec(taskId);
         } catch (HttpStatusCodeException e) {
-            throw new RuntimeException("AI API error (" + e.getStatusCode() + "): " + e.getResponseBodyAsString(), e);
+            String responseBody = e.getResponseBodyAsString();
+            String errorMessage = null;
+            try {
+                JsonNode errorNode = objectMapper.readTree(responseBody);
+                if (errorNode.hasNonNull("detail")) {
+                    errorMessage = errorNode.path("detail").asText();
+                } else if (errorNode.hasNonNull("message")) {
+                    errorMessage = errorNode.path("message").asText();
+                }
+            } catch (Exception jsonEx) {
+                // Ignore
+            }
+            if (errorMessage == null || errorMessage.isBlank()) {
+                errorMessage = "AI API error (" + e.getStatusCode() + "): " + responseBody;
+            }
+            throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, errorMessage);
         } finally {
             if (tempFile != null && tempFile.exists()) {
                 try {
@@ -147,18 +172,18 @@ public class AiService {
                 if ("completed".equalsIgnoreCase(status)) {
                     JsonNode result = statusResponse.path("result");
                     if (result.isMissingNode() || result.isNull() || !result.hasNonNull("deck")) {
-                        throw new RuntimeException("AI task completed without deck result: " + statusResponseStr);
+                        throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, "Tác vụ AI hoàn thành nhưng không có dữ liệu slide.");
                     }
                     return result;
                 }
 
                 if ("error".equalsIgnoreCase(status) || "failed".equalsIgnoreCase(status)) {
                     String message = statusResponse.path("result").path("error").asText(statusResponse.toString());
-                    throw new RuntimeException("AI task failed: " + message);
+                    throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, message);
                 }
 
                 if ("cancelled".equalsIgnoreCase(status) || "canceled".equalsIgnoreCase(status)) {
-                    throw new RuntimeException("AI task was cancelled: " + taskId);
+                    throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, "Tác vụ tạo slide đã bị hủy.");
                 }
 
                 Thread.sleep(AI_POLL_INTERVAL.toMillis());
@@ -166,11 +191,26 @@ public class AiService {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("Interrupted while waiting for AI task: " + taskId, e);
             } catch (HttpStatusCodeException e) {
-                throw new RuntimeException("AI status API error (" + e.getStatusCode() + "): " + e.getResponseBodyAsString(), e);
+                String responseBody = e.getResponseBodyAsString();
+                String errorMessage = null;
+                try {
+                    JsonNode errorNode = objectMapper.readTree(responseBody);
+                    if (errorNode.hasNonNull("detail")) {
+                        errorMessage = errorNode.path("detail").asText();
+                    } else if (errorNode.hasNonNull("message")) {
+                        errorMessage = errorNode.path("message").asText();
+                    }
+                } catch (Exception jsonEx) {
+                    // Ignore
+                }
+                if (errorMessage == null || errorMessage.isBlank()) {
+                    errorMessage = "AI status API error (" + e.getStatusCode() + "): " + responseBody;
+                }
+                throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, errorMessage);
             }
         }
 
-        throw new RuntimeException("Timed out waiting for AI task: " + taskId);
+        throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, "Thời gian chờ tác vụ AI vượt quá giới hạn.");
     }
 
     private String buildAiUrl(String path) {
@@ -189,7 +229,7 @@ public class AiService {
             return "free";
         }
         String normalizedRole = userRole.toLowerCase();
-        if (Constants.USER_ROLES.USER_EXTRA.equalsIgnoreCase(userRole) || normalizedRole.contains("extra") || normalizedRole.contains("ultra")) {
+        if (Constants.USER_ROLES.USER_ULTRA.equalsIgnoreCase(userRole) || normalizedRole.contains("extra") || normalizedRole.contains("ultra")) {
             return "ultra";
         }
         if (Constants.USER_ROLES.USER_PRO.equalsIgnoreCase(userRole) || normalizedRole.contains("pro")) {
@@ -278,5 +318,32 @@ public class AiService {
             }
         }
         return "10";
+    }
+
+    public JsonNode checkAiTaskStatus(String taskId) {
+        String statusUrl = buildAiUrl("/api/status/" + taskId);
+        log.info("[document-service] Checking AI task status: {}", statusUrl);
+        try {
+            String responseStr = restTemplate.getForObject(statusUrl, String.class);
+            return objectMapper.readTree(responseStr);
+        } catch (Exception e) {
+            log.error("[document-service] Error checking AI task status: {}", taskId, e);
+            throw new RuntimeException("Lỗi kiểm tra trạng thái AI task: " + e.getMessage(), e);
+        }
+    }
+
+    public JsonNode cancelAiTask(String taskId) {
+        String cancelUrl = buildAiUrl("/api/cancel/" + taskId);
+        log.info("[document-service] Cancelling AI task: {}", cancelUrl);
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<String> entity = new HttpEntity<>("{}", headers);
+            String responseStr = restTemplate.postForObject(cancelUrl, entity, String.class);
+            return objectMapper.readTree(responseStr);
+        } catch (Exception e) {
+            log.error("[document-service] Error cancelling AI task: {}", taskId, e);
+            throw new RuntimeException("Lỗi hủy AI task: " + e.getMessage(), e);
+        }
     }
 }

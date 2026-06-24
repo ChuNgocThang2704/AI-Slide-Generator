@@ -43,6 +43,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.scheduling.annotation.Async;
 
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
@@ -129,43 +130,177 @@ public class ProjectService {
         project = projectRepository.save(project);
         log.info("[document-service] lưu project thành công, id: {}, tên: {}", project.getId(), project.getName());
 
-        // --- Bắt đầu luồng gọi AI sinh Slide ---
-        String documentUrl = "";
-        String fileName = "";
-        if (project.getSourceDocId() != null) {
-            SourceDocument doc = sourceDocumentRepository.findById(project.getSourceDocId())
-                    .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
-            documentUrl = doc.getUrl();
-            fileName = doc.getFileName();
-        }
-
-        int imageLimit = 5; // Mặc định là 5 ảnh/slide
-        try {
-            ApiResponse<QuotaCheckResponse> imageLimitResp = subscriptionClient.checkQuota(project.getOwnerId(), "MAX_IMAGES_PER_SLIDE");
-            if (imageLimitResp != null && imageLimitResp.getData() != null) {
-                imageLimit = imageLimitResp.getData().getLimitValue();
-            }
-        } catch (Exception ex) {
-            log.error("[document-service] Lỗi khi lấy hạn mức ảnh tối đa trên slide cho user {}", project.getOwnerId(), ex);
-        }
-
-        try {
-            JsonNode aiResponse = aiService.generateSlidesAsync(project.getInitialPrompt(), documentUrl, fileName, userRole, imageLimit);
-            String aiTaskId = aiResponse.path("task_id").asText("");
-            
-            if (aiTaskId == null || aiTaskId.isBlank()) {
-                throw new RuntimeException("AI Engine không trả về task_id");
-            }
-            
-            project.setAiTaskId(aiTaskId);
-            project = projectRepository.save(project);
-            log.info("[document-service] AI Async task created successfully. Task ID: {}", aiTaskId);
-        } catch (Exception e) {
-            log.error("[document-service] Thất bại khi gửi yêu cầu sinh slide tới AI cho project ID: {}", project.getId(), e);
-            throw new RuntimeException("Không thể gửi yêu cầu sinh slide tới AI: " + e.getMessage(), e);
-        }
-
         return projectMapper.toDto(project);
+    }
+
+    @Async
+    public void generateSlidesAsync(UUID projectId, String userRole) {
+        try {
+            // Lấy thông tin Project mới nhất từ DB
+            Project project = projectRepository.findById(projectId)
+                    .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
+
+            String documentUrl = "";
+            String fileName = "";
+            if (project.getSourceDocId() != null) {
+                SourceDocument doc = sourceDocumentRepository.findById(project.getSourceDocId())
+                        .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
+                documentUrl = doc.getUrl();
+                fileName = doc.getFileName();
+            }
+
+            int imageLimit = 5; // Mặc định là 5 ảnh/slide
+            try {
+                ApiResponse<QuotaCheckResponse> imageLimitResp = subscriptionClient.checkQuota(project.getOwnerId(), "MAX_IMAGES_PER_SLIDE");
+                if (imageLimitResp != null && imageLimitResp.getData() != null) {
+                    imageLimit = imageLimitResp.getData().getLimitValue();
+                }
+            } catch (Exception ex) {
+                log.error("[document-service] Lỗi khi lấy hạn mức ảnh tối đa trên slide cho user {}", project.getOwnerId(), ex);
+            }
+
+            // Tạo AI Task Log cho bước EXTRACT_TEXT
+            AITaskLog textTaskLog = AITaskLog.builder()
+                    .projectId(projectId)
+                    .taskType(Constants.TASK_TYPE.EXTRACT_TEXT)
+                    .status(Constants.TASK_STATUS.PROCESSING)
+                    .startedAt(Instant.now())
+                    .build();
+            textTaskLog = aiTaskLogRepository.save(textTaskLog);
+
+            final AITaskLog finalTextTaskLog = textTaskLog;
+            final int finalImageLimit = imageLimit;
+            final String finalDocumentUrl = documentUrl;
+            final String finalFileName = fileName;
+
+            try {
+                JsonNode aiResponse = aiService.generateSlides(
+                    project.getInitialPrompt(), 
+                    finalDocumentUrl, 
+                    finalFileName, 
+                    userRole, 
+                    finalImageLimit, 
+                    taskId -> {
+                        Project proj = projectRepository.findById(projectId).orElse(project);
+                        proj.setAiTaskId(taskId);
+                        projectRepository.save(proj);
+                    }
+                );
+
+                JsonNode parsedResponse = fixJsonNodeEncoding(aiResponse);
+                
+                Project proj = projectRepository.findById(projectId).orElse(project);
+                
+                // Cập nhật tên project từ title do AI trả về
+                String deckTitle = parsedResponse.path("deck").path("title").asText("");
+                if (!deckTitle.isEmpty()) {
+                    proj.setName(deckTitle);
+                }
+
+                // Hoàn thành AI Task Log cho EXTRACT_TEXT
+                finalTextTaskLog.setStatus(Constants.TASK_STATUS.SUCCESS);
+                finalTextTaskLog.setCompletedAt(Instant.now());
+                aiTaskLogRepository.save(finalTextTaskLog);
+
+                // Log thêm AI Task Log cho bước GEN_IMAGE
+                AITaskLog imageTaskLog = AITaskLog.builder()
+                        .projectId(proj.getId())
+                        .taskType(Constants.TASK_TYPE.GEN_IMAGE)
+                        .status(Constants.TASK_STATUS.SUCCESS)
+                        .startedAt(Instant.now())
+                        .completedAt(Instant.now())
+                        .build();
+                aiTaskLogRepository.save(imageTaskLog);
+
+                JsonNode generatedSlides = parsedResponse.path("deck").path("slides");
+                log.info("[document-service] AI sinh thành công {} slide cho project ID: {}", generatedSlides.size(), proj.getId());
+
+                ObjectMapper mapper = new ObjectMapper();
+                List<SlidePage> slidePagesToSave = new java.util.ArrayList<>();
+
+                for (int i = 0; i < generatedSlides.size(); i++) {
+                    JsonNode slideNode = generatedSlides.get(i);
+                    
+                    int index = slideNode.path("index").asInt(i);
+                    String title = slideNode.path("title").asText("");
+                    String notes = slideNode.path("notes").asText("");
+                    String layout = slideNode.path("layout").asText("text_only");
+                    String primaryVisual = slideNode.path("primary_visual").asText("");
+                    boolean likelyMulti = slideNode.path("likely_multi_pptx_slides").asBoolean(false);
+
+                    // Trích xuất image URL
+                    String imageUrl = "";
+                    JsonNode imageNode = slideNode.path("image");
+                    if (imageNode.isObject()) {
+                        imageUrl = imageNode.path("url").asText("");
+                    }
+
+                    if (imageUrl != null && imageUrl.startsWith("/")) {
+                        imageUrl = aiUrl + imageUrl;
+                    }
+
+                    // Tuần tự hóa các đối tượng con sang String để lưu vào DB
+                    String bulletsJson = mapper.writeValueAsString(slideNode.path("bullets"));
+                    String chartJson = slideNode.hasNonNull("chart") && !slideNode.path("chart").isNull() 
+                            ? mapper.writeValueAsString(slideNode.path("chart")) : null;
+                    String tableJson = slideNode.hasNonNull("table") && !slideNode.path("table").isNull() 
+                            ? mapper.writeValueAsString(slideNode.path("table")) : null;
+
+                    SlidePage slidePage = SlidePage.builder()
+                            .projectId(proj.getId())
+                            .pageIndex(index)
+                            .title(title)
+                            .bullets(bulletsJson)
+                            .notes(notes)
+                            .chart(chartJson)
+                            .table(tableJson)
+                            .imageUrl(imageUrl)
+                            .layout(layout)
+                            .primaryVisual(primaryVisual)
+                            .likelyMultiPptxSlides(likelyMulti)
+                            .build();
+                    slidePagesToSave.add(slidePage);
+                }
+                slidePageRepository.saveAll(slidePagesToSave);
+                proj.setStatus(Constants.PROJECT_STATUS.DONE);
+                projectRepository.save(proj);
+                log.info("[document-service] Đã lưu thành công các slide.");
+
+                // Trừ 1 hạn mức của User cho lượt tạo slide
+                try {
+                    InternalQuotaRequest quotaRequest = InternalQuotaRequest.builder()
+                            .userId(proj.getOwnerId())
+                            .featureKey("MAX_SLIDES_PER_DAY")
+                            .amount(1)
+                            .build();
+                    subscriptionClient.consumeQuota(quotaRequest);
+                } catch (Exception ex) {
+                    log.error("[document-service] Lỗi khi trừ hạn mức của user {}", proj.getOwnerId(), ex);
+                }
+            } catch (AppException e) {
+                log.error("[document-service] Lỗi ứng dụng khi sinh slide từ AI cho project ID: {}", projectId, e);
+                finalTextTaskLog.setStatus(Constants.TASK_STATUS.FAILED);
+                finalTextTaskLog.setErrorMessage(e.getMessage());
+                finalTextTaskLog.setCompletedAt(Instant.now());
+                aiTaskLogRepository.save(finalTextTaskLog);
+
+                Project proj = projectRepository.findById(projectId).orElse(project);
+                proj.setStatus(Constants.PROJECT_STATUS.FAILED);
+                projectRepository.save(proj);
+            } catch (Exception e) {
+                log.error("[document-service] Thất bại khi sinh slide từ AI cho project ID: {}", projectId, e);
+                finalTextTaskLog.setStatus(Constants.TASK_STATUS.FAILED);
+                finalTextTaskLog.setErrorMessage(e.getMessage());
+                finalTextTaskLog.setCompletedAt(Instant.now());
+                aiTaskLogRepository.save(finalTextTaskLog);
+
+                Project proj = projectRepository.findById(projectId).orElse(project);
+                proj.setStatus(Constants.PROJECT_STATUS.FAILED);
+                projectRepository.save(proj);
+            }
+        } catch (Exception e) {
+            log.error("[document-service] Lỗi nghiêm trọng trong luồng xử lý bất đồng bộ project ID: {}", projectId, e);
+        }
     }
 
     @Transactional
@@ -194,7 +329,7 @@ public class ProjectService {
                     .projectId(projectId)
                     .aiTaskId(project.getAiTaskId())
                     .projectStatus(project.getStatus())
-                    .aiStatus("error")
+                    .aiStatus("failed")
                     .progress(0)
                     .build();
         }
@@ -209,12 +344,12 @@ public class ProjectService {
                     .build();
         }
 
-        // Gọi AI check status
+        // Gọi AI check status để lấy thông tin mới nhất
         try {
             JsonNode aiStatusResponse = aiService.checkAiTaskStatus(project.getAiTaskId());
             String aiStatus = aiStatusResponse.path("status").asText("processing");
             int progress = aiStatusResponse.path("progress").asInt(0);
-            
+
             ProjectProgressResponse.ProjectProgressResponseBuilder responseBuilder = ProjectProgressResponse.builder()
                     .projectId(projectId)
                     .aiTaskId(project.getAiTaskId())
@@ -222,47 +357,18 @@ public class ProjectService {
                     .progress(progress);
 
             if ("completed".equalsIgnoreCase(aiStatus)) {
-                String downloadUrl = aiStatusResponse.path("result").path("download_url").asText("");
-                if (!downloadUrl.isEmpty()) {
-                    if (downloadUrl.startsWith("/")) {
-                        String aiBaseUrl = aiUrl;
-                        if (aiBaseUrl != null && aiBaseUrl.endsWith("/")) {
-                            aiBaseUrl = aiBaseUrl.substring(0, aiBaseUrl.length() - 1);
-                        }
-                        downloadUrl = aiBaseUrl + downloadUrl;
-                    }
-                }
-                
-                // Cập nhật trạng thái project
-                project.setStatus(Constants.PROJECT_STATUS.DONE);
-                project.setSlideUrl(downloadUrl);
-                projectRepository.save(project);
-                
-                // Trừ quota 1 lượt tạo slide
-                try {
-                    InternalQuotaRequest quotaRequest = InternalQuotaRequest.builder()
-                            .userId(project.getOwnerId())
-                            .featureKey("MAX_SLIDES_PER_DAY")
-                            .amount(1)
-                            .build();
-                    subscriptionClient.consumeQuota(quotaRequest);
-                } catch (Exception ex) {
-                    log.error("[document-service] Lỗi khi trừ hạn mức của user {} khi hoàn thành slide", project.getOwnerId(), ex);
-                }
-                
-                responseBuilder.projectStatus(Constants.PROJECT_STATUS.DONE);
-            } else if ("error".equalsIgnoreCase(aiStatus)) {
+                responseBuilder.projectStatus(Constants.PROJECT_STATUS.CREATE);
+            } else if ("error".equalsIgnoreCase(aiStatus) || "failed".equalsIgnoreCase(aiStatus)) {
                 String errorMsg = aiStatusResponse.path("result").path("error").asText("Lỗi từ AI Engine");
-                
                 project.setStatus(Constants.PROJECT_STATUS.FAILED);
                 projectRepository.save(project);
-                
+
                 responseBuilder.projectStatus(Constants.PROJECT_STATUS.FAILED);
                 responseBuilder.errorMessage(errorMsg);
             } else {
                 responseBuilder.projectStatus(Constants.PROJECT_STATUS.CREATE);
             }
-            
+
             return responseBuilder.build();
         } catch (Exception e) {
             log.error("[document-service] Lỗi gọi AI Engine check status cho project: {}", projectId, e);

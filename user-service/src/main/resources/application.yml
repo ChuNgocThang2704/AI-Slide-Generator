@@ -6,10 +6,10 @@ spring:
     name: user-service
 
   datasource:
-    url: ${USER_DB_URL:${DB_URL}}
+    url: ${USER_DB_URL:${DB_URL:jdbc:postgresql://localhost:5432/user_service_db}}
     driverClassName: org.postgresql.Driver
-    username: ${USER_DB_USERNAME:${DB_USERNAME}}
-    password: ${USER_DB_PASSWORD:${DB_PASSWORD}}
+    username: ${USER_DB_USERNAME:${DB_USERNAME:username}}
+    password: ${USER_DB_PASSWORD:${DB_PASSWORD:password}}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5
