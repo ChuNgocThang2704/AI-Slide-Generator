@@ -57,8 +57,10 @@ public class DocumentController {
     @PostMapping("/projects")
     public ApiResponse<ProjectResponse> createProject(@RequestBody @Valid ProjectCreateRequest request) {
         request.setOwnerId(currentUserId());
+        ProjectResponse response = projectService.createProject(request, currentUserRole());
+        projectService.generateSlidesAsync(response.getId(), currentUserRole());
         return ApiResponse.<ProjectResponse>builder()
-                .data(projectService.createProject(request, currentUserRole()))
+                .data(response)
                 .build();
     }
 

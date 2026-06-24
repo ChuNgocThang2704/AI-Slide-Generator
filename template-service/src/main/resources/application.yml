@@ -7,10 +7,10 @@ spring:
   application:
     name: template-service
   datasource:
-    url: ${TEMPLATE_DB_URL:${DB_URL}}
+    url: ${TEMPLATE_DB_URL:${DB_URL:jdbc:mysql://localhost:3307/template_service_db?createDatabaseIfNotExist=true}}
     driverClassName: com.mysql.cj.jdbc.Driver
-    username: ${TEMPLATE_DB_USERNAME:${DB_USERNAME}}
-    password: ${TEMPLATE_DB_PASSWORD:${DB_PASSWORD}}
+    username: ${TEMPLATE_DB_USERNAME:${DB_USERNAME:username}}
+    password: ${TEMPLATE_DB_PASSWORD:${DB_PASSWORD:password}}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5

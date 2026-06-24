@@ -12,10 +12,10 @@ spring:
       max-request-size: 50MB
 
   datasource:
-    url: ${DOC_DB_URL:${DB_URL}}
+    url: ${DOC_DB_URL:${DB_URL:jdbc:mysql://localhost:3307/document_service_db?createDatabaseIfNotExist=true}}
     driverClassName: com.mysql.cj.jdbc.Driver
-    username: ${DOC_DB_USERNAME:${DB_USERNAME}}
-    password: ${DOC_DB_PASSWORD:${DB_PASSWORD}}
+    username: ${DOC_DB_USERNAME:${DB_USERNAME:username}}
+    password: ${DOC_DB_PASSWORD:${DB_PASSWORD:password}}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5
@@ -45,7 +45,7 @@ spring:
     password: ${RABBIT_PASS}
     virtual-host: ${RABBIT_VHOST}
     ssl:
-      enabled: ${RABBIT_SSL_ENABLED:false}
+      enabled: ${RABBIT_SSL_ENABLED:true}
 
 jwt:
   signerKey: ${JWT_SIGNER_KEY}
@@ -56,7 +56,7 @@ app:
   ai:
     url: ${AI_URL:http://20.196.129.89:8000}
   subscription-service:
-    url: ${APP_SUBSCRIPTION_SERVICE_URL:${SUBSCRIPTION_SERVICE_URL:http://localhost:8084}/api/subscription}
+    url: ${APP_SUBSCRIPTION_SERVICE_URL:${SUBSCRIPTION_SERVICE_URL:http://localhost:8084}}
 
 aws:
   access-key: ${AWS_ACCESS_KEY}

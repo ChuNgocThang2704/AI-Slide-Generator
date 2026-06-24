@@ -12,7 +12,7 @@ spring:
     password: ${RABBIT_PASS}
     virtual-host: ${RABBIT_VHOST}
     ssl:
-      enabled: ${RABBIT_SSL_ENABLED:false}
+      enabled: ${RABBIT_SSL_ENABLED:true}
 
   mail:
     host: smtp.gmail.com

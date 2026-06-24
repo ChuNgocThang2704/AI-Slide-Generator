@@ -8,10 +8,10 @@ spring:
     name: subscription-service
 
   datasource:
-    url: ${SUB_DB_URL:${DB_URL}}
+    url: ${SUB_DB_URL:${DB_URL:jdbc:postgresql://localhost:5432/subscription_service_db}}
     driverClassName: org.postgresql.Driver
-    username: ${SUB_DB_USERNAME:${DB_USERNAME}}
-    password: ${SUB_DB_PASSWORD:${DB_PASSWORD}}
+    username: ${SUB_DB_USERNAME:${DB_USERNAME:username}}
+    password: ${SUB_DB_PASSWORD:${DB_PASSWORD:password}}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5

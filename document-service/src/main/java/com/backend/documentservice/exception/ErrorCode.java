@@ -19,6 +19,7 @@ public enum ErrorCode {
     DOCUMENT_NOT_FOUND(404, "Document not found", HttpStatus.NOT_FOUND),
     CONFIG_NOT_FOUND(404, "AI Configuration not found", HttpStatus.NOT_FOUND),
     QUOTA_EXCEEDED(400, "Daily slide generation limit reached", HttpStatus.BAD_REQUEST),
+    AI_API_ERROR(400, "Lỗi từ AI Engine", HttpStatus.BAD_REQUEST),
     ;
 
     ErrorCode(int code, String message, HttpStatusCode statusCode) {
