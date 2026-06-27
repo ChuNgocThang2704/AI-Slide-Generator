@@ -75,5 +75,12 @@ spring:
             - Path=/api/subscription/**
           filters:
             - StripPrefix=0
+
+        - id: payment-service-route
+          uri: ${PAYMENT_SERVICE_URL:http://localhost:8085}
+          predicates:
+            - Path=/api/payment/**
+          filters:
+            - StripPrefix=0
 jwt:
   signerKey: ${JWT_SIGNER_KEY}

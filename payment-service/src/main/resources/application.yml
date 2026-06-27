@@ -1,0 +1,16 @@
+server:
+  port: ${PORT:8085}
+  servlet:
+    context-path: /api/payment
+
+spring:
+  application:
+    name: payment-service
+
+payos:
+  client-id: ${PAYOS_CLIENT_ID}
+  api-key: ${PAYOS_API_KEY}
+  checksum-key: ${PAYOS_CHECKSUM_KEY}
+
+jwt:
+  signerKey: ${JWT_SIGNER_KEY}
