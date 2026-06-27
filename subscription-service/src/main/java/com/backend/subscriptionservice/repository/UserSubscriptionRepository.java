@@ -29,6 +29,11 @@ public interface UserSubscriptionRepository extends JpaRepository<UserSubscripti
     Optional<UserSubscription> findTopByUserIdOrderByCreatedAtDesc(UUID userId);
 
     /**
+     * Lấy subscription theo mã đơn hàng orderCode
+     */
+    Optional<UserSubscription> findByOrderCode(Long orderCode);
+
+    /**
      * Lấy subscription đang hoạt động (ACTIVE hoặc CANCELED nhưng chưa hết hạn)
      */
     @Query("SELECT s FROM UserSubscription s WHERE s.userId = :userId AND " +

@@ -130,6 +130,9 @@ services:
       RABBIT_PASS: ${RABBIT_PASS:-ai_password}
       RABBIT_VHOST: ${RABBIT_VHOST:-/}
       RABBIT_SSL_ENABLED: "false"
+      PAYMENT_SERVICE_URL: http://payment-service:8085/api/payment
+      PAYOS_RETURN_URL: ${PAYOS_RETURN_URL:-http://localhost:5173/success}
+      PAYOS_CANCEL_URL: ${PAYOS_CANCEL_URL:-http://localhost:5173/cancel}
     depends_on:
       postgres:
         condition: service_healthy
@@ -137,6 +140,28 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    networks:
+      - ai-slide-net
+
+  payment-service:
+    build:
+      context: ./payment-service
+    container_name: ai-payment-service
+    restart: unless-stopped
+    ports:
+      - "${PAYMENT_SERVICE_PORT:-8085}:8085"
+    env_file:
+      - .env
+    environment:
+      PORT: 8085
+      PAYOS_CLIENT_ID: ${PAYOS_CLIENT_ID}
+      PAYOS_API_KEY: ${PAYOS_API_KEY}
+      PAYOS_CHECKSUM_KEY: ${PAYOS_CHECKSUM_KEY}
+      JWT_SIGNER_KEY: ${JWT_SIGNER_KEY}
+      SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084/api/subscription
+    depends_on:
+      subscription-service:
+        condition: service_started
     networks:
       - ai-slide-net
 
@@ -227,6 +252,7 @@ services:
       DOCUMENT_SERVICE_URL: http://document-service:8082
       TEMPLATE_SERVICE_URL: http://template-service:8083
       SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084
+      PAYMENT_SERVICE_URL: http://payment-service:8085
       REDIS_URL: redis://redis:6379
       REDIS_SSL_ENABLED: "false"
     depends_on:
@@ -239,6 +265,8 @@ services:
       template-service:
         condition: service_started
       subscription-service:
+        condition: service_started
+      payment-service:
         condition: service_started
     networks:
       - ai-slide-net

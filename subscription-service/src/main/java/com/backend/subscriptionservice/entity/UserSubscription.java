@@ -12,7 +12,8 @@ import java.util.UUID;
 @Entity
 @Table(name = "user_subscriptions", indexes = {
         @Index(name = "idx_user_subscriptions_user_id", columnList = "user_id"),
-        @Index(name = "idx_user_subscriptions_status", columnList = "status")
+        @Index(name = "idx_user_subscriptions_status", columnList = "status"),
+        @Index(name = "idx_user_subscriptions_order_code", columnList = "order_code")
 })
 @Getter
 @Setter
@@ -45,4 +46,7 @@ public class UserSubscription extends AbstractAuditingEntity {
 
     @Column(name = "quota_reset_date")
     private LocalDateTime quotaResetDate;
+
+    @Column(name = "order_code")
+    private Long orderCode;
 }

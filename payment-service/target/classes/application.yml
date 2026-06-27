@@ -14,3 +14,7 @@ payos:
 
 jwt:
   signerKey: ${JWT_SIGNER_KEY}
+
+app:
+  subscription-service:
+    url: ${SUBSCRIPTION_SERVICE_URL:http://localhost:8084/api/subscription}
