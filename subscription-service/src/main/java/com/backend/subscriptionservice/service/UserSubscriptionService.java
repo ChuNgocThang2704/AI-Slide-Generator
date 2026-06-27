@@ -1,5 +1,7 @@
 package com.backend.subscriptionservice.service;
 
+import com.backend.subscriptionservice.client.PaymentClient;
+import com.backend.subscriptionservice.dto.request.PaymentCreateRequest;
 import com.backend.subscriptionservice.dto.request.UpgradeRequest;
 import com.backend.subscriptionservice.dto.response.*;
 import com.backend.subscriptionservice.entity.PackageFeature;
@@ -13,6 +15,7 @@ import com.backend.subscriptionservice.repository.*;
 import com.backend.subscriptionservice.util.Constants;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,6 +33,14 @@ public class UserSubscriptionService {
     private final PackageFeatureRepository featureRepository;
     private final SubscriptionHistoryRepository historyRepository;
     private final UserFeatureUsageRepository usageRepository;
+    private final PaymentClient paymentClient;
+    private final Random random = new Random();
+
+    @Value("${payos.return-url:http://localhost:5173/success}")
+    private String returnUrl;
+
+    @Value("${payos.cancel-url:http://localhost:5173/cancel}")
+    private String cancelUrl;
 
     @Transactional
     public UserSubscriptionResponse getOrCreateActiveSubscription(UUID userId) {
@@ -102,21 +113,63 @@ public class UserSubscriptionService {
                     .build();
         }
 
+        long orderCode = generateOrderCode();
+
         UserSubscription pendingSub = UserSubscription.builder()
                 .userId(userId)
                 .packageId(targetPack.getId())
                 .startDate(LocalDateTime.now())
                 .expireDate(null)
                 .status(Constants.SUBSCRIPTION_STATUS.PENDING_PAYMENT)
+                .orderCode(orderCode)
                 .build();
 
         UserSubscription saved = subscriptionRepository.save(pendingSub);
 
+        PaymentCreateRequest payRequest = PaymentCreateRequest.builder()
+                .paymentCode(orderCode)
+                .amount(targetPack.getPrice() != null ? targetPack.getPrice().longValue() : 0L)
+                .description("Nang cap goi " + targetPack.getCode())
+                .returnUrl(returnUrl)
+                .cancelUrl(cancelUrl)
+                .build();
+
+        ApiResponse<PaymentCreateResponse> payResponse = paymentClient.createPaymentLink(payRequest);
+        String redirectUrl = (payResponse != null && payResponse.getData() != null) 
+                ? payResponse.getData().getPaymentUrl() 
+                : null;
+
         return UpgradeResponse.builder()
                 .subscriptionId(saved.getId())
+                .paymentCode(orderCode)
                 .status(Constants.SUBSCRIPTION_STATUS.PENDING_PAYMENT)
-                .paymentRedirectUrl(null)
+                .paymentRedirectUrl(redirectUrl)
                 .build();
+    }
+
+    @Transactional
+    public void processPaymentCallback(Long orderCode) {
+        log.info("[subscription-service] Nhận tín hiệu callback thanh toán cho orderCode: {}", orderCode);
+        UserSubscription sub = subscriptionRepository.findByOrderCode(orderCode)
+                .orElseThrow(() -> new AppException(ErrorCode.SUBSCRIPTION_NOT_FOUND));
+
+        if (sub.getStatus() == Constants.SUBSCRIPTION_STATUS.ACTIVE) {
+            log.info("[subscription-service] Subscription cho orderCode: {} đã ACTIVE trước đó.", orderCode);
+            return;
+        }
+
+        deactivateAllActiveSubscriptions(sub.getUserId());
+
+        SubscriptionPackage pack = packageRepository.findById(sub.getPackageId())
+                .orElseThrow(() -> new AppException(ErrorCode.PACKAGE_NOT_FOUND));
+
+        sub.setStatus(Constants.SUBSCRIPTION_STATUS.ACTIVE);
+        sub.setStartDate(LocalDateTime.now());
+        sub.setExpireDate(LocalDateTime.now().plusDays(30));
+        subscriptionRepository.save(sub);
+
+        saveHistoryLog(sub.getUserId(), Constants.SUBSCRIPTION_ACTION.REGISTER, pack.getCode(), "Thanh toan PayOS thanh cong cho orderCode: " + orderCode);
+        log.info("[subscription-service] Nâng cấp thành công gói {} cho userId: {}", pack.getCode(), sub.getUserId());
     }
 
     @Transactional
@@ -185,12 +238,10 @@ public class UserSubscriptionService {
         SubscriptionPackage pack = packageRepository.findByCode(activeSub.getPackageCode())
                 .orElseThrow(() -> new AppException(ErrorCode.PACKAGE_NOT_FOUND));
 
-        // Tìm limit trong PackageFeature
         PackageFeature feature = featureRepository.findByPackageIdAndFeatureKey(pack.getId(), featureKey)
                 .orElse(null);
 
         if (feature == null) {
-            // Không tìm thấy cấu hình hạn mức nghĩa là cho phép không giới hạn hoặc mặc định không cho
             return QuotaCheckResponse.builder()
                     .userId(userId)
                     .featureKey(featureKey)
@@ -257,6 +308,12 @@ public class UserSubscriptionService {
     }
 
     // --- PRIVATE UTILITIES ---
+
+    private long generateOrderCode() {
+        long timestampPart = System.currentTimeMillis() % 10000000000L;
+        long randomPart = random.nextInt(1000000);
+        return timestampPart * 1000000L + randomPart;
+    }
 
     private UserSubscriptionResponse mapToSubscriptionResponse(UserSubscription sub) {
         SubscriptionPackage pack = packageRepository.findById(sub.getPackageId())

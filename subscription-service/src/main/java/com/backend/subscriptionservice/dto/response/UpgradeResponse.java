@@ -9,6 +9,7 @@ import java.util.UUID;
 @AllArgsConstructor
 public class UpgradeResponse {
     private UUID subscriptionId;
+    private Long paymentCode;
     private Integer status;
     private String paymentRedirectUrl;
 }

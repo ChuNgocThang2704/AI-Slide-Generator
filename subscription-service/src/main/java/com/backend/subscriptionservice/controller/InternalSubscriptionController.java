@@ -42,4 +42,12 @@ public class InternalSubscriptionController {
                 .data(subscriptionService.getUserStatus(userId))
                 .build();
     }
+
+    @PostMapping("/payment-callback")
+    public ApiResponse<Void> handlePaymentCallback(@RequestParam Long orderCode) {
+        subscriptionService.processPaymentCallback(orderCode);
+        return ApiResponse.<Void>builder()
+                .message("Payment callback processed successfully")
+                .build();
+    }
 }

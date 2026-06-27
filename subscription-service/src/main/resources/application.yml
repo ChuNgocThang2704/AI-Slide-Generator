@@ -45,5 +45,11 @@ jwt:
   signerKey: ${JWT_SIGNER_KEY}
 
 app:
+  payment-service:
+    url: ${PAYMENT_SERVICE_URL:http://localhost:8085/api/payment}
   rabbitmq:
     queue: ${RABBIT_QUEUE:notification_queue}
+
+payos:
+  return-url: ${PAYOS_RETURN_URL:http://localhost:5173/success}
+  cancel-url: ${PAYOS_CANCEL_URL:http://localhost:5173/cancel}

@@ -13,6 +13,9 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PaymentRequest {
+
+    @NotNull(message = "Payment code is required")
+    private Long paymentCode;
     
     @NotNull(message = "Amount is required")
     @Min(value = 1000, message = "Minimum amount is 1000 VND")
