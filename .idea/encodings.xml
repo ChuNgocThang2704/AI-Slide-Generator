@@ -2,6 +2,13 @@
 <project version="4">
   <component name="Encoding">
     <file url="file://$PROJECT_DIR$/api-gateway/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/back-end/api-gateway/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/back-end/document-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/back-end/notification-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/back-end/payment-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/back-end/subscription-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/back-end/template-service/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/back-end/user-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/document-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/notificaiton-service/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/notification-service/src/main/java" charset="UTF-8" />

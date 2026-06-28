@@ -16,6 +16,7 @@ public class SlidePageUpdateRequest {
     private String title;
     private Object bullets;
     private String notes;
+    private String script;
     private Object chart;
     private Object table;
     private String imageUrl;

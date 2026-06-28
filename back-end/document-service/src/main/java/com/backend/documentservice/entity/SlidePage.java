@@ -48,6 +48,9 @@ public class SlidePage extends AbstractAuditingEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    @Column(name = "script", columnDefinition = "TEXT")
+    private String script;
+
     @Column(name = "chart", columnDefinition = "TEXT")
     private String chart;
 
