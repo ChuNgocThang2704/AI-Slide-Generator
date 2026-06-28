@@ -12,6 +12,13 @@
         <option value="$PROJECT_DIR$/template-service/pom.xml" />
         <option value="$PROJECT_DIR$/subscription-service/pom.xml" />
         <option value="$PROJECT_DIR$/payment-service/pom.xml" />
+        <option value="$PROJECT_DIR$/back-end/user-service/pom.xml" />
+        <option value="$PROJECT_DIR$/back-end/api-gateway/pom.xml" />
+        <option value="$PROJECT_DIR$/back-end/document-service/pom.xml" />
+        <option value="$PROJECT_DIR$/back-end/notification-service/pom.xml" />
+        <option value="$PROJECT_DIR$/back-end/payment-service/pom.xml" />
+        <option value="$PROJECT_DIR$/back-end/subscription-service/pom.xml" />
+        <option value="$PROJECT_DIR$/back-end/template-service/pom.xml" />
       </list>
     </option>
   </component>

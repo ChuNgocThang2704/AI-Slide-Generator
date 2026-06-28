@@ -1,5 +1,7 @@
 package com.backend.documentservice.service;
 
+import com.backend.documentservice.exception.AppException;
+import com.backend.documentservice.exception.ErrorCode;
 import com.backend.documentservice.util.Constants;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -24,6 +26,7 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 import java.io.File;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -61,7 +64,7 @@ public class AiService {
         this.restTemplate.getMessageConverters().add(0, new StringHttpMessageConverter(StandardCharsets.UTF_8));
     }
 
-    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole, int imageLimit, Consumer<String> taskIdConsumer) throws JsonProcessingException {
+    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole, Consumer<String> taskIdConsumer) throws JsonProcessingException {
         String submitUrl = buildAiUrl("/api/generate-slide-spec");
         log.info("[document-service] Calling AI submit endpoint: {}", submitUrl);
 
@@ -78,9 +81,8 @@ public class AiService {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             body.add("text", prompt != null ? prompt : "");
             body.add("plan", resolveAiPlan(userRole));
-            body.add("slide_count", parseSlideCount(prompt));
             body.add("generate_images", "true");
-            body.add("image_limit", String.valueOf(imageLimit));
+            body.add("image_limit", null);
 
             if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
                 FileSystemResource fileResource = new FileSystemResource(tempFile);
@@ -157,7 +159,7 @@ public class AiService {
         }
     }
 
-    private JsonNode waitForCompletedSpec(String taskId) throws JsonProcessingException {
+    private JsonNode waitForCompletedSpec(String taskId) throws JsonProcessingException, AppException {
         String statusUrl = buildAiUrl("/api/status/" + taskId);
         long deadline = System.currentTimeMillis() + AI_MAX_WAIT.toMillis();
 
@@ -206,11 +208,11 @@ public class AiService {
                 if (errorMessage == null || errorMessage.isBlank()) {
                     errorMessage = "AI status API error (" + e.getStatusCode() + "): " + responseBody;
                 }
-                throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, errorMessage);
+                throw new AppException(ErrorCode.AI_API_ERROR, errorMessage);
             }
         }
 
-        throw new com.backend.documentservice.exception.AppException(com.backend.documentservice.exception.ErrorCode.AI_API_ERROR, "Thời gian chờ tác vụ AI vượt quá giới hạn.");
+        throw new AppException(ErrorCode.AI_API_ERROR, "Thời gian chờ tác vụ AI vượt quá giới hạn.");
     }
 
     private String buildAiUrl(String path) {
@@ -280,7 +282,7 @@ public class AiService {
             URL parsedUrl = new URL(cleanUrl);
             String path = parsedUrl.getPath();
 
-            path = java.net.URLDecoder.decode(path, StandardCharsets.UTF_8);
+            path = URLDecoder.decode(path, StandardCharsets.UTF_8);
 
             if (path.startsWith("/")) {
                 path = path.substring(1);
@@ -296,28 +298,6 @@ public class AiService {
             log.error("Error extracting S3 key from URL: {}", url);
             return null;
         }
-    }
-
-    private String parseSlideCount(String prompt) {
-        if (prompt == null || prompt.isBlank()) {
-            return "10";
-        }
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
-                "\\b(\\d+)\\s*(trang|slide|slides|page|pages)\\b",
-                java.util.regex.Pattern.CASE_INSENSITIVE
-        );
-        java.util.regex.Matcher matcher = pattern.matcher(prompt);
-        if (matcher.find()) {
-            try {
-                int count = Integer.parseInt(matcher.group(1));
-                if (count > 0 && count <= 50) {
-                    return String.valueOf(count);
-                }
-            } catch (NumberFormatException e) {
-                // Keep default.
-            }
-        }
-        return "10";
     }
 
     public JsonNode checkAiTaskStatus(String taskId) {

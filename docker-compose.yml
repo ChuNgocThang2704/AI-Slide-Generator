@@ -82,7 +82,7 @@ services:
 
   user-service:
     build:
-      context: ./user-service
+      context: ./back-end/user-service
     container_name: ai-user-service
     restart: unless-stopped
     ports:
@@ -112,7 +112,7 @@ services:
 
   subscription-service:
     build:
-      context: ./subscription-service
+      context: ./back-end/subscription-service
     container_name: ai-subscription-service
     restart: unless-stopped
     ports:
@@ -145,7 +145,7 @@ services:
 
   payment-service:
     build:
-      context: ./payment-service
+      context: ./back-end/payment-service
     container_name: ai-payment-service
     restart: unless-stopped
     ports:
@@ -167,7 +167,7 @@ services:
 
   document-service:
     build:
-      context: ./document-service
+      context: ./back-end/document-service
     container_name: ai-document-service
     restart: unless-stopped
     ports:
@@ -201,7 +201,7 @@ services:
 
   template-service:
     build:
-      context: ./template-service
+      context: ./back-end/template-service
     container_name: ai-template-service
     restart: unless-stopped
     ports:
@@ -220,7 +220,7 @@ services:
 
   notification-service:
     build:
-      context: ./notification-service
+      context: ./back-end/notification-service
     container_name: ai-notification-service
     restart: unless-stopped
     env_file:
@@ -240,7 +240,7 @@ services:
 
   api-gateway:
     build:
-      context: ./api-gateway
+      context: ./back-end/api-gateway
     container_name: ai-api-gateway
     restart: unless-stopped
     ports:

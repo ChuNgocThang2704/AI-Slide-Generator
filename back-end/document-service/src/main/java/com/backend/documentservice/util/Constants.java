@@ -32,7 +32,6 @@ public class Constants {
     }
 
     public interface USER_ROLES {
-        String ADMIN = "ADMIN";
         String USER_FREE = "USER_FREE";
         String USER_PRO = "USER_PRO";
         String USER_ULTRA = "USER_ULTRA";

@@ -18,5 +18,6 @@ public class ProjectProgressResponse implements Serializable {
     private Integer projectStatus;
     private String aiStatus;
     private Integer progress;
+    private Object result;
     private String errorMessage;
 }

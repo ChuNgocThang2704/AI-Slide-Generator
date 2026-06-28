@@ -104,7 +104,6 @@ public class ProjectService {
             request.setSourceDocId(doc.getId());
             fileNameForName = request.getFileName();
         } 
-
         else if (request.getSourceDocId() != null) {
             SourceDocument doc = sourceDocumentRepository.findById(request.getSourceDocId())
                     .orElseThrow(() -> new AppException(ErrorCode.DOCUMENT_NOT_FOUND));
@@ -136,7 +135,6 @@ public class ProjectService {
     @Async
     public void generateSlidesAsync(UUID projectId, String userRole) {
         try {
-            // Lấy thông tin Project mới nhất từ DB
             Project project = projectRepository.findById(projectId)
                     .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
 
@@ -149,27 +147,15 @@ public class ProjectService {
                 fileName = doc.getFileName();
             }
 
-            int imageLimit = 5; // Mặc định là 5 ảnh/slide
-            try {
-                ApiResponse<QuotaCheckResponse> imageLimitResp = subscriptionClient.checkQuota(project.getOwnerId(), "MAX_IMAGES_PER_SLIDE");
-                if (imageLimitResp != null && imageLimitResp.getData() != null) {
-                    imageLimit = imageLimitResp.getData().getLimitValue();
-                }
-            } catch (Exception ex) {
-                log.error("[document-service] Lỗi khi lấy hạn mức ảnh tối đa trên slide cho user {}", project.getOwnerId(), ex);
-            }
-
-            // Tạo AI Task Log cho bước EXTRACT_TEXT
+            // Khởi tạo Task Log EXTRACT_TEXT ban đầu
             AITaskLog textTaskLog = AITaskLog.builder()
                     .projectId(projectId)
                     .taskType(Constants.TASK_TYPE.EXTRACT_TEXT)
                     .status(Constants.TASK_STATUS.PROCESSING)
                     .startedAt(Instant.now())
                     .build();
-            textTaskLog = aiTaskLogRepository.save(textTaskLog);
+            aiTaskLogRepository.save(textTaskLog);
 
-            final AITaskLog finalTextTaskLog = textTaskLog;
-            final int finalImageLimit = imageLimit;
             final String finalDocumentUrl = documentUrl;
             final String finalFileName = fileName;
 
@@ -178,8 +164,7 @@ public class ProjectService {
                     project.getInitialPrompt(), 
                     finalDocumentUrl, 
                     finalFileName, 
-                    userRole, 
-                    finalImageLimit, 
+                    userRole,
                     taskId -> {
                         Project proj = projectRepository.findById(projectId).orElse(project);
                         proj.setAiTaskId(taskId);
@@ -191,26 +176,13 @@ public class ProjectService {
                 
                 Project proj = projectRepository.findById(projectId).orElse(project);
                 
-                // Cập nhật tên project từ title do AI trả về
                 String deckTitle = parsedResponse.path("deck").path("title").asText("");
                 if (!deckTitle.isEmpty()) {
                     proj.setName(deckTitle);
                 }
 
-                // Hoàn thành AI Task Log cho EXTRACT_TEXT
-                finalTextTaskLog.setStatus(Constants.TASK_STATUS.SUCCESS);
-                finalTextTaskLog.setCompletedAt(Instant.now());
-                aiTaskLogRepository.save(finalTextTaskLog);
-
-                // Log thêm AI Task Log cho bước GEN_IMAGE
-                AITaskLog imageTaskLog = AITaskLog.builder()
-                        .projectId(proj.getId())
-                        .taskType(Constants.TASK_TYPE.GEN_IMAGE)
-                        .status(Constants.TASK_STATUS.SUCCESS)
-                        .startedAt(Instant.now())
-                        .completedAt(Instant.now())
-                        .build();
-                aiTaskLogRepository.save(imageTaskLog);
+                // Cập nhật cả 2 task log sang SUCCESS khi hoàn thành
+                updateAiTaskLogsFromProgress(proj.getId(), "completed", null);
 
                 JsonNode generatedSlides = parsedResponse.path("deck").path("slides");
                 log.info("[document-service] AI sinh thành công {} slide cho project ID: {}", generatedSlides.size(), proj.getId());
@@ -224,11 +196,11 @@ public class ProjectService {
                     int index = slideNode.path("index").asInt(i);
                     String title = slideNode.path("title").asText("");
                     String notes = slideNode.path("notes").asText("");
+                    String script = slideNode.path("script").asText("");
                     String layout = slideNode.path("layout").asText("text_only");
                     String primaryVisual = slideNode.path("primary_visual").asText("");
                     boolean likelyMulti = slideNode.path("likely_multi_pptx_slides").asBoolean(false);
 
-                    // Trích xuất image URL
                     String imageUrl = "";
                     JsonNode imageNode = slideNode.path("image");
                     if (imageNode.isObject()) {
@@ -239,7 +211,6 @@ public class ProjectService {
                         imageUrl = aiUrl + imageUrl;
                     }
 
-                    // Tuần tự hóa các đối tượng con sang String để lưu vào DB
                     String bulletsJson = mapper.writeValueAsString(slideNode.path("bullets"));
                     String chartJson = slideNode.hasNonNull("chart") && !slideNode.path("chart").isNull() 
                             ? mapper.writeValueAsString(slideNode.path("chart")) : null;
@@ -252,6 +223,7 @@ public class ProjectService {
                             .title(title)
                             .bullets(bulletsJson)
                             .notes(notes)
+                            .script(script)
                             .chart(chartJson)
                             .table(tableJson)
                             .imageUrl(imageUrl)
@@ -266,7 +238,6 @@ public class ProjectService {
                 projectRepository.save(proj);
                 log.info("[document-service] Đã lưu thành công các slide.");
 
-                // Trừ 1 hạn mức của User cho lượt tạo slide
                 try {
                     InternalQuotaRequest quotaRequest = InternalQuotaRequest.builder()
                             .userId(proj.getOwnerId())
@@ -279,21 +250,13 @@ public class ProjectService {
                 }
             } catch (AppException e) {
                 log.error("[document-service] Lỗi ứng dụng khi sinh slide từ AI cho project ID: {}", projectId, e);
-                finalTextTaskLog.setStatus(Constants.TASK_STATUS.FAILED);
-                finalTextTaskLog.setErrorMessage(e.getMessage());
-                finalTextTaskLog.setCompletedAt(Instant.now());
-                aiTaskLogRepository.save(finalTextTaskLog);
-
+                updateAiTaskLogsFromProgress(projectId, "failed", null);
                 Project proj = projectRepository.findById(projectId).orElse(project);
                 proj.setStatus(Constants.PROJECT_STATUS.FAILED);
                 projectRepository.save(proj);
             } catch (Exception e) {
                 log.error("[document-service] Thất bại khi sinh slide từ AI cho project ID: {}", projectId, e);
-                finalTextTaskLog.setStatus(Constants.TASK_STATUS.FAILED);
-                finalTextTaskLog.setErrorMessage(e.getMessage());
-                finalTextTaskLog.setCompletedAt(Instant.now());
-                aiTaskLogRepository.save(finalTextTaskLog);
-
+                updateAiTaskLogsFromProgress(projectId, "failed", null);
                 Project proj = projectRepository.findById(projectId).orElse(project);
                 proj.setStatus(Constants.PROJECT_STATUS.FAILED);
                 projectRepository.save(proj);
@@ -313,7 +276,6 @@ public class ProjectService {
             throw new AppException(ErrorCode.ACCESS_DENIED);
         }
 
-        // Nếu đã DONE hoặc FAILED từ trước, trả về thông tin lưu sẵn trong DB
         if (project.getStatus() == Constants.PROJECT_STATUS.DONE) {
             return ProjectProgressResponse.builder()
                     .projectId(projectId)
@@ -334,7 +296,6 @@ public class ProjectService {
                     .build();
         }
 
-        // Nếu đang PROCESSING mà không có aiTaskId, trả về trạng thái PROCESSING và progress = 0
         if (project.getAiTaskId() == null || project.getAiTaskId().isBlank()) {
             return ProjectProgressResponse.builder()
                     .projectId(projectId)
@@ -344,11 +305,14 @@ public class ProjectService {
                     .build();
         }
 
-        // Gọi AI check status để lấy thông tin mới nhất
         try {
             JsonNode aiStatusResponse = aiService.checkAiTaskStatus(project.getAiTaskId());
             String aiStatus = aiStatusResponse.path("status").asText("processing");
             int progress = aiStatusResponse.path("progress").asInt(0);
+            JsonNode resultNode = aiStatusResponse.path("result");
+
+            // Đồng bộ trạng thái vào bảng ai_task_logs thực tế theo tiến trình AI
+            updateAiTaskLogsFromProgress(projectId, aiStatus, resultNode);
 
             ProjectProgressResponse.ProjectProgressResponseBuilder responseBuilder = ProjectProgressResponse.builder()
                     .projectId(projectId)
@@ -356,10 +320,19 @@ public class ProjectService {
                     .aiStatus(aiStatus)
                     .progress(progress);
 
+            if (resultNode != null && !resultNode.isNull()) {
+                try {
+                    Object resultObj = objectMapper.treeToValue(resultNode, Object.class);
+                    responseBuilder.result(resultObj);
+                } catch (Exception ex) {
+                    log.warn("[document-service] Lỗi khi parse result node từ AI status", ex);
+                }
+            }
+
             if ("completed".equalsIgnoreCase(aiStatus)) {
                 responseBuilder.projectStatus(Constants.PROJECT_STATUS.CREATE);
             } else if ("error".equalsIgnoreCase(aiStatus) || "failed".equalsIgnoreCase(aiStatus)) {
-                String errorMsg = aiStatusResponse.path("result").path("error").asText("Lỗi từ AI Engine");
+                String errorMsg = resultNode.path("error").asText("Lỗi từ AI Engine");
                 project.setStatus(Constants.PROJECT_STATUS.FAILED);
                 projectRepository.save(project);
 
@@ -380,6 +353,100 @@ public class ProjectService {
                     .progress(0)
                     .errorMessage("Lỗi kết nối AI Engine: " + e.getMessage())
                     .build();
+        }
+    }
+
+    private void updateAiTaskLogsFromProgress(UUID projectId, String aiStatus, JsonNode resultNode) {
+        try {
+            List<AITaskLog> taskLogs = aiTaskLogRepository.findByProjectId(projectId);
+            
+            AITaskLog textLog = taskLogs.stream()
+                    .filter(l -> l.getTaskType() != null && l.getTaskType() == Constants.TASK_TYPE.EXTRACT_TEXT)
+                    .findFirst()
+                    .orElseGet(() -> {
+                        AITaskLog log = AITaskLog.builder()
+                                .projectId(projectId)
+                                .taskType(Constants.TASK_TYPE.EXTRACT_TEXT)
+                                .status(Constants.TASK_STATUS.PROCESSING)
+                                .startedAt(Instant.now())
+                                .build();
+                        return aiTaskLogRepository.save(log);
+                    });
+
+            AITaskLog imageLog = taskLogs.stream()
+                    .filter(l -> l.getTaskType() != null && l.getTaskType() == Constants.TASK_TYPE.GEN_IMAGE)
+                    .findFirst()
+                    .orElse(null);
+
+            if ("completed".equalsIgnoreCase(aiStatus)) {
+                if (textLog.getStatus() != Constants.TASK_STATUS.SUCCESS) {
+                    textLog.setStatus(Constants.TASK_STATUS.SUCCESS);
+                    if (textLog.getCompletedAt() == null) textLog.setCompletedAt(Instant.now());
+                    aiTaskLogRepository.save(textLog);
+                }
+                if (imageLog == null) {
+                    imageLog = AITaskLog.builder()
+                            .projectId(projectId)
+                            .taskType(Constants.TASK_TYPE.GEN_IMAGE)
+                            .status(Constants.TASK_STATUS.SUCCESS)
+                            .startedAt(Instant.now())
+                            .completedAt(Instant.now())
+                            .build();
+                    aiTaskLogRepository.save(imageLog);
+                } else if (imageLog.getStatus() != Constants.TASK_STATUS.SUCCESS) {
+                    imageLog.setStatus(Constants.TASK_STATUS.SUCCESS);
+                    if (imageLog.getCompletedAt() == null) imageLog.setCompletedAt(Instant.now());
+                    aiTaskLogRepository.save(imageLog);
+                }
+                return;
+            }
+
+            if ("error".equalsIgnoreCase(aiStatus) || "failed".equalsIgnoreCase(aiStatus)) {
+                String errorMsg = resultNode != null && resultNode.hasNonNull("error") ? resultNode.path("error").asText() : "Lỗi từ AI Engine";
+                if (textLog.getStatus() == Constants.TASK_STATUS.PROCESSING) {
+                    textLog.setStatus(Constants.TASK_STATUS.FAILED);
+                    textLog.setErrorMessage(errorMsg);
+                    textLog.setCompletedAt(Instant.now());
+                    aiTaskLogRepository.save(textLog);
+                }
+                if (imageLog != null && imageLog.getStatus() == Constants.TASK_STATUS.PROCESSING) {
+                    imageLog.setStatus(Constants.TASK_STATUS.FAILED);
+                    imageLog.setErrorMessage(errorMsg);
+                    imageLog.setCompletedAt(Instant.now());
+                    aiTaskLogRepository.save(imageLog);
+                }
+                return;
+            }
+
+            if (resultNode != null && !resultNode.isNull() && resultNode.isObject()) {
+                if (resultNode.has("images")) {
+                    if (textLog.getStatus() != Constants.TASK_STATUS.SUCCESS) {
+                        textLog.setStatus(Constants.TASK_STATUS.SUCCESS);
+                        if (textLog.getCompletedAt() == null) textLog.setCompletedAt(Instant.now());
+                        aiTaskLogRepository.save(textLog);
+                    }
+                    if (imageLog == null) {
+                        imageLog = AITaskLog.builder()
+                                .projectId(projectId)
+                                .taskType(Constants.TASK_TYPE.GEN_IMAGE)
+                                .status(Constants.TASK_STATUS.PROCESSING)
+                                .startedAt(Instant.now())
+                                .build();
+                        aiTaskLogRepository.save(imageLog);
+                    } else if (imageLog.getStatus() == Constants.TASK_STATUS.PENDING) {
+                        imageLog.setStatus(Constants.TASK_STATUS.PROCESSING);
+                        if (imageLog.getStartedAt() == null) imageLog.setStartedAt(Instant.now());
+                        aiTaskLogRepository.save(imageLog);
+                    }
+                } else if (resultNode.has("chunks")) {
+                    if (textLog.getStatus() == Constants.TASK_STATUS.PENDING) {
+                        textLog.setStatus(Constants.TASK_STATUS.PROCESSING);
+                        aiTaskLogRepository.save(textLog);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[document-service] Lỗi khi cập nhật ai_task_logs từ tiến trình AI", e);
         }
     }
 
@@ -494,6 +561,7 @@ public class ProjectService {
                             .title(page.getTitle())
                             .bullets(bulletsObj)
                             .notes(page.getNotes())
+                            .script(page.getScript())
                             .chart(chartObj)
                             .table(tableObj)
                             .imageUrl(page.getImageUrl())
@@ -521,6 +589,7 @@ public class ProjectService {
 
         if (request.getTitle() != null) page.setTitle(request.getTitle());
         if (request.getNotes() != null) page.setNotes(request.getNotes());
+        if (request.getScript() != null) page.setScript(request.getScript());
         if (request.getLayout() != null) page.setLayout(request.getLayout());
         if (request.getPrimaryVisual() != null) page.setPrimaryVisual(request.getPrimaryVisual());
         if (request.getLikelyMultiPptxSlides() != null) page.setLikelyMultiPptxSlides(request.getLikelyMultiPptxSlides());
@@ -566,6 +635,7 @@ public class ProjectService {
                 .title(page.getTitle())
                 .bullets(bulletsObj)
                 .notes(page.getNotes())
+                .script(page.getScript())
                 .chart(chartObj)
                 .table(tableObj)
                 .imageUrl(page.getImageUrl())
@@ -591,7 +661,6 @@ public class ProjectService {
                 .map(SlidePageUpdateRequest::getId)
                 .collect(Collectors.toList());
 
-        // Delete pages not in request
         List<SlidePage> pagesToDelete = currentPages.stream()
                 .filter(page -> !requestIds.contains(page.getId()))
                 .collect(Collectors.toList());
@@ -600,7 +669,6 @@ public class ProjectService {
         }
 
         List<SlidePage> pagesToSave = new java.util.ArrayList<>();
-        // Update or Create
         for (int i = 0; i < requests.size(); i++) {
             SlidePageUpdateRequest req = requests.get(i);
             SlidePage page;
@@ -628,11 +696,11 @@ public class ProjectService {
             }
 
             if (req.getId() != null && currentPagesMap.containsKey(req.getId())) {
-                // Update
                 page = currentPagesMap.get(req.getId());
                 page.setTitle(req.getTitle());
                 page.setBullets(bulletsJson);
                 page.setNotes(req.getNotes());
+                page.setScript(req.getScript());
                 page.setChart(chartJson);
                 page.setTable(tableJson);
                 if (req.getImageUrl() != null) {
@@ -643,12 +711,12 @@ public class ProjectService {
                 page.setLikelyMultiPptxSlides(req.getLikelyMultiPptxSlides());
                 page.setPageIndex(i);
             } else {
-                // Create
                 page = SlidePage.builder()
                         .projectId(projectId)
                         .title(req.getTitle())
                         .bullets(bulletsJson)
                         .notes(req.getNotes())
+                        .script(req.getScript())
                         .chart(chartJson)
                         .table(tableJson)
                         .imageUrl(imageUrl)
@@ -688,6 +756,7 @@ public class ProjectService {
                     .title(page.getTitle())
                     .bullets(bulletsObj)
                     .notes(page.getNotes())
+                    .script(page.getScript())
                     .chart(chartObj)
                     .table(tableObj)
                     .imageUrl(page.getImageUrl())
@@ -818,24 +887,46 @@ public class ProjectService {
         return node;
     }
 
-    private String fixDoubleEncoding(String input) {
-        if (input == null || input.isEmpty()) {
-            return input;
+    private String fixDoubleEncoding(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
         }
-
-        if (!StandardCharsets.ISO_8859_1.newEncoder().canEncode(input)) {
-            return input;
+        if (!containsIsoMisinterpretedChars(text)) {
+            return text;
         }
-        byte[] bytes = input.getBytes(StandardCharsets.ISO_8859_1);
         try {
+            byte[] bytes = text.getBytes(StandardCharsets.ISO_8859_1);
             CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder();
             decoder.onMalformedInput(CodingErrorAction.REPORT);
             decoder.onUnmappableCharacter(CodingErrorAction.REPORT);
-            CharBuffer decoded = decoder.decode(ByteBuffer.wrap(bytes));
-            return decoded.toString();
+            CharBuffer charBuffer = decoder.decode(ByteBuffer.wrap(bytes));
+            String decoded = charBuffer.toString();
+            if (isValidVietnamese(decoded) && !containsIsoMisinterpretedChars(decoded)) {
+                return decoded;
+            }
         } catch (CharacterCodingException e) {
-            // Không phải chuỗi byte UTF-8 hợp lệ, trả về chuỗi gốc
-            return input;
+            // Not double encoded
         }
+        return text;
+    }
+
+    private boolean containsIsoMisinterpretedChars(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= 0x00C0 && c <= 0x00FF) || c == 0x00BF || c == 0x00BD) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isValidVietnamese(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= 0x0100 && c <= 0x017F) || (c >= 0x1EA0 && c <= 0x1EF9)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
