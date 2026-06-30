@@ -15,6 +15,7 @@ public class CreatePackageRequest {
     private String code;
     private String name;
     private String description;
-    private BigDecimal price;
+    private BigDecimal priceVnd;
+    private BigDecimal priceUsd;
     private Integer billingCycle;
 }

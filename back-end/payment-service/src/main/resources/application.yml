@@ -6,11 +6,19 @@ server:
 spring:
   application:
     name: payment-service
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
 
 payos:
-  client-id: ${PAYOS_CLIENT_ID}
-  api-key: ${PAYOS_API_KEY}
-  checksum-key: ${PAYOS_CHECKSUM_KEY}
+  client-id: ${PAYOS_CLIENT_ID:mock_client_id}
+  api-key: ${PAYOS_API_KEY:mock_api_key}
+  checksum-key: ${PAYOS_CHECKSUM_KEY:mock_checksum_key}
+
+stripe:
+  secret-key: ${STRIPE_SECRET_KEY:sk_test_mock_secret_key}
+  webhook-secret: ${STRIPE_WEBHOOK_SECRET:whsec_mock_webhook_secret}
+  currency: ${STRIPE_CURRENCY:usd}
 
 jwt:
   signerKey: ${JWT_SIGNER_KEY}

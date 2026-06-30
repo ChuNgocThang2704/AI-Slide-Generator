@@ -47,8 +47,7 @@ public class UserSubscriptionService {
         return subscriptionRepository.findActiveOrCanceledNotExpired(userId, LocalDateTime.now())
                 .map(this::mapToSubscriptionResponse)
                 .orElseGet(() -> {
-                    log.info("No active subscription found for user: {}. Auto-provisioning FREE package.", userId);
-                    SubscriptionPackage freePack = packageRepository.findByCode(Constants.PACKAGE_CODE.FREE)
+                    SubscriptionPackage freePack = packageRepository.findByCodeAndBillingCycle(Constants.PACKAGE_CODE.FREE, Constants.BILLING_CYCLE.MONTHLY)
                             .orElseThrow(() -> new AppException(ErrorCode.PACKAGE_NOT_FOUND));
 
                     UserSubscription freeSub = UserSubscription.builder()
@@ -89,8 +88,14 @@ public class UserSubscriptionService {
 
     @Transactional
     public UpgradeResponse upgrade(UUID userId, UpgradeRequest request) {
-        SubscriptionPackage targetPack = packageRepository.findByCode(request.getPackageCode())
-                .orElseThrow(() -> new AppException(ErrorCode.PACKAGE_NOT_FOUND));
+        SubscriptionPackage targetPack = null;
+        if (request.getBillingCycle() != null) {
+            targetPack = packageRepository.findByCodeAndBillingCycle(request.getPackageCode(), request.getBillingCycle()).orElse(null);
+        }
+        if (targetPack == null) {
+            targetPack = packageRepository.findByCode(request.getPackageCode())
+                    .orElseThrow(() -> new AppException(ErrorCode.PACKAGE_NOT_FOUND));
+        }
 
         // Nếu là gói FREE, chuyển thẳng thành ACTIVE
         if (Constants.PACKAGE_CODE.FREE.equalsIgnoreCase(targetPack.getCode())) {
@@ -126,17 +131,29 @@ public class UserSubscriptionService {
 
         UserSubscription saved = subscriptionRepository.save(pendingSub);
 
+        String payProvider = request.getPaymentProvider() != null ? request.getPaymentProvider() : Constants.PAYMENT_PROVIDER.STRIPE;
+        long amount = 0L;
+        if (Constants.PAYMENT_PROVIDER.PAYOS.equalsIgnoreCase(payProvider)) {
+            amount = targetPack.getPriceVnd() != null ? targetPack.getPriceVnd().longValue() : 0L;
+        } else {
+            amount = targetPack.getPriceUsd() != null ? targetPack.getPriceUsd().longValue() : 0L;
+        }
+
         PaymentCreateRequest payRequest = PaymentCreateRequest.builder()
                 .paymentCode(orderCode)
-                .amount(targetPack.getPrice() != null ? targetPack.getPrice().longValue() : 0L)
+                .amount(amount)
                 .description("Nang cap goi " + targetPack.getCode())
                 .returnUrl(returnUrl)
                 .cancelUrl(cancelUrl)
+                .paymentProvider(payProvider)
                 .build();
 
         ApiResponse<PaymentCreateResponse> payResponse = paymentClient.createPaymentLink(payRequest);
         String redirectUrl = (payResponse != null && payResponse.getData() != null) 
                 ? payResponse.getData().getPaymentUrl() 
+                : null;
+        String clientSecret = (payResponse != null && payResponse.getData() != null) 
+                ? payResponse.getData().getClientSecret() 
                 : null;
 
         return UpgradeResponse.builder()
@@ -144,6 +161,7 @@ public class UserSubscriptionService {
                 .paymentCode(orderCode)
                 .status(Constants.SUBSCRIPTION_STATUS.PENDING_PAYMENT)
                 .paymentRedirectUrl(redirectUrl)
+                .clientSecret(clientSecret)
                 .build();
     }
 
@@ -165,7 +183,11 @@ public class UserSubscriptionService {
 
         sub.setStatus(Constants.SUBSCRIPTION_STATUS.ACTIVE);
         sub.setStartDate(LocalDateTime.now());
-        sub.setExpireDate(LocalDateTime.now().plusDays(30));
+        if (pack.getBillingCycle() != null && pack.getBillingCycle() == Constants.BILLING_CYCLE.YEARLY) {
+            sub.setExpireDate(LocalDateTime.now().plusYears(1));
+        } else {
+            sub.setExpireDate(LocalDateTime.now().plusDays(30));
+        }
         subscriptionRepository.save(sub);
 
         saveHistoryLog(sub.getUserId(), Constants.SUBSCRIPTION_ACTION.REGISTER, pack.getCode(), "Thanh toan PayOS thanh cong cho orderCode: " + orderCode);

@@ -28,7 +28,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity httpSecurity) throws Exception {
         httpSecurity.authorizeHttpRequests(request -> request
-                .requestMatchers(HttpMethod.POST, "/webhook").permitAll()
+                .requestMatchers(HttpMethod.POST, "/webhook/stripe").permitAll()
+                .requestMatchers(HttpMethod.POST, "/webhook/payos").permitAll()
                 .requestMatchers(HttpMethod.POST, "/create").permitAll()
                 .anyRequest().authenticated());
 

@@ -34,4 +34,9 @@ public class Constants {
         String PRO = "PRO";
         String ULTRA = "ULTRA";
     }
+
+    public interface PAYMENT_PROVIDER {
+        String STRIPE = "STRIPE";
+        String PAYOS = "PAYOS";
+    }
 }

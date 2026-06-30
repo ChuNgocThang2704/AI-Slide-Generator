@@ -12,7 +12,7 @@
 	<artifactId>payment-service</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>payment-service</name>
-	<description>Payment Service for AI Slide Generator with PayOS Sandbox</description>
+	<description>Payment Service for AI Slide Generator with Stripe and PayOS Integration</description>
 
 	<properties>
 		<java.version>21</java.version>
@@ -51,6 +51,13 @@
 			<version>4.0.0</version>
 		</dependency>
 		
+		<!-- Stripe Java SDK -->
+		<dependency>
+			<groupId>com.stripe</groupId>
+			<artifactId>stripe-java</artifactId>
+			<version>26.0.0</version>
+		</dependency>
+
 		<!-- PayOS Java SDK -->
 		<dependency>
 			<groupId>vn.payos</groupId>

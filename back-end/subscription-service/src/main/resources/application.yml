@@ -6,6 +6,9 @@ server:
 spring:
   application:
     name: subscription-service
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
 
   datasource:
     url: ${SUB_DB_URL:${DB_URL:jdbc:postgresql://localhost:5432/subscription_service_db}}

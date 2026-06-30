@@ -12,5 +12,9 @@ public interface SubscriptionPackageRepository extends JpaRepository<Subscriptio
 
     Optional<SubscriptionPackage> findByCode(String code);
 
+    Optional<SubscriptionPackage> findByCodeAndBillingCycle(String code, Integer billingCycle);
+
     boolean existsByCode(String code);
+
+    boolean existsByCodeAndBillingCycle(String code, Integer billingCycle);
 }

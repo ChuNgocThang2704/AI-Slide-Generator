@@ -13,5 +13,6 @@ public class PaymentResponse {
     private Long paymentCode;
     private String paymentUrl;
     private String paymentLinkId;
+    private String clientSecret;
     private String status;
 }

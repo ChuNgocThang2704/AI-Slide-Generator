@@ -10,7 +10,9 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 @Entity
-@Table(name = "subscription_packages")
+@Table(name = "subscription_packages", uniqueConstraints = {
+    @UniqueConstraint(name = "uk_subscription_packages_code_billing_cycle", columnNames = {"code", "billing_cycle"})
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -24,7 +26,7 @@ public class SubscriptionPackage extends AbstractAuditingEntity {
     @Column(name = "id", updatable = false, nullable = false)
     private UUID id;
 
-    @Column(name = "code", unique = true, nullable = false, length = 50)
+    @Column(name = "code", nullable = false, length = 50)
     private String code;
 
     @Column(name = "name", nullable = false, length = 100)
@@ -33,8 +35,11 @@ public class SubscriptionPackage extends AbstractAuditingEntity {
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
-    @Column(name = "price")
-    private BigDecimal price;
+    @Column(name = "price_vnd")
+    private BigDecimal priceVnd;
+
+    @Column(name = "price_usd")
+    private BigDecimal priceUsd;
 
     @Column(name = "billing_cycle")
     private Integer billingCycle;
