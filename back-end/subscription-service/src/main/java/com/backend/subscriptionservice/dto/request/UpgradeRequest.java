@@ -9,4 +9,5 @@ import lombok.*;
 public class UpgradeRequest {
     private String packageCode;
     private Integer billingCycle;
+    private String paymentProvider;
 }

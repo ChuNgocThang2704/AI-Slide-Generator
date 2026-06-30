@@ -10,11 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import vn.payos.model.v2.paymentRequests.PaymentLink;
-import vn.payos.model.webhooks.Webhook;
-import vn.payos.model.webhooks.WebhookData;
 
-import java.util.HashMap;
 import java.util.Map;
 
 @RestController
@@ -28,44 +24,43 @@ public class PaymentController {
     @PostMapping("/create")
     public ApiResponse<PaymentResponse> createPaymentLink(
             @Valid @RequestBody PaymentRequest request) {
-        log.info("[payment-service] Nhận yêu cầu tạo link thanh toán: {}", request);
+        log.info("[payment-service] Nhận yêu cầu tạo Payment Link (Provider: {}): {}", request.getPaymentProvider(), request);
         return ApiResponse.<PaymentResponse>builder()
                 .data(paymentService.createPaymentLink(request))
                 .build();
     }
 
     @GetMapping("/{paymentCode}")
-    public ApiResponse<PaymentLink> getPaymentLinkInformation(@PathVariable Long paymentCode) {
+    public ApiResponse<Map<String, Object>> getPaymentLinkInformation(@PathVariable Long paymentCode) {
         log.info("[payment-service] Nhận yêu cầu lấy thông tin thanh toán cho mã: {}", paymentCode);
-        return ApiResponse.<PaymentLink>builder()
+        return ApiResponse.<Map<String, Object>>builder()
                 .data(paymentService.getPaymentLinkInformation(paymentCode))
                 .build();
     }
 
     @PostMapping("/cancel")
-    public ApiResponse<PaymentLink> cancelPaymentLink(@Valid @RequestBody CancelPaymentRequest request) {
+    public ApiResponse<Map<String, Object>> cancelPaymentLink(@Valid @RequestBody CancelPaymentRequest request) {
         log.info("[payment-service] Nhận yêu cầu hủy thanh toán cho mã: {}, lý do: {}", request.getPaymentCode(), request.getReason());
-        return ApiResponse.<PaymentLink>builder()
+        return ApiResponse.<Map<String, Object>>builder()
                 .data(paymentService.cancelPaymentLink(request.getPaymentCode(), request.getReason()))
                 .build();
     }
 
-    @PostMapping("/webhook")
-    public ResponseEntity<Map<String, Object>> handleWebhook(@RequestBody Webhook webhook) {
-        log.info("[payment-service] Nhận webhook từ PayOS: {}", webhook);
-        WebhookData verifiedData = paymentService.verifyWebhook(webhook);
+    @PostMapping("/webhook/stripe")
+    public ResponseEntity<Map<String, Object>> handleStripeWebhook(
+            @RequestBody String payload,
+            @RequestHeader(value = "Stripe-Signature", required = false) String sigHeader) {
+        log.info("[payment-service] Nhận webhook riêng Stripe. SigHeader={}", sigHeader);
+        Map<String, Object> result = paymentService.verifyStripeWebhook(payload, sigHeader);
+        return ResponseEntity.ok(result);
+    }
 
-        log.info("[payment-service] Xác thực thành công webhook. Mã thanh toán: {}, Số tiền: {}, Mô tả: {}, Mã giao dịch ngân hàng: {}",
-                verifiedData.getOrderCode(),
-                verifiedData.getAmount(),
-                verifiedData.getDescription(),
-                verifiedData.getReference());
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("code", "00");
-        response.put("desc", "success");
-        response.put("data", verifiedData);
-
-        return ResponseEntity.ok(response);
+    @PostMapping("/webhook/payos")
+    public ResponseEntity<Map<String, Object>> handlePayOSWebhook(
+            @RequestBody String payload,
+            @RequestHeader(value = "x-payos-signature", required = false) String sigHeader) {
+        log.info("[payment-service] Nhận webhook riêng PayOS. SigHeader={}", sigHeader);
+        Map<String, Object> result = paymentService.verifyPayOSWebhook(payload, sigHeader);
+        return ResponseEntity.ok(result);
     }
 }

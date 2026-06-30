@@ -12,4 +12,5 @@ public class UpgradeResponse {
     private Long paymentCode;
     private Integer status;
     private String paymentRedirectUrl;
+    private String clientSecret;
 }

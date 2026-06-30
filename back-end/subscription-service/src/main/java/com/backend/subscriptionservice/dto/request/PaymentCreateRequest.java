@@ -15,4 +15,5 @@ public class PaymentCreateRequest {
     private String description;
     private String returnUrl;
     private String cancelUrl;
+    private String paymentProvider;
 }

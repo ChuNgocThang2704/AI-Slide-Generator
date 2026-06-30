@@ -1,6 +1,6 @@
 # Tài Liệu API: Theo Dõi Tiến Độ, Hủy Tác Vụ & Quản Lý Slide Page (Document Service)
 
-Tài liệu này hướng dẫn chi tiết cách tích hợp các API quan trọng để **theo dõi tiến độ sinh slide của AI** (kèm chi tiết chunks/images), **hủy bỏ tác vụ sinh slide** và **quản lý dữ liệu Slide Page (bao gồm kịch bản thuyết trình `script`)**.
+Tài liệu này hướng dẫn chi tiết cách tích hợp các API quan trọng để **theo dõi tiến độ sinh slide của AI** (kèm chi tiết chunks/images), **hủy bỏ tác vụ sinh slide** và **quản lý dữ liệu Slide Page**.
 
 ---
 
@@ -134,7 +134,7 @@ Phản hồi trả về có dạng bọc ngoài là `ApiResponse<ProjectProgress
 * **Method:** `GET`
 
 ### 🔹 Phản hồi cấu trúc Slide Page (200 OK)
-Mỗi trang slide trả về bao gồm nội dung, ghi chú (`notes`) và kịch bản thuyết trình (`script`):
+Mỗi trang slide trả về bao gồm nội dung và ghi chú (`notes`):
 
 ```json
 {
@@ -151,7 +151,6 @@ Mỗi trang slide trả về bao gồm nội dung, ghi chú (`notes`) và kịch
         "Phương pháp này kiểm tra sự tương đồng giữa hai chuỗi con một cách hiệu quả."
       ],
       "notes": "Chào mừng quý vị đến với phần trình bày về thuật toán Karp-Rabin...",
-      "script": "Chào mừng quý vị đến với phần trình bày về thuật toán Karp-Rabin. Đây là một thuật toán tìm kiếm chuỗi mạnh mẽ...",
       "chart": null,
       "table": null,
       "imageUrl": "http://localhost:8000/outputs/images/fefe5469_1.jpg",

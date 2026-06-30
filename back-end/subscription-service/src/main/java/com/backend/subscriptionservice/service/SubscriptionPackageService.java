@@ -40,14 +40,18 @@ public class SubscriptionPackageService {
 
     @Transactional
     public PackageResponse createPackage(CreatePackageRequest request) {
-        if (packageRepository.existsByCode(request.getCode())) {
+        boolean exists = request.getBillingCycle() != null
+                ? packageRepository.existsByCodeAndBillingCycle(request.getCode(), request.getBillingCycle())
+                : packageRepository.existsByCode(request.getCode());
+        if (exists) {
             throw new AppException(ErrorCode.PACKAGE_ALREADY_EXISTS);
         }
         SubscriptionPackage pack = SubscriptionPackage.builder()
                 .code(request.getCode())
                 .name(request.getName())
                 .description(request.getDescription())
-                .price(request.getPrice())
+                .priceVnd(request.getPriceVnd())
+                .priceUsd(request.getPriceUsd())
                 .billingCycle(request.getBillingCycle())
                 .build();
         SubscriptionPackage saved = packageRepository.save(pack);
@@ -60,7 +64,8 @@ public class SubscriptionPackageService {
                 .orElseThrow(() -> new AppException(ErrorCode.PACKAGE_NOT_FOUND));
         pack.setName(request.getName());
         pack.setDescription(request.getDescription());
-        pack.setPrice(request.getPrice());
+        if (request.getPriceVnd() != null) pack.setPriceVnd(request.getPriceVnd());
+        if (request.getPriceUsd() != null) pack.setPriceUsd(request.getPriceUsd());
         pack.setBillingCycle(request.getBillingCycle());
         SubscriptionPackage saved = packageRepository.save(pack);
         return mapToPackageResponse(saved);
@@ -126,7 +131,8 @@ public class SubscriptionPackageService {
                 .code(pack.getCode())
                 .name(pack.getName())
                 .description(pack.getDescription())
-                .price(pack.getPrice())
+                .priceVnd(pack.getPriceVnd())
+                .priceUsd(pack.getPriceUsd())
                 .billingCycle(pack.getBillingCycle())
                 .features(features)
                 .build();

@@ -196,7 +196,6 @@ public class ProjectService {
                     int index = slideNode.path("index").asInt(i);
                     String title = slideNode.path("title").asText("");
                     String notes = slideNode.path("notes").asText("");
-                    String script = slideNode.path("script").asText("");
                     String layout = slideNode.path("layout").asText("text_only");
                     String primaryVisual = slideNode.path("primary_visual").asText("");
                     boolean likelyMulti = slideNode.path("likely_multi_pptx_slides").asBoolean(false);
@@ -223,7 +222,6 @@ public class ProjectService {
                             .title(title)
                             .bullets(bulletsJson)
                             .notes(notes)
-                            .script(script)
                             .chart(chartJson)
                             .table(tableJson)
                             .imageUrl(imageUrl)
@@ -561,7 +559,6 @@ public class ProjectService {
                             .title(page.getTitle())
                             .bullets(bulletsObj)
                             .notes(page.getNotes())
-                            .script(page.getScript())
                             .chart(chartObj)
                             .table(tableObj)
                             .imageUrl(page.getImageUrl())
@@ -589,7 +586,6 @@ public class ProjectService {
 
         if (request.getTitle() != null) page.setTitle(request.getTitle());
         if (request.getNotes() != null) page.setNotes(request.getNotes());
-        if (request.getScript() != null) page.setScript(request.getScript());
         if (request.getLayout() != null) page.setLayout(request.getLayout());
         if (request.getPrimaryVisual() != null) page.setPrimaryVisual(request.getPrimaryVisual());
         if (request.getLikelyMultiPptxSlides() != null) page.setLikelyMultiPptxSlides(request.getLikelyMultiPptxSlides());
@@ -635,7 +631,6 @@ public class ProjectService {
                 .title(page.getTitle())
                 .bullets(bulletsObj)
                 .notes(page.getNotes())
-                .script(page.getScript())
                 .chart(chartObj)
                 .table(tableObj)
                 .imageUrl(page.getImageUrl())
@@ -700,7 +695,6 @@ public class ProjectService {
                 page.setTitle(req.getTitle());
                 page.setBullets(bulletsJson);
                 page.setNotes(req.getNotes());
-                page.setScript(req.getScript());
                 page.setChart(chartJson);
                 page.setTable(tableJson);
                 if (req.getImageUrl() != null) {
@@ -716,7 +710,6 @@ public class ProjectService {
                         .title(req.getTitle())
                         .bullets(bulletsJson)
                         .notes(req.getNotes())
-                        .script(req.getScript())
                         .chart(chartJson)
                         .table(tableJson)
                         .imageUrl(imageUrl)
@@ -756,7 +749,6 @@ public class ProjectService {
                     .title(page.getTitle())
                     .bullets(bulletsObj)
                     .notes(page.getNotes())
-                    .script(page.getScript())
                     .chart(chartObj)
                     .table(tableObj)
                     .imageUrl(page.getImageUrl())

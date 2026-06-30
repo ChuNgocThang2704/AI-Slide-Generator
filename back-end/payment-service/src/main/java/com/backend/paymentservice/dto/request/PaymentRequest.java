@@ -18,7 +18,7 @@ public class PaymentRequest {
     private Long paymentCode;
     
     @NotNull(message = "Amount is required")
-    @Min(value = 1000, message = "Minimum amount is 1000 VND")
+    @Min(value = 1, message = "Minimum amount is 1")
     private Long amount;
 
     @NotBlank(message = "Description is required")
@@ -29,4 +29,6 @@ public class PaymentRequest {
 
     @NotBlank(message = "Cancel URL is required")
     private String cancelUrl;
+
+    private String paymentProvider;
 }
