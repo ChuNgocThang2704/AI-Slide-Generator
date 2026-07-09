@@ -1,4 +1,4 @@
-"""Input normalization and fallback structuring helpers."""
+"""Chuẩn hóa dữ liệu đầu vào và các hàm hỗ trợ cấu trúc dự phòng (fallback)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ class InputProcessingMixin:
     )
 
     def _parse_explicit_slide_blocks(self, content: str) -> Optional[Dict[str, Any]]:
-        """Parse user-authored [SLIDE n] blocks as a hard deck structure."""
+        """Phân tích cú pháp các khối [SLIDE n] do người dùng viết thành cấu trúc slide cứng."""
         text = str(content or "").replace("\r\n", "\n").replace("\r", "\n")
         matches = list(self._EXPLICIT_SLIDE_RE.finditer(text))
         if len(matches) < 2:
@@ -188,7 +188,7 @@ class InputProcessingMixin:
         return s.replace("đ", "d").replace("Đ", "D").lower().strip()
 
     def _strip_meta_instruction_lines(self, content: str) -> str:
-        """Remove short top-level user instructions that should not become slide content."""
+        """Loại bỏ các dòng hướng dẫn ngắn của người dùng ở cấp cao nhất mà không nên trở thành nội dung slide."""
         if not content:
             return ""
 
@@ -225,16 +225,16 @@ class InputProcessingMixin:
         return cleaned.strip()
 
     def _detect_heading_level(self, line: str) -> Optional[int]:
-        """Detect heading level from markdown or common document patterns.
+        """Phát hiện cấp độ tiêu đề (heading) từ markdown hoặc các mẫu tài liệu phổ biến.
 
-        Returns:
-            1 | 2 | 3 for heading levels, or None if not heading.
+        Trả về:
+            1 | 2 | 3 tương ứng với các cấp tiêu đề, hoặc None nếu không phải tiêu đề.
         """
         text = (line or "").strip()
         if not text:
             return None
 
-        # Markdown headings
+        # Tiêu đề định dạng Markdown
         if text.startswith("### "):
             return 3
         if text.startswith("## "):
@@ -242,7 +242,7 @@ class InputProcessingMixin:
         if text.startswith("# "):
             return 1
 
-        # Vietnamese/English structural headings (must be followed by number or space+text)
+        # Tiêu đề cấu trúc Tiếng Việt/Tiếng Anh (phải được theo sau bởi số hoặc dấu cách + văn bản)
         if re.match(r"^(CHƯƠNG|Chương)\s+[\dIVXivx]+", text):
             return 1
         if re.match(r"^(PHẦN|Phần)\s+[\dIVXivx]+", text):
@@ -252,25 +252,24 @@ class InputProcessingMixin:
         if re.match(r"^(TIỂU\s*MỤC|Tiểu\s*mục)\s+", text):
             return 3
 
-        # Numbered headings — require >= 6 chars of content after the number
-        # to avoid treating bullet items like "1. ok" as headings
+        # Tiêu đề được đánh số — yêu cầu >= 6 ký tự nội dung sau số để tránh hiểu nhầm các mục bullet như "1. ok" là tiêu đề
         if re.match(r"^\d+\.\d+\.\d+\s+.{5,}", text) and len(text) <= 80:
             return 3
         if re.match(r"^\d+\.\d+\s+.{5,}", text) and len(text) <= 80:
             return 2
-        # Single-level numbered heading ONLY if it looks like a real heading (not a bullet)
-        # Must have >= 10 chars of title text and be short overall
+        # Tiêu đề được đánh số một cấp CHỈ khi trông giống tiêu đề thực sự (không phải bullet)
+        # Phải có >= 10 ký tự tiêu đề và có độ dài ngắn
         if re.match(r"^\d+\.\s+.{9,}$", text) and len(text) <= 70:
             return 2
 
-        # ALL-CAPS short lines (>= 6 chars, no commas/semicolons)
+        # Các dòng ngắn viết HOA hoàn toàn (từ 6 đến 50 ký tự, không có dấu phẩy/chấm phẩy)
         if text.isupper() and 6 <= len(text) <= 50 and not re.search(r"[,;]", text):
             return 2
 
         return None
 
     def _strip_heading_marker(self, line: str) -> str:
-        """Strip common heading prefixes and markers."""
+        """Loại bỏ các tiền tố và dấu hiệu tiêu đề phổ biến."""
         text = (line or "").strip()
         text = re.sub(r"^#{1,3}\s+", "", text)
         text = re.sub(r"^(slide|silde)\s*\d+\s*[:\-–]\s*", "", text, flags=re.IGNORECASE)
@@ -278,7 +277,7 @@ class InputProcessingMixin:
         return text.rstrip(":").strip()
 
     def _split_chunk_by_size(self, chunk_text: str, max_chars: int = 9000) -> List[str]:
-        """Split an oversized chunk while preserving heading context."""
+        """Chia một chunk quá lớn trong khi vẫn giữ nguyên ngữ cảnh tiêu đề."""
         if len(chunk_text) <= max_chars:
             return [chunk_text]
 
@@ -286,7 +285,7 @@ class InputProcessingMixin:
         heading_lines = [ln for ln in lines if ln.startswith("#")]
         heading_prefix = "\n".join(heading_lines).strip()
 
-        # Keep non-heading body as paragraphs
+        # Giữ phần thân không phải tiêu đề làm các đoạn văn
         body_lines = [ln for ln in lines if not ln.startswith("#")]
         body = "\n".join(body_lines)
         paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
@@ -305,7 +304,7 @@ class InputProcessingMixin:
             parts.append(current.strip())
 
         return parts if parts else [chunk_text]
-    
+
     def _split_by_headings(self, content: str) -> List[str]:
         """
         Chia content theo phân cấp heading H1/H2/H3.
@@ -364,7 +363,7 @@ class InputProcessingMixin:
         if not sections:
             return [cleaned.strip() or content]
 
-        # Build chunk text with heading context for each section
+        # Xây dựng văn bản chunk với ngữ cảnh tiêu đề cho từng phần
         raw_chunks: List[str] = []
         for sec in sections:
             header_lines: List[str] = []
@@ -380,8 +379,7 @@ class InputProcessingMixin:
                 chunk = f"{chunk}\n\n{sec['body']}" if chunk else sec["body"]
             raw_chunks.append(chunk.strip())
 
-        # Merge small trailing sections into the previous chunk to cut LLM round-trips
-        # (important on low-VRAM GPUs). Cap size so we stay near _split_chunk_by_size limits.
+        # Gộp các phần nhỏ phía sau vào chunk trước đó để giảm số lượt gọi LLM (quan trọng đối với GPU VRAM thấp). Giới hạn kích thước để nằm gần giới hạn _split_chunk_by_size.
         merged_chunks: List[str] = []
         min_chunk_chars = 2200
         max_merged_len = 8000
@@ -395,31 +393,31 @@ class InputProcessingMixin:
             else:
                 merged_chunks.append(chunk)
 
-        # Enforce max chunk size
+        # Bắt buộc kích thước chunk tối đa
         final_chunks: List[str] = []
         for chunk in merged_chunks:
             final_chunks.extend(self._split_chunk_by_size(chunk, max_chars=7000))
 
         return final_chunks if final_chunks else [cleaned.strip() or content]
-    
+
 
     def _normalize_for_llm(self, content: str) -> str:
-        """Normalize content để LLM hiểu tốt hơn - GIỮ NGUYÊN markup headings"""
+        """Chuẩn hóa nội dung để LLM hiểu tốt hơn - GIỮ NGUYÊN các thẻ tiêu đề markup"""
         if not content:
             return ""
-        
-        # Normalize line breaks
+
+        # Chuẩn hóa ngắt dòng
         text = content.replace("\r\n", "\n").replace("\r", "\n")
         text = text.replace("_x000D_", " ")
-        
-        # Split into lines
+
+        # Chia thành các dòng
         lines = [ln.strip() for ln in text.split("\n")]
         lines = [ln for ln in lines if ln]
-        
+
         # Gộp các dòng ngắn thành paragraph
         paragraphs = []
         current_para = []
-        
+
         for line in lines:
             # Nếu là markdown heading (từ DOCX styles)
             if line.startswith("#"):
@@ -447,24 +445,24 @@ class InputProcessingMixin:
                     current_para = []
                 else:
                     paragraphs.append(line)
-        
+
         if current_para:
             paragraphs.append(" ".join(current_para))
-        
+
         # Join với double newline
         result = "\n\n".join(paragraphs)
         result = re.sub(r" +", " ", result)
         return result.strip()
-    
+
     def _fallback_structure(self, content: str) -> Dict[str, Any]:
-        """Cấu trúc fallback nếu LLM không khả dụng"""
+        """Cấu trúc dự phòng (fallback) nếu LLM không hoạt động"""
         text = (content or "").strip()
         if not text:
             return {"title": "Bài thuyết trình", "slides": [{"title": "Nội dung", "bullets": ["(trống)"], "notes": ""}]}
 
-        # Normalize newlines/spaces
+        # Chuẩn hóa các dấu ngắt dòng/khoảng trắng
         text = text.replace("\r\n", "\n").replace("\r", "\n")
-        # Remove docx artifacts
+        # Loại bỏ docx artifacts
         text = text.replace("_x000D_", "\n")
         text = re.sub(r"[ \t]+", " ", text)
 
@@ -475,12 +473,12 @@ class InputProcessingMixin:
             return bool(re.match(r"^(slide|silde)\s*\d+\s*[:\-–]\s*.+$", line, flags=re.IGNORECASE))
 
         def clean_heading(line: str) -> str:
-            # Remove common prefixes like "Slide 1: "
+            # Loại bỏ các tiền tố phổ biến như "Slide 1: "
             line = line.lstrip("# ").strip()
             line = re.sub(r"^(slide|silde)\s*\d+\s*[:\-–]\s*", "", line, flags=re.IGNORECASE).strip()
             return line.rstrip(":").strip()
 
-        # Guess document title from first non-slide heading line (avoid "Slide 1: ...")
+        # Đoán tiêu đề tài liệu từ dòng tiêu đề đầu tiên không phải slide (tránh "Slide 1: ...")
         doc_title = "Bài thuyết trình"
         for ln in lines[:10]:
             if not is_slide_heading(ln) and len(ln) >= 6:
@@ -497,21 +495,21 @@ class InputProcessingMixin:
                 return True
             if re.match(r"^(\d+(\.\d+)*)\s+.+$", line):
                 return True
-            # heading-ish: ends with ":" and not too long
+            # Dạng tiêu đề: kết thúc bằng ":" và không quá dài
             if line.endswith(":") and len(line) <= 60:
                 return True
             return False
 
         def to_bullets(paragraph: str) -> List[str]:
-            # split by sentence-ish, keep short bullets
-            # IMPORTANT: don't split by ":" because it breaks lines like "Mục tiêu: ..."
+            # Chia theo câu gần đúng, giữ lại các bullet ngắn
+            # QUAN TRỌNG: không chia theo dấu ":" vì sẽ làm hỏng các dòng như "Mục tiêu: ..."
             parts = re.split(r"(?<=[\.\?\!])\s+|;\s+", paragraph.strip())
             bullets = []
             for p in parts:
                 p = p.strip(" -•\t")
                 if not p:
                     continue
-                # If there's a " + " joiner, split into multiple bullets
+                # Nếu có ký tự nối " + ", chia thành nhiều bullet
                 if " + " in p and len(p) <= 120:
                     subparts = [sp.strip() for sp in p.split(" + ") if sp.strip()]
                 else:
@@ -538,7 +536,7 @@ class InputProcessingMixin:
             if bullet_match:
                 current["bullets"].append(bullet_match.group(2).strip())
             else:
-                # treat as paragraph -> bullets
+                # Xử lý như đoạn văn -> chuyển thành các bullet
                 current["bullets"].extend(to_bullets(ln))
 
         if current["title"] or current["bullets"]:
@@ -561,7 +559,7 @@ class InputProcessingMixin:
                 if not title or not title.strip():
                     title = f"Nội dung {slide_idx}"
 
-            # chunk bullets into multiple slides if too many
+            # Chia nhỏ các bullet thành nhiều slide nếu có quá nhiều
             chunk_size = 5
             for chunk_i in range(0, len(bullets), chunk_size):
                 chunk = bullets[chunk_i : chunk_i + chunk_size]
@@ -588,8 +586,5 @@ class InputProcessingMixin:
             count = title_counts[base_title]
             slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
 
-        # cap for sanity
+        # Giới hạn số lượng slide tối đa để đảm bảo hoạt động ổn định
         return {"title": doc_title, "slides": slides[:20]}
-
-
-

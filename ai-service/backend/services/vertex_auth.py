@@ -8,7 +8,7 @@ _cached_token: Optional[str] = None
 _cached_token_expires_at: float = 0.0
 
 def get_vertex_access_token() -> Optional[str]:
-    """Load GCP Service Account key and generate a cached access token."""
+    """Tải tệp khóa Service Account của GCP và tạo token truy cập được lưu tạm (cached)."""
     global _cached_token, _cached_token_expires_at
     from config import GCP_SERVICE_ACCOUNT_JSON_PATH, BASE_DIR
     
@@ -16,14 +16,14 @@ def get_vertex_access_token() -> Optional[str]:
     if not path:
         return None
         
-    # Handle relative paths: check current working dir, project root (BASE_DIR), and script parent
+    # Xử lý đường dẫn tương đối: kiểm tra thư mục làm việc hiện tại, thư mục gốc dự án (BASE_DIR) và thư mục chứa script
     if not os.path.isabs(path):
         if os.path.exists(path):
             path = os.path.abspath(path)
         elif os.path.exists(os.path.join(BASE_DIR, path)):
             path = os.path.join(BASE_DIR, path)
         else:
-            # Check relative to backend folder (BASE_DIR / 'backend')
+            # Kiểm tra đường dẫn tương đối so với thư mục backend (BASE_DIR / 'backend')
             backend_rel = os.path.join(BASE_DIR, "backend", path)
             if os.path.exists(backend_rel):
                 path = backend_rel
@@ -32,7 +32,7 @@ def get_vertex_access_token() -> Optional[str]:
         print(f"[vertex_auth] Google Cloud service account JSON file not found at: {path}")
         return None
         
-    # Return cached token if valid (with a 2-minute buffer before expiry)
+    # Trả về token đã được lưu tạm nếu vẫn hợp lệ (với bộ đệm 2 phút trước khi hết hạn)
     if _cached_token and time.time() < _cached_token_expires_at - 120:
         return _cached_token
         

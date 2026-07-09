@@ -36,6 +36,7 @@ from services.slide_charts import build_chart_specs_for_slides
 from services.slide_tables import build_table_specs_for_slides
 from services.images import build_image_paths_for_slides
 from services.slide_text_quality import improve_slide_text_quality
+from services.slide_quality import build_visual_plan, improve_deck_source_grounding
 
 router = APIRouter()
 
@@ -151,6 +152,14 @@ def _detect_requested_slide_count(text: str) -> Optional[int]:
     return None
 
 
+def _detect_generate_images_request(text: str) -> bool:
+    """Tự động phát hiện xem người dùng có yêu cầu sinh ảnh trong câu lệnh không (ví dụ: 'kèm ảnh', 'có hình', 'sinh ảnh')"""
+    if not text:
+        return False
+    t = text.lower()
+    return any(key in t for key in ("kem anh", "kèm ảnh", "co hinh", "có hình", "sinh anh", "sinh ảnh", "generate image", "with image"))
+
+
 def _validate_plan_limits(
     plan: str,
     slide_count: Optional[int],
@@ -257,11 +266,27 @@ def _infer_slide_layout(
     chart: Optional[Dict[str, Any]],
     image: Optional[Dict[str, Any]],
     table: Optional[Dict[str, Any]] = None,
+    slide_spec: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Optional[str]]:
     """
-    Khớp `_add_content_slide`: bảng full-width; không bảng thì ảnh/chart cột phải.
-    primary_visual ∈ {"table","image","chart",None}.
+    Ưu tiên đọc layout do AI tự phân loại từ slide spec trước (nếu có).
+    Nếu không có, fallback sang khớp dựa trên visual element (bảng full-width; ảnh/chart cột phải).
     """
+    # 1. Ưu tiên layout do AI chỉ định
+    if False and slide_spec and isinstance(slide_spec, dict) and slide_spec.get("layout"):
+        ai_layout = str(slide_spec.get("layout")).strip().lower()
+        valid_layouts = {"text_only", "text_image", "text_table", "text_chart", "split_columns", "timeline", "big_quote", "hero_stat", "intro", "normal"}
+        if ai_layout in valid_layouts:
+            primary = None
+            if "image" in ai_layout or image:
+                primary = "image"
+            elif "table" in ai_layout or table:
+                primary = "table"
+            elif "chart" in ai_layout or chart:
+                primary = "chart"
+            return ai_layout, primary
+
+    # 2. Fallback
     if table and table.get("headers") and table.get("rows"):
         return "text_table", "table"
     has_img = bool(image and (image.get("path") or image.get("url")))
@@ -296,7 +321,6 @@ def _build_slide_spec_payload(
             "title": _plain_slide_text(slide.get("title") or ""),
             "bullets": [_plain_slide_text(x) for x in (slide.get("bullets") or slide.get("content") or []) if _plain_slide_text(x)],
             "notes": _plain_slide_text(slide.get("notes") or slide.get("script") or ""),
-            "script": _plain_slide_text(slide.get("script") or slide.get("notes") or ""),
             "chart": None,
             "table": None,
             "image": None,
@@ -324,7 +348,7 @@ def _build_slide_spec_payload(
                 "mime": None,
                 "source": "user_url",
             }
-        layout, primary = _infer_slide_layout(row.get("chart"), row.get("image"), row.get("table"))
+        layout, primary = _infer_slide_layout(row.get("chart"), row.get("image"), row.get("table"), slide_spec=slide)
         row["layout"] = layout
         row["primary_visual"] = primary
         n_bullets = len(row["bullets"])
@@ -349,6 +373,267 @@ def _build_slide_spec_payload(
             "slides": out_slides,
         },
     }
+
+
+def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a completed JSON-spec response back into the internal slide-deck shape."""
+    deck = (spec_payload or {}).get("deck") if isinstance(spec_payload, dict) else None
+    if not isinstance(deck, dict):
+        raise ValueError("Previous task result does not contain a deck")
+
+    slides_out: List[Dict[str, Any]] = []
+    for idx, slide in enumerate(deck.get("slides") or []):
+        if not isinstance(slide, dict):
+            continue
+        row: Dict[str, Any] = {
+            "title": _plain_slide_text(slide.get("title") or f"Slide {idx + 1}"),
+            "bullets": [
+                _plain_slide_text(x)
+                for x in (slide.get("bullets") or [])
+                if _plain_slide_text(x)
+            ],
+            "notes": _plain_slide_text(slide.get("notes") or ""),
+        }
+        layout = str(slide.get("layout") or "").strip()
+        if layout:
+            row["layout"] = layout
+        image = slide.get("image")
+        if isinstance(image, dict) and image.get("url"):
+            row["image_url"] = str(image.get("url"))
+        slides_out.append(row)
+
+    if not slides_out:
+        raise ValueError("Previous task deck has no slides")
+    return {
+        "title": _plain_slide_text(deck.get("title") or "Bài thuyết trình"),
+        "slides": slides_out,
+    }
+
+
+def _parse_revision_target_indices(
+    *,
+    revision_prompt: str,
+    slide_count: int,
+    slide_index: Optional[int] = None,
+    slide_number: Optional[int] = None,
+    target_slide_indices: Optional[str] = None,
+    target_slide_numbers: Optional[str] = None,
+) -> List[int]:
+    """Resolve partial-revision targets as 0-based slide indices."""
+    targets = set()
+
+    def add_index(value: Any, *, one_based: bool):
+        try:
+            n = int(value)
+        except Exception:
+            return
+        idx = n - 1 if one_based else n
+        if 0 <= idx < slide_count:
+            targets.add(idx)
+
+    def add_many(raw: Optional[str], *, one_based: bool):
+        if not raw:
+            return
+        text = str(raw).strip()
+        if not text:
+            return
+        try:
+            data = json.loads(text)
+            if isinstance(data, list):
+                for item in data:
+                    add_index(item, one_based=one_based)
+                return
+            add_index(data, one_based=one_based)
+            return
+        except Exception:
+            pass
+        for part in re.split(r"[,;\s]+", text):
+            if part.strip():
+                add_index(part.strip(), one_based=one_based)
+
+    add_index(slide_index, one_based=False)
+    add_index(slide_number, one_based=True)
+    add_many(target_slide_indices, one_based=False)
+    add_many(target_slide_numbers, one_based=True)
+
+    prompt = str(revision_prompt or "")
+    folded = unicodedata.normalize("NFD", prompt.lower())
+    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
+    folded = folded.replace("đ", "d")
+    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
+        add_index(match.group(1), one_based=True)
+    for match in re.finditer(r"\b(\d+)\s*(?:slide|trang)\b", folded):
+        add_index(match.group(1), one_based=True)
+    if re.search(r"\b(?:slide|trang)\s*(?:cuoi|last|final)\b", folded) and slide_count > 0:
+        targets.add(slide_count - 1)
+    if re.search(r"\b(?:slide|trang)\s*(?:dau|first)\b", folded) and slide_count > 0:
+        targets.add(0)
+
+    return sorted(targets)
+
+
+def _fold_revision_text(text: str) -> str:
+    folded = unicodedata.normalize("NFD", str(text or "").lower())
+    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
+    return folded.replace("đ", "d").replace("Ä‘", "d")
+
+
+def _revision_prompt_mentions_image(text: str) -> bool:
+    folded = _fold_revision_text(text)
+    return bool(
+        re.search(
+            r"\b(?:anh|hinh|visual|picture|photo|image|illustration)\b|\bminh\s+hoa\b",
+            folded,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+async def _build_revised_slide_spec_payload(
+    *,
+    task_id: str,
+    previous_structured_content: Dict[str, Any],
+    revision_prompt: str,
+    slide_theme: Optional[str],
+    want_images: bool,
+    image_limit: int,
+    plan: str,
+    should_stop,
+    target_slide_indices: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    revision_plan = await content_extractor.plan_slide_revision(
+        previous_structured_content,
+        revision_prompt,
+    )
+    plan_targets = [
+        int(n) - 1
+        for n in (revision_plan.get("target_slide_numbers") or [])
+        if isinstance(n, int) or str(n).isdigit()
+    ]
+    plan_targets = [
+        idx
+        for idx in plan_targets
+        if 0 <= idx < len(previous_structured_content.get("slides") or [])
+    ]
+    if not plan_targets and target_slide_indices:
+        plan_targets = list(target_slide_indices)
+
+    op_types = {
+        str(op.get("type") or "").strip().lower()
+        for op in (revision_plan.get("operations") or [])
+        if isinstance(op, dict)
+    }
+    if _revision_prompt_mentions_image(revision_prompt):
+        op_types.add("regenerate_image")
+    text_ops = {"rewrite_text", "change_layout", "restructure_deck"}
+    wants_text_revision = bool(op_types & text_ops)
+    wants_image_revision = "regenerate_image" in op_types
+    changed_fields: List[str] = []
+
+    if "restructure_deck" in op_types or (revision_plan.get("scope") == "deck" and not plan_targets):
+        revised = await content_extractor.revise_slide_deck(
+            previous_structured_content,
+            revision_prompt,
+        )
+        changed_fields.append("deck")
+    elif wants_text_revision and plan_targets:
+        revised = await content_extractor.revise_selected_slides(
+            previous_structured_content,
+            revision_prompt,
+            plan_targets,
+        )
+        changed_fields.append("text")
+    elif wants_text_revision:
+        revised = await content_extractor.revise_slide_deck(
+            previous_structured_content,
+            revision_prompt,
+        )
+        changed_fields.append("text")
+    else:
+        revised = {
+            "title": previous_structured_content.get("title") or "Bài thuyết trình",
+            "slides": [dict(s) for s in (previous_structured_content.get("slides") or []) if isinstance(s, dict)],
+        }
+
+    old_slides = previous_structured_content.get("slides") or []
+    for idx, slide in enumerate(revised.get("slides") or []):
+        if not isinstance(slide, dict) or slide.get("image_url"):
+            continue
+        if idx < len(old_slides) and isinstance(old_slides[idx], dict) and old_slides[idx].get("image_url"):
+            slide["image_url"] = old_slides[idx].get("image_url")
+
+    if wants_image_revision:
+        image_instruction_targets = plan_targets or list(range(len(revised.get("slides") or [])))
+        for idx in image_instruction_targets:
+            slides = revised.get("slides") or []
+            if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+                slides[idx]["_image_revision_instruction"] = revision_prompt
+
+    if await should_stop():
+        raise TaskCancelledError()
+
+    visual_plan = await build_visual_plan(
+        content_extractor,
+        revised,
+        revision_prompt or "",
+        want_images=want_images,
+    )
+    if wants_image_revision:
+        for idx in image_instruction_targets:
+            visual_plan[idx] = "image"
+
+    table_specs = await build_table_specs_for_slides(
+        content_extractor,
+        revised,
+        task_id=task_id,
+        should_stop=should_stop,
+        raw_content=revision_prompt or "",
+        visual_plan=visual_plan,
+    )
+    chart_specs = await build_chart_specs_for_slides(
+        content_extractor,
+        revised,
+        task_id=task_id,
+        should_stop=should_stop,
+        table_indices=set(table_specs.keys()),
+        raw_content=revision_prompt or "",
+        visual_plan=visual_plan,
+    )
+
+    image_paths = None
+    if want_images and wants_image_revision:
+        try:
+            image_paths = await build_image_paths_for_slides(
+                content_extractor,
+                revised,
+                task_id,
+                chart_specs=chart_specs,
+                table_specs=table_specs,
+                image_limit=image_limit,
+                should_stop=should_stop,
+                plan=plan,
+                target_indices=plan_targets or None,
+                visual_plan=visual_plan,
+            )
+            if image_paths:
+                changed_fields.append("image")
+        except Exception as image_error:
+            print(f"[revise-spec] image generation failed, continue without images: {image_error!r}")
+            image_paths = None
+
+    spec_payload = _build_slide_spec_payload(
+        task_id=task_id,
+        structured_content=revised,
+        chart_specs=chart_specs,
+        table_specs=table_specs,
+        image_paths=image_paths,
+        slide_theme=slide_theme,
+    )
+    spec_payload["revision_plan"] = revision_plan
+    spec_payload["revision_scope"] = "slide" if plan_targets else str(revision_plan.get("scope") or "deck")
+    spec_payload["target_slide_indices"] = plan_targets
+    spec_payload["changed_fields"] = sorted(set(changed_fields))
+    return spec_payload
 
 
 @router.get("/")
@@ -465,15 +750,13 @@ async def generate_slide_spec(
     try:
         task_id = str(uuid.uuid4())
         plan_norm = (plan or "pro").strip().lower()
-        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count)
-        force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
-        resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
         slide_preset = "modern"
-        want_images_flag = _form_wants_slide_images(generate_images)
+        want_images_flag = False
 
         raw_content = None
         structured_content = None
 
+        file_content = ""
         if file:
             file_ext = Path(file.filename).suffix.lower()
             if file_ext not in [".docx", ".pdf", ".txt"]:
@@ -481,14 +764,30 @@ async def generate_slide_spec(
             file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
             with open(file_path, "wb") as f:
                 f.write(await file.read())
-            raw_content = await file_processor.process_file(file_path)
+            file_content = await file_processor.process_file(file_path)
+
+        user_instruction: Optional[str] = None
+        if file_content and text:
+            raw_content = file_content
+            user_instruction = text  # Text là lệnh điều hướng, inject vào system prompt LLM
+        elif file_content:
+            raw_content = file_content
         elif text:
             raw_content = text
         else:
-            raise HTTPException(status_code=400, detail="Provide one of: text, file")
+            raise HTTPException(status_code=400, detail="Provide at least one of: text, file")
 
-        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=raw_content)
+        # Quét số slide từ prompt text của người dùng trước, nếu không có mới dùng content để tính
+        text_for_detection = text or raw_content
+        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=text_for_detection)
         force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
+
+        # Tự động phát hiện yêu cầu sinh ảnh từ prompt text nếu tham số generate_images là false
+        want_images_flag = _form_wants_slide_images(generate_images)
+        if not want_images_flag and text:
+            want_images_flag = _detect_generate_images_request(text)
+
+        resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
 
         worker_ready = bool(redis_queue.redis_client and await redis_queue.has_active_worker())
 
@@ -544,6 +843,7 @@ async def generate_slide_spec(
                         should_stop=should_stop,
                         target_slides_override=target_slides_override,
                         force_exact_slide_count=force_exact_slide_count,
+                        user_instruction=user_instruction,
                     )
 
                     if await should_stop():
@@ -566,13 +866,32 @@ async def generate_slide_spec(
                                 structured, int(target_slides_override)
                             )
 
+                if not structured.get("_explicit_slide_mode"):
+                    structured = await improve_deck_source_grounding(
+                        content_extractor,
+                        structured,
+                        raw_content_bg or "",
+                        task_id=task_id_bg,
+                    )
+                    if force_exact_slide_count and target_slides_override and isinstance(structured, dict):
+                        structured = await content_extractor._force_slide_count_exact(
+                            structured, int(target_slides_override)
+                        )
+
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
+                visual_plan_bg = await build_visual_plan(
+                    content_extractor,
+                    structured,
+                    raw_content_bg or "",
+                    want_images=want_images_bg,
+                )
                 table_specs_bg = await build_table_specs_for_slides(
                     content_extractor,
                     structured,
                     task_id=task_id_bg,
                     should_stop=should_stop,
                     raw_content=raw_content_bg or "",
+                    visual_plan=visual_plan_bg,
                 )
                 chart_specs_bg = await build_chart_specs_for_slides(
                     content_extractor,
@@ -581,6 +900,7 @@ async def generate_slide_spec(
                     should_stop=should_stop,
                     table_indices=set(table_specs_bg.keys()),
                     raw_content=raw_content_bg or "",
+                    visual_plan=visual_plan_bg,
                 )
                 image_paths_bg = None
                 if want_images_bg:
@@ -605,6 +925,7 @@ async def generate_slide_spec(
                             should_stop=should_stop,
                             progress_cb=on_image_progress,
                             plan=plan_norm,
+                            visual_plan=visual_plan_bg,
                         )
                     except Exception as image_error:
                         print(
@@ -653,11 +974,12 @@ async def generate_slide_spec(
             task_data = {
                 "action": "generate_slide_spec",
                 "raw_content": raw_content,
+                "user_instruction": user_instruction,
                 "content": structured_content,
                 "plan": plan_norm,
                 "slide_count": target_slides_override,
                 "slide_theme": slide_preset,
-                "generate_images": generate_images,
+                "generate_images": "true" if want_images_flag else "false",
                 "image_limit": resolved_image_limit,
             }
             await redis_queue.add_task(task_id, task_data)
@@ -682,6 +1004,187 @@ async def generate_slide_spec(
             "task_id": task_id,
             "status": "processing",
             "message": "Processing JSON Spec asynchronously in BackgroundTasks.",
+            "check_status_url": f"/api/status/{task_id}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/revise-slide-spec")
+async def revise_slide_spec(
+    background_tasks: BackgroundTasks,
+    source_task_id: str = Form(...),
+    revision_prompt: str = Form(...),
+    plan: str = Form("pro"),
+    slide_count: Optional[int] = Form(None),
+    image_limit: Optional[int] = Form(None),
+    generate_images: str = Form("false"),
+    revision_scope: str = Form("auto"),
+    slide_index: Optional[int] = Form(None),
+    slide_number: Optional[int] = Form(None),
+    target_slide_indices: Optional[str] = Form(None),
+    target_slide_numbers: Optional[str] = Form(None),
+):
+    """Revise a completed JSON slide spec using a follow-up user instruction."""
+    try:
+        prompt = (revision_prompt or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="revision_prompt is required")
+
+        source_status = await redis_queue.get_task_status(source_task_id)
+        if source_status.get("status") != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail="source_task_id must reference a completed slide spec task",
+            )
+        source_result = source_status.get("result")
+        if not isinstance(source_result, dict) or source_result.get("mode") != "json_spec":
+            raise HTTPException(
+                status_code=400,
+                detail="source_task_id does not contain a JSON slide spec result",
+            )
+
+        previous_structured = _structured_content_from_spec_payload(source_result)
+        plan_norm = (plan or "pro").strip().lower()
+        source_slide_count = len(previous_structured.get("slides") or [])
+        target_indices = _parse_revision_target_indices(
+            revision_prompt=prompt,
+            slide_count=source_slide_count,
+            slide_index=slide_index,
+            slide_number=slide_number,
+            target_slide_indices=target_slide_indices,
+            target_slide_numbers=target_slide_numbers,
+        )
+        scope_norm = (revision_scope or "auto").strip().lower()
+        if scope_norm in {"deck", "full", "all"}:
+            target_indices = []
+        elif scope_norm in {"slide", "partial"} and not target_indices:
+            raise HTTPException(
+                status_code=400,
+                detail="revision_scope=slide requires slide_number, slide_index, target_slide_numbers, or a prompt mentioning a slide.",
+            )
+
+        requested_slide_count = slide_count if slide_count is not None else source_slide_count
+        target_slides_override, _resolved_slide_count = _validate_plan_limits(
+            plan_norm,
+            requested_slide_count,
+            raw_content=prompt,
+        )
+        if not target_indices and target_slides_override and target_slides_override != source_slide_count:
+            previous_structured = await content_extractor._force_slide_count_exact(
+                previous_structured,
+                int(target_slides_override),
+            )
+
+        task_id = str(uuid.uuid4())
+        slide_preset = str(source_result.get("slide_preset") or "modern")
+        want_images_flag = _form_wants_slide_images(generate_images)
+        if not want_images_flag:
+            want_images_flag = _detect_generate_images_request(prompt)
+        resolved_image_limit = _resolve_plan_image_limit(
+            plan_norm,
+            target_slides_override or source_slide_count,
+            image_limit,
+        )
+
+        worker_ready = bool(redis_queue.redis_client and await redis_queue.has_active_worker())
+
+        async def _process_revision_in_background(
+            task_id_bg: str,
+            previous_structured_bg: Dict[str, Any],
+            revision_prompt_bg: str,
+            slide_theme_bg: str,
+            want_images_bg: bool,
+            image_limit_bg: int,
+        ):
+            try:
+                await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
+
+                async def should_stop() -> bool:
+                    return await redis_queue.is_task_cancelled(task_id_bg)
+
+                await redis_queue.update_task_status(task_id_bg, "processing", progress=35)
+                spec_payload = await _build_revised_slide_spec_payload(
+                    task_id=task_id_bg,
+                    previous_structured_content=previous_structured_bg,
+                    revision_prompt=revision_prompt_bg,
+                    slide_theme=slide_theme_bg,
+                    want_images=want_images_bg,
+                    image_limit=image_limit_bg,
+                    plan=plan_norm,
+                    should_stop=should_stop,
+                    target_slide_indices=target_indices,
+                )
+                spec_payload["source_task_id"] = source_task_id
+                spec_payload["revision_prompt"] = revision_prompt_bg
+
+                if await should_stop():
+                    return
+                await redis_queue.update_task_status(
+                    task_id_bg,
+                    "completed",
+                    progress=100,
+                    result=spec_payload,
+                )
+            except TaskCancelledError:
+                await redis_queue.update_task_status(
+                    task_id_bg,
+                    "cancelled",
+                    progress=0,
+                    result={"message": "Task cancelled by user"},
+                )
+            except Exception as e:
+                await redis_queue.update_task_status(
+                    task_id_bg,
+                    "error",
+                    progress=0,
+                    result={"error": exc_to_error_message(e)},
+                )
+
+        if worker_ready and REDIS_OFFLOAD_WHEN_WORKER_ALIVE:
+            await redis_queue.add_task(
+                task_id,
+                {
+                    "action": "revise_slide_spec",
+                    "source_task_id": source_task_id,
+                    "previous_content": previous_structured,
+                    "revision_prompt": prompt,
+                    "target_slide_indices": target_indices,
+                    "plan": plan_norm,
+                    "slide_theme": slide_preset,
+                    "generate_images": "true" if want_images_flag else "false",
+                    "image_limit": resolved_image_limit,
+                },
+            )
+            return {
+                "task_id": task_id,
+                "source_task_id": source_task_id,
+                "revision_scope": "slide" if target_indices else "deck",
+                "target_slide_indices": target_indices,
+                "status": "processing",
+                "message": "Revising JSON Spec via Redis worker...",
+                "check_status_url": f"/api/status/{task_id}",
+            }
+
+        await redis_queue.update_task_status(task_id, "pending", progress=0)
+        background_tasks.add_task(
+            _process_revision_in_background,
+            task_id,
+            previous_structured,
+            prompt,
+            slide_preset,
+            want_images_flag,
+            resolved_image_limit,
+        )
+        return {
+            "task_id": task_id,
+            "source_task_id": source_task_id,
+            "revision_scope": "slide" if target_indices else "deck",
+            "target_slide_indices": target_indices,
+            "status": "processing",
+            "message": "Revising JSON Spec asynchronously in BackgroundTasks.",
             "check_status_url": f"/api/status/{task_id}",
         }
     except HTTPException:
@@ -738,28 +1241,46 @@ async def generate_slide_full(
         resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
         slide_preset = SlideGenerator.normalize_slide_preset(slide_theme) or "modern"
 
+        file_content = ""
         if file:
             file_ext = Path(file.filename).suffix.lower()
             if file_ext not in [".docx", ".pdf", ".txt"]:
                 raise HTTPException(status_code=400, detail="File type not supported")
-
             file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
             with open(file_path, "wb") as f:
                 content = await file.read()
                 f.write(content)
-            raw_content = await file_processor.process_file(file_path)
+            file_content = await file_processor.process_file(file_path)
+
+        user_instruction: Optional[str] = None
+        if file_content and text:
+            raw_content = file_content
+            user_instruction = text  # Text là lệnh điều hướng, inject vào system prompt LLM
+        elif file_content:
+            raw_content = file_content
         elif text:
             raw_content = text
         else:
             raise HTTPException(status_code=400, detail="Either text or file must be provided")
 
-        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=raw_content)
+        # Quét số slide từ prompt text của người dùng trước, nếu không có mới dùng content để tính
+        text_for_detection = text or raw_content
+        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=text_for_detection)
         force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
+
+        # Tự động phát hiện yêu cầu sinh ảnh từ prompt text nếu tham số generate_images là false
+        want_images_flag = _form_wants_slide_images(generate_images)
+        if not want_images_flag and text:
+            want_images_flag = _detect_generate_images_request(text)
+
         resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
+
+        doc_title_hint = None
+        if file:
+            doc_title_hint = Path(file.filename).stem
 
         content_length = len(raw_content)
         worker_ready = bool(redis_queue.redis_client and await redis_queue.has_active_worker())
-        want_images_flag = _form_wants_slide_images(generate_images)
 
         async def _process_in_background(
             task_id_bg: str,
@@ -767,6 +1288,7 @@ async def generate_slide_full(
             slide_preset_bg: str,
             want_images_bg: bool,
             image_limit_bg: int,
+            doc_title_hint_bg: Optional[str] = None,
         ):
             try:
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
@@ -791,6 +1313,8 @@ async def generate_slide_full(
                     should_stop=should_stop,
                     target_slides_override=target_slides_override,
                     force_exact_slide_count=force_exact_slide_count,
+                    user_instruction=user_instruction,
+                    doc_title_hint=doc_title_hint_bg,
                 )
 
                 if await should_stop():
@@ -809,13 +1333,28 @@ async def generate_slide_full(
                         ),
                     )
 
+                if not structured.get("_explicit_slide_mode"):
+                    structured = await improve_deck_source_grounding(
+                        content_extractor,
+                        structured,
+                        raw_content_bg or "",
+                        task_id=task_id_bg,
+                    )
+
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
+                visual_plan_bg = await build_visual_plan(
+                    content_extractor,
+                    structured,
+                    raw_content_bg or "",
+                    want_images=want_images_bg,
+                )
                 table_specs_bg = await build_table_specs_for_slides(
                     content_extractor,
                     structured,
                     task_id=task_id_bg,
                     should_stop=should_stop,
                     raw_content=raw_content_bg or "",
+                    visual_plan=visual_plan_bg,
                 )
                 chart_specs_bg = await build_chart_specs_for_slides(
                     content_extractor,
@@ -824,6 +1363,7 @@ async def generate_slide_full(
                     should_stop=should_stop,
                     table_indices=set(table_specs_bg.keys()),
                     raw_content=raw_content_bg or "",
+                    visual_plan=visual_plan_bg,
                 )
                 image_paths_bg = None
                 if want_images_bg:
@@ -848,6 +1388,7 @@ async def generate_slide_full(
                             should_stop=should_stop,
                             progress_cb=on_image_progress,
                             plan=plan_norm,
+                            visual_plan=visual_plan_bg,
                         )
                     except Exception as image_error:
                         print(
@@ -901,11 +1442,13 @@ async def generate_slide_full(
             task_data = {
                 "action": "generate_slide_full",
                 "raw_content": raw_content,
+                "user_instruction": user_instruction,
                 "plan": plan_norm,
                 "slide_count": target_slides_override,
                 "slide_theme": slide_preset,
-                "generate_images": generate_images,
+                "generate_images": "true" if want_images_flag else "false",
                 "image_limit": resolved_image_limit,
+                "doc_title_hint": doc_title_hint,
             }
             await redis_queue.add_task(task_id, task_data)
             return {
@@ -924,6 +1467,7 @@ async def generate_slide_full(
             slide_preset,
             want_images_flag,
             resolved_image_limit,
+            doc_title_hint,
         )
         return {
             "task_id": task_id,

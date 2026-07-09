@@ -1,8 +1,8 @@
-"""Compatibility entrypoint for content extraction.
+"""Điểm bắt đầu tương thích cho việc trích xuất nội dung.
 
-The active implementation lives under ``services.content``.  The old monolithic
-implementation is kept separately in ``content_extractor_legacy.py`` only as a
-rollback reference.
+Triển khai hoạt động hiện tại nằm trong ``services.content``. Triển khai nguyên khối
+cũ được lưu riêng biệt trong ``content_extractor_legacy.py`` chỉ nhằm mục đích
+đối chiếu dự phòng khi cần thiết.
 """
 
 from services.content.extractor import ContentExtractor, TaskCancelledError

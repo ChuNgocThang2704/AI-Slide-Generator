@@ -238,6 +238,8 @@ async def _process_single_slide(
         # Still need full_prompt for VLM validation of stock photos
         domain = str(semantic.get("domain") or "general")
         risk = _classify_risk(slide, semantic, content_type)
+        if str(slide.get("_image_revision_instruction") or "").strip():
+            risk = None
         semantic["risk"] = risk
         deck_ctx = _build_deck_context(
             slides,
@@ -342,6 +344,8 @@ async def _process_single_slide(
     # Risk and Scene selection
     domain = str(semantic.get("domain") or "general")
     risk = _classify_risk(slide, semantic, content_type)
+    if str(slide.get("_image_revision_instruction") or "").strip():
+        risk = None
     semantic["risk"] = risk
     deck_ctx = _build_deck_context(
         slides,
@@ -1018,6 +1022,85 @@ async def _process_single_slide(
     return image_path, debug_record
 
 
+def _score_slide_for_image(
+    slide: Dict[str, Any],
+    idx: int,
+    table_specs: Optional[Dict[int, Any]] = None,
+    chart_specs: Optional[Dict[int, Any]] = None
+) -> int:
+    # Deprecated sync version, will be bypassed
+    return 0
+
+
+async def _score_slide_for_image_async(
+    content_extractor,
+    slide: Dict[str, Any],
+    idx: int,
+    table_specs: Optional[Dict[int, Any]] = None,
+    chart_specs: Optional[Dict[int, Any]] = None
+) -> int:
+    """Chấm điểm mức độ ưu tiên sinh ảnh cho slide dựa trên kết quả phân loại ngữ nghĩa của AI:
+    - 0: Không sinh (Intro, Outro, Data, Table, Chart...)
+    - 1: Ưu tiên thấp
+    - 2: Ưu tiên trung bình (Normal slide)
+    - 3: Ưu tiên cao nhất (Nội dung chuyên môn có ý nghĩa cao)
+    """
+    if not isinstance(slide, dict):
+        return 0
+        
+    title = str(slide.get("title") or "").strip().lower()
+    bullets = slide.get("bullets") or slide.get("content") or []
+    
+    # 1. Bỏ qua slide chứa bảng hoặc biểu đồ, hoặc slide index 0 (Slide mở đầu/thành viên)
+    if idx == 0:
+        print(f"[slide_images] Forced skip image for slide 0 (cover/intro)")
+        return 0
+    if table_specs and idx in table_specs:
+        return 0
+    if chart_specs and idx in chart_specs:
+        return 0
+
+    # 1b. Cổng kiểm tra heuristic dự phòng (chống AI phân loại nhầm slide metadata)
+    meta_keywords = (
+        "thành viên", "nhóm thực hiện", "sinh viên", "giảng viên", "giáo viên", "advisor", "member", "presenter", "author",
+        "mục lục", "agenda", "nội dung chính", "lời cảm ơn", "thank you", "q&a", "hỏi đáp", "kết luận", "chương", "phân công"
+    )
+    if any(k in title for k in meta_keywords):
+        print(f"[slide_images] Heuristic skipped image for metadata slide {idx} ('{title}')")
+        return 0
+
+    # 2. Gọi AI để lấy phân loại ngữ nghĩa của slide
+    from .semantics import _get_image_semantic
+    semantic = await _get_image_semantic(content_extractor, slide)
+    content_type = str(semantic.get("content_type") or "normal").strip().lower()
+    
+    # 3. Lọc bỏ các slide mang tính chất giới thiệu/kết luận/bảng biểu bằng AI
+    if content_type in ("intro", "outro", "data"):
+        print(f"[slide_images] AI classified slide {idx} as '{content_type}', skipping image.")
+        return 0
+        
+    # 4. Slide tiếp nối (tiếp theo) ưu tiên thấp
+    if re.search(r"\s*\((?:tiếp|tiep|continued)\)\s*$", title):
+        return 1
+        
+    # 5. Slide quá ngắn ưu tiên thấp
+    if not bullets or len(bullets) < 2:
+        return 1
+        
+    # 6. Các slide được AI nhận dạng là normal / comparison / process / definition
+    # Slide chứa nhiều thuật ngữ kỹ thuật, công nghệ thì ưu tiên cao nhất
+    technical_keywords = (
+        "architecture", "kiến trúc", "framework", "database", "cơ sở dữ liệu", "bảo mật", "security", 
+        "giao thức", "protocol", "thuật toán", "algorithm", "hệ thống", "system", "công nghệ", "technology",
+        "spring", "java", "sql", "websocket", "api", "restful", "cloud", "server", "client", "code", "mã nguồn"
+    )
+    bullets_text = " ".join([str(b) for b in bullets]).lower()
+    if any(k in title or k in bullets_text for k in technical_keywords) or content_type in ("process", "comparison", "definition"):
+        return 3
+        
+    return 2
+
+
 async def build_image_paths_for_slides(
     content_extractor,
     structured: Dict[str, Any],
@@ -1029,16 +1112,12 @@ async def build_image_paths_for_slides(
     progress_cb: Optional[Any] = None,
     should_stop: Optional[Any] = None,
     plan: str = "pro",
+    target_indices: Optional[List[int]] = None,
+    visual_plan: Optional[Dict[int, str]] = None,
 ) -> Dict[int, str]:
     import asyncio
     plan_tier = (plan or "pro").strip().lower()
-    base = (IMAGE_GEN_API_BASE_URL or "").strip().rstrip("/")
-    # Free tier uses stock photos only — no AI generation API needed
-    if not base and plan_tier != "free":
-        print("[slide_images] skip: IMAGE_GEN_API_BASE_URL is empty")
-        return {}
-    if not base and plan_tier == "free":
-        print("[slide_images] plan=free: IMAGE_GEN_API_BASE_URL empty but stock photos still attempted")
+    base = (IMAGE_GEN_API_BASE_URL or "").strip()
 
     slides = structured.get("slides") or []
     if not slides:
@@ -1046,12 +1125,68 @@ async def build_image_paths_for_slides(
 
     configured_limit = max(1, IMAGE_MAX_SLIDES_WITH_IMAGES)
     if image_limit is not None:
-        configured_limit = min(configured_limit, max(0, int(image_limit)))
+        configured_limit = max(0, int(image_limit))
     if configured_limit <= 0:
         print("[slide_images] skip: image_limit <= 0")
         return {}
-    n = min(len(slides), configured_limit)
-    print(f"[slide_images] POST {base}/generate - {n} slide(s) in parallel (concurrency={IMAGE_GEN_CONCURRENCY})")
+
+    # Chấm điểm toàn bộ slide song song bằng AI
+    if target_indices:
+        target_slides = [
+            (int(idx), 99)
+            for idx in target_indices
+            if 0 <= int(idx) < len(slides)
+        ][:configured_limit]
+        n = len(target_slides)
+        if n <= 0:
+            print("[slide_images] done: no eligible target slide found for image generation")
+            return {}
+        target_indices = [idx for idx, _ in target_slides]
+        print(f"[slide_images] POST {base}/generate - {n} targeted slide(s): {target_indices}")
+    else:
+        allowed_indices: Optional[set[int]] = None
+        if visual_plan:
+            allowed_indices = {
+                int(idx)
+                for idx, visual in visual_plan.items()
+                if str(visual or "").strip().lower() == "image"
+            }
+            if not allowed_indices:
+                print("[slide_images] skip: visual plan selected no image slides")
+                return {}
+
+        score_tasks = [
+            _score_slide_for_image_async(content_extractor, slide, i, table_specs, chart_specs)
+            for i, slide in enumerate(slides)
+            if allowed_indices is None or i in allowed_indices
+        ]
+        score_indices = [
+            i for i, _slide in enumerate(slides)
+            if allowed_indices is None or i in allowed_indices
+        ]
+        scores = await asyncio.gather(*score_tasks)
+
+    # Lọc ra các slide có điểm ưu tiên > 0
+        slide_scores = []
+        for i, score in zip(score_indices, scores):
+            if score > 0:
+                slide_scores.append((i, score))
+            
+    # Sắp xếp theo điểm ưu tiên giảm dần, giữ nguyên thứ tự index ban đầu nếu bằng điểm
+        slide_scores.sort(key=lambda x: (-x[1], x[0]))
+    
+    # Lấy ra tối đa configured_limit slide có điểm ưu tiên cao nhất
+        target_slides = slide_scores[:configured_limit]
+        n = len(target_slides)
+    
+        if n <= 0:
+            print("[slide_images] done: no eligible slides found for image generation")
+            return {}
+        
+    # Danh sách các index slide thực sự được đem đi sinh ảnh
+        target_indices = [idx for idx, _ in target_slides]
+    
+        print(f"[slide_images] POST {base}/generate - {n} slide(s) in parallel based on priority: {target_indices}")
 
     out: Dict[int, str] = {}
     debug_records: List[Dict[str, Any]] = []
@@ -1076,9 +1211,6 @@ async def build_image_paths_for_slides(
     sem = asyncio.Semaphore(concurrency)
     done_count = 0
     progress_lock = asyncio.Lock()
-
-
-
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         async def worker(idx: int):
@@ -1118,7 +1250,7 @@ async def build_image_paths_for_slides(
                     print(f"[slide_images] Task exception for slide {idx}: {e}")
                     return idx, None, None
 
-        tasks = [worker(i) for i in range(n)]
+        tasks = [worker(idx) for idx in target_indices]
         results = await asyncio.gather(*tasks)
 
     # Sort results to maintain slide index order in debug records and output

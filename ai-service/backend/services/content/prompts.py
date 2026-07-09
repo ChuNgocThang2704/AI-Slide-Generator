@@ -1,7 +1,7 @@
-"""Prompt templates and guided-JSON schemas for content extraction.
+"""Các mẫu prompt và schema JSON có cấu trúc phục vụ cho việc trích xuất nội dung.
 
-Keep this file data-only.  The extraction pipeline imports these constants but
-does not mutate them.
+Giữ file này chỉ chứa dữ liệu (data-only). Pipeline trích xuất import các hằng số này nhưng
+không thay đổi giá trị của chúng.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ STEP 2 - OUTPUT ONLY:
 STRICT RULES:
 1. MUST include people, objects, and environment.
 2. MUST visually represent the main idea of the slide.
+2b. DECK THEME LINKING (CRITICAL): The scene MUST align with the global presentation theme (e.g., if the deck title is about electric vehicles, the scene should feature vehicle-related elements, car chargers, automotive tech offices, or highway infrastructure even when depicting generic business/technology actions). Do NOT draw generic houses or offices if the deck has a specific domain.
 3. DO NOT use abstract words alone (system, architecture, process, performance, solution).
 4. If abstract, convert into a concrete real-life situation.
 5. Use concrete nouns (engineer, computer, device, office, machine, document, meeting room, etc.).
@@ -36,7 +37,7 @@ IMAGE_SEMANTIC_SYSTEM = """Extract image-generation semantics from a presentatio
 
 Return ONLY valid JSON with this exact shape:
 {
-  "content_type": "historical|data|comparison|definition|process|normal",
+  "content_type": "intro|outro|historical|data|comparison|definition|process|normal",
   "domain": "business|education|technology|medical|general",
   "main_topic": "short topic",
   "action": "analysis|design|discussion|learning|planning|default",
@@ -138,7 +139,9 @@ Rules:
 
 
 MAX_BULLETS_PER_SLIDE = 5
-MAX_WORDS_PER_BULLET = 26
+MAX_WORDS_PER_BULLET = 18   # Hard max — dùng nhất quán toàn pipeline
+MIN_WORDS_PER_BULLET = 12   # Minimum để bullet có đủ nghĩa
+BULLET_WORD_RANGE = "12–18" # Human-readable, dùng trong prompt f-string
 
 
 SLIDE_DECK_JSON_SCHEMA: Dict[str, Any] = {
@@ -153,6 +156,7 @@ SLIDE_DECK_JSON_SCHEMA: Dict[str, Any] = {
                     "title": {"type": "string"},
                     "bullets": {"type": "array", "items": {"type": "string"}},
                     "notes": {"type": "string"},
+                    "layout": {"type": "string", "enum": ["text_only", "text_image", "text_table", "text_chart", "split_columns", "timeline", "big_quote", "hero_stat", "intro", "normal"]},
                 },
                 "required": ["title", "bullets", "notes"],
             },

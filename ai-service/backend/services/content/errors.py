@@ -1,6 +1,5 @@
-"""Shared exceptions for content extraction."""
+"""Các ngoại lệ dùng chung cho quá trình trích xuất nội dung."""
 
 
 class TaskCancelledError(Exception):
-    """Raised when a running extraction task is cancelled by user."""
-
+    """Ném ra khi tác vụ trích xuất đang chạy bị người dùng hủy."""

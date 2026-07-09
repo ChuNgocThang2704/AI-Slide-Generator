@@ -1,372 +1,391 @@
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
-const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' 
-  ? 'http://localhost:8000' 
-  : window.location.origin
+const API =
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:8000'
+    : window.location.origin
 
-// ─── Plan config ─────────────────────────────────────────────────────────────
+const DEFAULT_PLAN = 'pro'
+
 const PLAN_CONFIG = {
-  free:  { label: 'Free',  maxSlides: 10, maxImages: 5,  maxChars: 5000,  imgSrc: 'Stock photo (Pexels/Wikimedia)', imgQuality: 'Tiêu chuẩn', textQuality: '8 refines' },
-  pro:   { label: 'Pro',   maxSlides: 30, maxImages: 15, maxChars: 20000, imgSrc: 'AI sinh ảnh (SDXL/Flux)',        imgQuality: 'Tiêu chuẩn', textQuality: '8 refines' },
-  ultra: { label: 'Ultra', maxSlides: 50, maxImages: 35, maxChars: 50000, imgSrc: 'AI sinh ảnh Premium (steps ×1.3, prompt nghệ thuật)', imgQuality: 'Cao cấp', textQuality: '8 refines' },
+  free: { label: 'Free', maxSlides: 10, maxImages: 5, maxChars: 10000 },
+  pro: { label: 'Pro', maxSlides: 30, maxImages: 15, maxChars: 50000 },
+  ultra: { label: 'Ultra', maxSlides: 50, maxImages: 35, maxChars: 100000 },
 }
 
-// ─── Hook: slide generator ────────────────────────────────────────────────────
-function useSlideGenerator() {
-  const [status, setStatus]       = useState(null)
-  const [progress, setProgress]   = useState(null)
-  const [downloadUrl, setDownloadUrl] = useState(null)
-  const [busy, setBusy]           = useState(false)
-  const [activeTaskId, setActiveTaskId] = useState(null)
-  const pollRef = useRef(null)
+function SlidePreview({ deck }) {
+  const slides = deck?.slides || []
+  if (!slides.length) {
+    return (
+      <div className="empty-preview">
+        Chua co JSON spec. Tao slide xong preview se hien o day.
+      </div>
+    )
+  }
 
-  const stopPoll = () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null } }
-
-  const done = useCallback((url, payload) => {
-    stopPoll(); setProgress(null)
-    if (url) {
-      setStatus({ type: 'success', msg: '✅ Slide đã được tạo thành công!' })
-      setDownloadUrl(url)
-    } else {
-      setStatus({ type: 'success', msg: '✅ JSON Spec đã được tạo thành công!' })
-      console.log('JSON Spec Payload:', payload)
-    }
-    setActiveTaskId(null); setBusy(false)
-  }, [])
-
-  const fail = useCallback((msg) => {
-    stopPoll(); setProgress(null)
-    setStatus({ type: 'error', msg: `❌ ${msg}` })
-    setActiveTaskId(null); setBusy(false)
-  }, [])
-
-  const startPoll = useCallback((taskId) => {
-    pollRef.current = setInterval(async () => {
-      try {
-        const r = await fetch(`${API}/api/status/${taskId}`)
-        const d = await r.json()
-        if (d.status === 'completed') {
-          if (d.result?.download_url) {
-            done(`${API}${d.result.download_url}`, d.result)
-          } else {
-            done(null, d.result)
-          }
-        } else if (d.status === 'cancelled') {
-          stopPoll(); setProgress(null)
-          setStatus({ type: 'info', msg: '⏹️ Đã dừng quá trình tạo slide.' })
-          setActiveTaskId(null); setBusy(false)
-        } else if (d.status === 'error') {
-          const raw = d.result?.error ?? d.result?.message ?? d.detail ?? (typeof d.result === 'string' ? d.result : null)
-          fail(typeof raw === 'string' && raw.trim() ? raw.trim() : raw != null ? JSON.stringify(raw) : 'Lỗi không rõ — kiểm tra log API.')
-        } else if (d.status === 'pending') {
-          setProgress(0)
-          const pos = d.queue_position
-          const tot = d.queue_total
-          if (pos !== undefined && pos > 0) {
-            setStatus({ type: 'info', msg: `⏳ Đang xếp hàng đợi: Vị trí ${pos}/${tot}. Vui lòng chờ...` })
-          } else {
-            setStatus({ type: 'info', msg: '⏳ Đang chờ hệ thống xử lý...' })
-          }
-        } else {
-          const pct = d.progress || 0
-          setProgress(pct)
-          const chunks = d.result?.chunks
-          const images = d.result?.images
-          if (chunks?.total && pct >= 20 && pct <= 58)
-            setStatus({ type: 'info', msg: `⏳ Đang xử lý nội dung: chunk ${chunks.done}/${chunks.total}` })
-          else if (pct >= 68 && pct < 80)
-            setStatus({ type: 'info', msg: images?.total ? `🖼️ Đang sinh ảnh: ${images.done}/${images.total} slide` : '🖼️ Đang sinh ảnh minh họa...' })
-          else if (pct >= 80 && pct < 100)
-            setStatus({ type: 'info', msg: '📊 Đang tạo file PowerPoint...' })
-          else if (pct > 0 && pct < 20)
-            setStatus({ type: 'info', msg: '⏳ Đang chuẩn bị...' })
-        }
-      } catch { /* keep polling */ }
-    }, 2000)
-  }, [done, fail])
-
-  const submit = useCallback(async (formData) => {
-    if (busy) return
-    setBusy(true)
-    setStatus({ type: 'info', msg: '⏳ Đang gửi yêu cầu...' })
-    setDownloadUrl(null); setProgress(null)
-    try {
-      const r = await fetch(`${API}/api/generate-slide-full`, { method: 'POST', body: formData })
-      if (!r.ok) {
-        let errMsg = `HTTP ${r.status}`
-        try { const e = await r.json(); errMsg = e.detail || errMsg } catch {}
-        throw new Error(errMsg)
-      }
-      const d = await r.json()
-      if (d.status === 'completed') {
-        done(`${API}${d.download_url}`)
-      } else if (d.status === 'processing') {
-        setActiveTaskId(d.task_id)
-        setStatus({ type: 'info', msg: '⏳ Đang xử lý...' })
-        setProgress(0)
-        startPoll(d.task_id)
-      } else {
-        throw new Error(d.message || 'Unexpected response')
-      }
-    } catch (e) { fail(e.message) }
-  }, [busy, done, fail, startPoll])
-
-  const cancel = useCallback(async () => {
-    if (!activeTaskId) return
-    try {
-      await fetch(`${API}/api/cancel/${activeTaskId}`, { method: 'POST' })
-      stopPoll(); setProgress(null)
-      setStatus({ type: 'info', msg: '⏹️ Đã gửi yêu cầu dừng.' })
-    } catch {
-      setStatus({ type: 'error', msg: '❌ Không thể gửi yêu cầu dừng.' })
-    } finally { setActiveTaskId(null); setBusy(false) }
-  }, [activeTaskId])
-
-  return { status, progress, downloadUrl, busy, submit, cancel, activeTaskId }
-}
-
-// ─── Component: PlanBadge ─────────────────────────────────────────────────────
-function PlanBadge({ plan }) {
-  const cfg = PLAN_CONFIG[plan]
-  const colors = { free: '#64748b', pro: '#2563eb', ultra: '#7c3aed' }
   return (
-    <div style={{
-      border: `2px solid ${colors[plan]}`,
-      borderRadius: 10, padding: '10px 14px', marginTop: 10, fontSize: 13,
-      background: `${colors[plan]}11`
-    }}>
-      <strong style={{ color: colors[plan] }}>Gói {cfg.label}</strong>
-      <ul style={{ margin: '6px 0 0', padding: '0 0 0 16px', lineHeight: 1.8 }}>
-        <li>Slides: {plan === 'free' ? `Cố định ${cfg.maxSlides}` : `Lên đến ${cfg.maxSlides} (Hỗ trợ Auto)`}</li>
-        <li>Ảnh tối đa: {cfg.maxImages}</li>
-        <li>Input tối đa: {cfg.maxChars.toLocaleString()} ký tự</li>
-        <li>Nguồn ảnh: {cfg.imgSrc}</li>
-        <li>Chất lượng văn bản: {cfg.textQuality} (tốt nhất)</li>
-      </ul>
+    <div className="preview">
+      <div className="preview-header">
+        <div>
+          <span className="eyebrow">JSON Spec Preview</span>
+          <h2>{deck.title || 'Bai thuyet trinh'}</h2>
+        </div>
+        <span className="count">{slides.length} slides</span>
+      </div>
+      <div className="slide-grid">
+        {slides.map((slide, idx) => (
+          <article className="slide-card" key={`${idx}-${slide.title}`}>
+            <div className="slide-top">
+              <span>Slide {idx + 1}</span>
+              <small>{slide.layout || 'text_only'}</small>
+            </div>
+            <h3>{slide.title || `Slide ${idx + 1}`}</h3>
+            <ul>
+              {(slide.bullets || []).map((b, i) => (
+                <li key={i}>{b}</li>
+              ))}
+            </ul>
+            {slide.image?.url && <SlideImage image={slide.image} />}
+            {slide.notes && <p className="notes">{slide.notes}</p>}
+          </article>
+        ))}
+      </div>
     </div>
   )
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
-export default function App() {
-  const [tab, setTab]               = useState('text')
-  const [text, setText]             = useState('')
-  const [file, setFile]             = useState(null)
-  const [plan, setPlan]             = useState('pro')
-  const [autoSlide, setAutoSlide]   = useState(true)
-  const [slideCount, setSlideCount] = useState(10)
-  const [slideTheme, setSlideTheme] = useState('modern')
-  const [genImages, setGenImages]   = useState(true)
-  const [checkMsg, setCheckMsg]     = useState('')
-  const { status, progress, downloadUrl, busy, submit, cancel, activeTaskId } = useSlideGenerator()
+function SlideImage({ image }) {
+  const [failed, setFailed] = useState(false)
+  const src = image?.url?.startsWith('http') ? image.url : `${API}${image?.url || ''}`
+  if (!image?.url) return null
+  if (failed) {
+    return <div className="image-chip">Image unavailable: {image.url}</div>
+  }
+  return (
+    <div className="slide-image">
+      <img alt="Slide visual" loading="lazy" onError={() => setFailed(true)} src={src} />
+    </div>
+  )
+}
 
-  const cfg = PLAN_CONFIG[plan]
+function useSpecTasks() {
+  const [status, setStatus] = useState(null)
+  const [progress, setProgress] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [activeTaskId, setActiveTaskId] = useState(null)
+  const [spec, setSpec] = useState(null)
+  const pollRef = useRef(null)
 
-  const charCount = text.trim().length
-  const charOverLimit = charCount > cfg.maxChars
-  const charHint = useMemo(() => {
-    if (!charCount) return null
-    if (charOverLimit) return { kind: 'err', text: `~${charCount} ký tự — vượt giới hạn gói ${cfg.label} (tối đa ${cfg.maxChars.toLocaleString()}). Rút ngắn hoặc đổi gói.` }
-    if (charCount < 500) return { kind: 'warn', text: `~${charCount} ký tự — hơi ít, slide có thể chung chung. Nên từ 500+ ký tự.` }
-    return { kind: 'ok', text: `~${charCount} ký tự — OK (giới hạn gói: ${cfg.maxChars.toLocaleString()})` }
-  }, [charCount, charOverLimit, cfg])
-
-  const handlePlanChange = (p) => {
-    setPlan(p)
-    const c = PLAN_CONFIG[p]
-    setSlideCount(Math.min(slideCount, c.maxSlides))
+  const stopPoll = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
   }
 
-  const buildFormData = (extraEntry) => {
-    const fd = new FormData()
-    if (extraEntry) fd.append(...extraEntry)
-    fd.append('plan', plan)
-    fd.append('slide_theme', slideTheme)
-    fd.append('generate_images', genImages ? 'true' : 'false')
-    fd.append('image_limit', String(cfg.maxImages))
-    if (plan !== 'free') {
-      fd.append('slide_count', autoSlide ? '0' : String(slideCount))
+  const fail = useCallback((msg) => {
+    stopPoll()
+    setProgress(null)
+    setBusy(false)
+    setActiveTaskId(null)
+    setStatus({ type: 'error', msg: msg || 'Co loi xay ra' })
+  }, [])
+
+  const complete = useCallback((payload, message) => {
+    stopPoll()
+    setProgress(null)
+    setBusy(false)
+    setActiveTaskId(null)
+    setSpec(payload)
+    setStatus({ type: 'success', msg: message })
+  }, [])
+
+  const startPoll = useCallback(
+    (taskId, message) => {
+      stopPoll()
+      pollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API}/api/status/${taskId}`)
+          const d = await r.json()
+          if (d.status === 'completed') {
+            complete(d.result, message)
+            return
+          }
+          if (d.status === 'error') {
+            const raw = d.result?.error || d.result?.message || d.detail
+            fail(typeof raw === 'string' ? raw : JSON.stringify(raw || 'Unknown error'))
+            return
+          }
+          if (d.status === 'cancelled') {
+            fail('Task da bi huy')
+            return
+          }
+          const pct = d.progress || 0
+          setProgress(pct)
+          if (d.status === 'pending') {
+            setStatus({ type: 'info', msg: 'Dang cho xu ly...' })
+          } else if (d.result?.chunks?.total) {
+            setStatus({
+              type: 'info',
+              msg: `Dang xu ly noi dung: chunk ${d.result.chunks.done}/${d.result.chunks.total}`,
+            })
+          } else if (d.result?.images?.total) {
+            setStatus({
+              type: 'info',
+              msg: `Dang sinh anh: ${d.result.images.done}/${d.result.images.total}`,
+            })
+          } else {
+            setStatus({ type: 'info', msg: 'Dang tao JSON spec...' })
+          }
+        } catch {
+          // Keep polling while the backend is busy.
+        }
+      }, 2000)
+    },
+    [complete, fail],
+  )
+
+  const submitSpec = useCallback(
+    async (formData) => {
+      if (busy) return
+      setBusy(true)
+      setSpec(null)
+      setProgress(0)
+      setStatus({ type: 'info', msg: 'Dang gui yeu cau tao JSON spec...' })
+      try {
+        const r = await fetch(`${API}/api/generate-slide-spec`, { method: 'POST', body: formData })
+        if (!r.ok) {
+          const e = await r.json().catch(() => null)
+          throw new Error(e?.detail || `HTTP ${r.status}`)
+        }
+        const d = await r.json()
+        setActiveTaskId(d.task_id)
+        startPoll(d.task_id, 'Da tao JSON spec thanh cong')
+      } catch (e) {
+        fail(e.message)
+      }
+    },
+    [busy, fail, startPoll],
+  )
+
+  const reviseSpec = useCallback(
+    async (formData) => {
+      if (busy) return
+      setBusy(true)
+      setProgress(0)
+      setStatus({ type: 'info', msg: 'Dang gui yeu cau sua slide...' })
+      try {
+        const r = await fetch(`${API}/api/revise-slide-spec`, { method: 'POST', body: formData })
+        if (!r.ok) {
+          const e = await r.json().catch(() => null)
+          throw new Error(e?.detail || `HTTP ${r.status}`)
+        }
+        const d = await r.json()
+        setActiveTaskId(d.task_id)
+        const scope = d.revision_scope === 'slide' ? `slide ${(d.target_slide_indices || []).map((x) => x + 1).join(', ')}` : 'toan deck'
+        startPoll(d.task_id, `Da sua ${scope} thanh cong`)
+      } catch (e) {
+        fail(e.message)
+      }
+    },
+    [busy, fail, startPoll],
+  )
+
+  const cancel = useCallback(async () => {
+    if (!activeTaskId) return
+    await fetch(`${API}/api/cancel/${activeTaskId}`, { method: 'POST' }).catch(() => null)
+    stopPoll()
+    setBusy(false)
+    setProgress(null)
+    setActiveTaskId(null)
+    setStatus({ type: 'info', msg: 'Da gui yeu cau dung task' })
+  }, [activeTaskId])
+
+  return { activeTaskId, busy, cancel, progress, reviseSpec, spec, status, submitSpec }
+}
+
+export default function App() {
+  const [tab, setTab] = useState('text')
+  const [text, setText] = useState('')
+  const [file, setFile] = useState(null)
+  const [checkMsg, setCheckMsg] = useState('')
+  const [revisionPrompt, setRevisionPrompt] = useState('')
+  const { activeTaskId, busy, cancel, progress, reviseSpec, spec, status, submitSpec } = useSpecTasks()
+
+  const cfg = PLAN_CONFIG[DEFAULT_PLAN]
+  const deck = spec?.deck
+  const sourceTaskId = spec?.task_id
+  const charCount = text.trim().length
+  const charOverLimit = charCount > cfg.maxChars
+
+  const charHint = useMemo(() => {
+    if (!charCount) return ''
+    if (charOverLimit) {
+      return `${charCount} ky tu - vuot gioi han ${cfg.maxChars.toLocaleString()} cua goi ${cfg.label}`
     }
+    return `${charCount} ky tu / ${cfg.maxChars.toLocaleString()}`
+  }, [cfg, charCount, charOverLimit])
+
+  const buildBaseForm = () => {
+    const fd = new FormData()
+    fd.append('plan', DEFAULT_PLAN)
+    fd.append('generate_images', 'true')
     return fd
   }
 
-  const handleTextSubmit = (e) => {
+  const submitText = (e) => {
     e.preventDefault()
     if (!text.trim() || charOverLimit) return
-    submit(buildFormData(['text', text]))
+    const fd = buildBaseForm()
+    fd.append('text', text)
+    submitSpec(fd)
   }
 
-  const handleFileSubmit = (e) => {
+  const submitFile = (e) => {
     e.preventDefault()
     if (!file) return
-    const fd = buildFormData()
+    const fd = buildBaseForm()
     fd.append('file', file)
-    submit(fd)
+    if (text.trim()) fd.append('text', text)
+    submitSpec(fd)
   }
 
-  const handleCheck = async () => {
-    setCheckMsg('Đang kiểm tra...')
+  const submitRevision = (e) => {
+    e.preventDefault()
+    if (!sourceTaskId || !revisionPrompt.trim()) return
+    const fd = new FormData()
+    fd.append('source_task_id', sourceTaskId)
+    fd.append('revision_prompt', revisionPrompt)
+    fd.append('revision_scope', 'auto')
+    fd.append('plan', DEFAULT_PLAN)
+    fd.append('generate_images', 'true')
+    reviseSpec(fd)
+  }
+
+  const checkConnection = async () => {
+    setCheckMsg('Dang kiem tra...')
     try {
-      const [r1, r2] = await Promise.all([
-        fetch(`${API}/`).then(r => r.json()).catch(() => null),
-        fetch(`${API}/api/vllm-status`).then(r => r.json()).catch(() => null),
+      const [root, vllm] = await Promise.all([
+        fetch(`${API}/`).then((r) => r.json()).catch(() => null),
+        fetch(`${API}/api/vllm-status`).then((r) => r.json()).catch(() => null),
       ])
-      const be = r1 ? '✅ Backend OK' : '❌ Backend FAIL'
-      const vm = r2?.models?.[0] || r2?.model || ''
-      const vllm = r2?.ok ? `✅ vLLM OK (${vm || 'no id'})` : '❌ vLLM FAIL'
-      setCheckMsg(`${be} • ${vllm}`)
-    } catch { setCheckMsg('❌ Không kết nối được') }
+      setCheckMsg(`${root ? 'Backend OK' : 'Backend FAIL'} | ${vllm?.ok ? `vLLM OK (${vllm.models?.[0] || 'model'})` : 'vLLM FAIL'}`)
+    } catch {
+      setCheckMsg('Khong ket noi duoc backend')
+    }
   }
 
   return (
     <div className="page">
-      <div className="card">
-        <div className="header">
-          <h1>🤖 AI Slide Generator</h1>
-          <p>Tạo slide PowerPoint tự động với AI — Môi trường test</p>
-        </div>
+      <main className="shell">
+        <section className="panel control-panel">
+          <div className="header">
+            <span className="eyebrow">AI Service Test</span>
+            <h1>Spec-first Slide Generator</h1>
+            <p>Tao JSON spec, preview tren FE, sua dung slide theo prompt.</p>
+          </div>
 
-        <div className="body">
-          {/* Status bar */}
           <div className="topbar">
-            <button className="mini-btn" onClick={handleCheck} type="button">Check kết nối</button>
-            <span className="hint">{checkMsg || 'Backend: chưa check • vLLM: chưa check'}</span>
+            <button className="mini-btn" type="button" onClick={checkConnection}>
+              Check ket noi
+            </button>
+            <span>{checkMsg || 'Backend chua check | vLLM chua check'}</span>
           </div>
 
-          {/* ── Plan selector ── */}
-          <div className="field" style={{ marginTop: 12 }}>
-            <label><strong>Gói dịch vụ:</strong></label>
-            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-              {['free', 'pro', 'ultra'].map(p => {
-                const colors = { free: '#64748b', pro: '#2563eb', ultra: '#7c3aed' }
-                const active = plan === p
-                return (
-                  <button key={p} type="button"
-                    onClick={() => handlePlanChange(p)}
-                    style={{
-                      flex: 1, padding: '8px 0', border: `2px solid ${colors[p]}`,
-                      borderRadius: 8, cursor: 'pointer', fontWeight: active ? 700 : 400,
-                      background: active ? colors[p] : 'transparent',
-                      color: active ? '#fff' : colors[p], fontSize: 14, transition: 'all .15s'
-                    }}>
-                    {PLAN_CONFIG[p].label}
+          <div className="tabs">
+            <button className={tab === 'text' ? 'active' : ''} onClick={() => setTab('text')} type="button">
+              Nhap text
+            </button>
+            <button className={tab === 'file' ? 'active' : ''} onClick={() => setTab('file')} type="button">
+              Upload file
+            </button>
+          </div>
+
+          {tab === 'text' ? (
+            <form onSubmit={submitText}>
+              <div className="field">
+                <label>Noi dung / prompt</label>
+                <textarea
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Nhap noi dung bai thuyet trinh..."
+                  rows={8}
+                  value={text}
+                />
+                {charHint && <p className={charOverLimit ? 'hint error-text' : 'hint'}>{charHint}</p>}
+              </div>
+              <div className="actions">
+                <button className="btn" disabled={busy || !text.trim() || charOverLimit} type="submit">
+                  Tao JSON spec
+                </button>
+                {busy && activeTaskId && (
+                  <button className="btn danger" onClick={cancel} type="button">
+                    Dung
                   </button>
-                )
-              })}
-            </div>
-            <PlanBadge plan={plan} />
-          </div>
-
-          {/* ── Số slide (Pro/Ultra) ── */}
-          {plan !== 'free' && (
-            <div className="field" style={{ marginTop: 10 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input type="checkbox" checked={autoSlide} onChange={e => setAutoSlide(e.target.checked)} />
-                Tự động nhận diện số slide (đọc từ prompt hoặc AI tự quyết định)
-              </label>
-              {!autoSlide && (
-                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <label style={{ minWidth: 80 }}>Số slide:</label>
-                  <input type="number" min={4} max={cfg.maxSlides} value={slideCount}
-                    onChange={e => setSlideCount(Math.max(4, Math.min(cfg.maxSlides, Number(e.target.value) || 10)))}
-                    style={{ width: 80 }} />
-                  <span style={{ fontSize: 12, color: '#888' }}>(tối đa {cfg.maxSlides})</span>
-                </div>
-              )}
-            </div>
-          )}
-          {/* ── Theme & Images ── */}
-          <div style={{ display: 'flex', gap: 12, marginTop: 10, flexWrap: 'wrap' }}>
-            <div className="field" style={{ flex: 1, minWidth: 160 }}>
-              <label>Giao diện (theme):</label>
-              <select value={slideTheme} onChange={e => setSlideTheme(e.target.value)}>
-                <option value="corporate">Corporate — navy</option>
-                <option value="modern">Modern — indigo</option>
-                <option value="minimal">Minimal — trắng</option>
-              </select>
-            </div>
-            <div className="field" style={{ flex: 1, minWidth: 200, paddingTop: 22 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input type="checkbox" checked={genImages} onChange={e => setGenImages(e.target.checked)} />
-                Sinh ảnh minh họa
-              </label>
-              {plan === 'free' && genImages && (
-                <p className="field-hint" style={{ margin: '4px 0 0' }}>Free: chỉ dùng ảnh Stock (Pexels/Wikimedia), không gọi GPU AI.</p>
-              )}
-              {plan === 'ultra' && genImages && (
-                <p className="field-hint" style={{ margin: '4px 0 0', color: '#7c3aed' }}>Ultra: AI sinh ảnh ở chế độ premium (steps ×1.3 + prompt nghệ thuật).</p>
-              )}
-            </div>
-          </div>
-
-          {/* ── Tabs Input ── */}
-          <div className="tabs" style={{ marginTop: 14 }}>
-            <button className={`tab${tab === 'text' ? ' active' : ''}`} onClick={() => setTab('text')}>Nhập Text</button>
-            <button className={`tab${tab === 'file' ? ' active' : ''}`} onClick={() => setTab('file')}>Upload File</button>
-          </div>
-
-          {tab === 'text' && (
-            <form onSubmit={handleTextSubmit}>
-              <div className="field">
-                <label>Nội dung:</label>
-                <textarea value={text} onChange={e => setText(e.target.value)}
-                  placeholder="Nhập nội dung bài thuyết trình..." rows={10} required />
-                {charHint && (
-                  <p className="field-hint" style={{
-                    color: charHint.kind === 'err' ? '#dc2626' : charHint.kind === 'warn' ? '#d97706' : '#16a34a'
-                  }}>{charHint.text}</p>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn" type="submit" disabled={busy || charOverLimit}>
-                  {busy ? 'Đang xử lý...' : 'Tạo Slide'}
+            </form>
+          ) : (
+            <form onSubmit={submitFile}>
+              <div className="field">
+                <label>File nguon</label>
+                <input accept=".docx,.pdf,.txt" onChange={(e) => setFile(e.target.files?.[0] || null)} type="file" />
+              </div>
+              <div className="field">
+                <label>Lenh dieu huong tuy chon</label>
+                <textarea
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Vi du: tap trung vao chuong 2, viet bang tieng Anh..."
+                  rows={3}
+                  value={text}
+                />
+              </div>
+              <div className="actions">
+                <button className="btn" disabled={busy || !file} type="submit">
+                  Tao JSON spec
                 </button>
                 {busy && activeTaskId && (
-                  <button className="btn" type="button" onClick={cancel} style={{ background: '#dc2626' }}>Dừng</button>
+                  <button className="btn danger" onClick={cancel} type="button">
+                    Dung
+                  </button>
                 )}
               </div>
             </form>
           )}
 
-          {tab === 'file' && (
-            <form onSubmit={handleFileSubmit}>
-              <div className="field">
-                <label>Chọn file (DOCX, PDF, TXT):</label>
-                <input type="file" accept=".docx,.pdf,.txt"
-                  onChange={e => setFile(e.target.files[0] || null)} required />
-                {file && <span className="file-name">📄 {file.name}</span>}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn" type="submit" disabled={busy}>
-                  {busy ? 'Đang xử lý...' : 'Tạo Slide'}
-                </button>
-                {busy && activeTaskId && (
-                  <button className="btn" type="button" onClick={cancel} style={{ background: '#dc2626' }}>Dừng</button>
-                )}
-              </div>
-            </form>
-          )}
-
-          {/* ── Progress ── */}
           {progress !== null && (
-            <div className="progress" style={{ marginTop: 14 }}>
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${progress}%` }}>{progress}%</div>
-              </div>
+            <div className="progress">
+              <div style={{ width: `${progress}%` }}>{progress}%</div>
             </div>
           )}
-
-          {/* ── Status ── */}
           {status && <div className={`status ${status.type}`}>{status.msg}</div>}
 
-          {/* ── Download ── */}
-          {downloadUrl && (
-            <a className="download-btn" href={downloadUrl} target="_blank" rel="noreferrer" download>
-              📥 Tải slide về
-            </a>
-          )}
-        </div>
-      </div>
+          <form className="revision" onSubmit={submitRevision}>
+            <div className="revision-head">
+              <div>
+                <span className="eyebrow">Prompt lai</span>
+                <h2>Sua JSON spec</h2>
+              </div>
+              <span>{sourceTaskId ? `source: ${sourceTaskId.slice(0, 8)}...` : 'chua co task'}</span>
+            </div>
+            <div className="field">
+              <label>Yeu cau chinh sua</label>
+              <textarea
+                onChange={(e) => setRevisionPrompt(e.target.value)}
+                placeholder="Vi du: sua slide 3 ngan hon, doi bullet 2 thanh..., hoac lam toan bo deck chuyen nghiep hon."
+                rows={3}
+                value={revisionPrompt}
+              />
+            </div>
+            <button className="btn secondary" disabled={busy || !sourceTaskId || !revisionPrompt.trim()} type="submit">
+              Sua spec
+            </button>
+          </form>
+        </section>
+
+        <section className="panel">
+          <SlidePreview deck={deck} />
+        </section>
+      </main>
     </div>
   )
 }

@@ -1,4 +1,4 @@
-"""JSON parsing and repair helpers for LLM responses."""
+"""Các hàm hỗ trợ phân tích và sửa lỗi JSON từ phản hồi của LLM."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ MAX_JSON_REPAIR_CHARS = 120_000
 
 
 def try_fix_json(json_str: str) -> Optional[str]:
-    """Best-effort repair for common truncated/malformed JSON responses."""
+    """Cố gắng tối đa sửa các lỗi JSON phổ biến bị cắt cụt hoặc bị lỗi định dạng."""
     try:
         json_str = (json_str or "").strip()
         if not json_str:
@@ -21,7 +21,7 @@ def try_fix_json(json_str: str) -> Optional[str]:
             )
             return None
 
-        # Fix split-array bullets: "bullets": ["a"], ["b"] -> "bullets": ["a", "b"]
+        # Sửa lỗi chia tách mảng bullet: "bullets": ["a"], ["b"] -> "bullets": ["a", "b"]
         json_str = re.sub(r"\]\s*,\s*\[", ", ", json_str)
 
         open_braces = json_str.count("{")
@@ -46,7 +46,7 @@ def parse_json_response(
     *,
     clean_result_text: Callable[[str], str],
 ) -> Optional[Dict[str, Any]]:
-    """Extract and parse the first JSON object returned by a model."""
+    """Trích xuất và phân tích cú pháp đối tượng JSON đầu tiên được trả về từ mô hình."""
     result_text = clean_result_text(result_text)
     if not result_text:
         return None

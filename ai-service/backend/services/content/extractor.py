@@ -348,12 +348,22 @@ class ContentExtractor(
         t = (text or "").strip()
         if not t:
             return False
-        # Nếu văn bản ngắn (dưới 355 ký tự), khả năng rất cao là câu lệnh/tiêu đề
-        if len(t) < 355:
+        # Nếu văn bản ngắn (dưới 800 ký tự), khả năng rất cao là câu lệnh/tiêu đề
+        if len(t) < 800:
             return True
-        # Danh sách từ khóa tiếng Việt và tiếng Anh thường gặp ở đầu câu lệnh
+        # Nếu có cấu trúc tài liệu rõ ràng → không phải prompt
+        has_headings = bool(re.search(
+            r'^#{1,3}\s+\S|^(CHƯƠNG|Chương|PHẦN|Phần|MỤC|Mục)\s+\d',
+            t, re.MULTILINE,
+        ))
+        if has_headings:
+            return False
+        has_bullets = bool(re.search(r'^\s*[-•*]\s+\S', t, re.MULTILINE))
+        if has_bullets and len(t) > 1500:
+            return False
+        # Kiểm tra prompt keywords ở đầu văn bản
         prompt_indicators = [
-            "tạo một", "tạo bài", "tạo slide", "viết bài", "viết slide", "hãy viết", "hãy tạo", 
+            "tạo một", "tạo bài", "tạo slide", "viết bài", "viết slide", "hãy viết", "hãy tạo",
             "làm một", "làm slide", "thiết kế", "soạn slide", "soạn thảo", "viết hộ",
             "create a", "create slide", "generate a", "generate slide", "make a", "make slide",
             "write a", "write slide", "design a"
@@ -400,6 +410,8 @@ class ContentExtractor(
         force_exact_slide_count: bool = False,
         progress_cb: Optional[Callable[[int, int], Awaitable[None]]] = None,
         should_stop: Optional[Callable[[], Awaitable[bool]]] = None,
+        user_instruction: Optional[str] = None,
+        doc_title_hint: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Trích xuất và cấu trúc hóa nội dung thành format phù hợp cho slide.
@@ -426,6 +438,8 @@ class ContentExtractor(
             }
         """
         target_slides = int(target_slides_override or 10)
+        self._user_instruction = user_instruction or ""
+        self._doc_title_hint = doc_title_hint or ""
         original_language_hint = self._detect_output_language_hint(raw_content or "")
         if original_language_hint in ("vi", "en"):
             self._slide_lang_hint = original_language_hint
@@ -443,7 +457,11 @@ class ContentExtractor(
             return structured
 
         # Nếu đầu vào là câu lệnh ngắn/dàn ý, tự động sinh nội dung chi tiết trước
-        if (self.vllm_available or self.gemini_available) and self._is_prompt_input(raw_content):
+        self._is_document_mode = not self._is_prompt_input(raw_content)
+        if self._is_document_mode:
+            print("[pipeline] document mode: expand will be skipped to preserve technical detail")
+
+        if (self.vllm_available or self.gemini_available) and not self._is_document_mode:
             print(f"Detected prompt/outline input. Pre-generating detailed content for {target_slides} slides...")
             if progress_cb:
                 await progress_cb(1, 18)
@@ -451,6 +469,7 @@ class ContentExtractor(
                 generated_doc = await self._generate_content_from_prompt(raw_content, target_slides)
                 if generated_doc and len(generated_doc.strip()) > 50:
                     raw_content = generated_doc
+                    self._is_document_mode = False  # generated doc treated as prompt output
                     print(f"Pre-generation complete. Document length: {len(raw_content)} chars.")
             except Exception as e:
                 print(f"Failed to pre-generate content from prompt: {e}. Proceeding with raw prompt.")
@@ -499,6 +518,11 @@ class ContentExtractor(
                     target_slides_override=target_slides_override,
                     force_exact_slide_count=force_exact_slide_count,
                 )
+                structured["title"] = self._resolve_deck_title(
+                    candidate=structured.get("title"),
+                    raw_content=raw_content,
+                    hint=self._doc_title_hint,
+                )
                 return structured
 
             if should_stop and await should_stop():
@@ -533,11 +557,101 @@ class ContentExtractor(
                 target_slides_override=target_slides_override,
                 force_exact_slide_count=force_exact_slide_count,
             )
+            structured["title"] = self._resolve_deck_title(
+                candidate=structured.get("title"),
+                raw_content=raw_content,
+                hint=self._doc_title_hint,
+            )
             return structured
         finally:
             if progress_cb:
                 await self._progress_track_finalize()
                 self._progress_track_clear()
+
+    def _resolve_deck_title(
+        self,
+        candidate: Optional[str],
+        raw_content: str,
+        hint: Optional[str] = None,
+    ) -> str:
+        """1 điểm duy nhất quyết định deck title cuối cùng.
+
+        Thứ tự ưu tiên:
+          1. candidate từ pipeline nếu không generic và dài >= 6 chars
+          2. Título từ trang bìa (400 chars đầu raw_content)
+          3. Tên file (hint)
+          4. Fallback 'Bài thuyết trình'
+        """
+        _GENERIC = {
+            "bài thuyết trình", "presentation", "mở đầu", "giới thiệu",
+            "introduction", "overview", "tổng quan", "chapter 1", "chương 1",
+            "nội dung chính",
+        }
+        c = str(candidate or "").strip()
+        if c and len(c) >= 6 and c.lower() not in _GENERIC and not any(g in c.lower() for g in _GENERIC):
+            return c
+        from_content = self._extract_smart_doc_title(raw_content, hint)
+        if from_content and from_content != "Bài thuyết trình":
+            return from_content
+        if hint:
+            s = str(hint).strip()
+            if "." in s:
+                s = s.rsplit(".", 1)[0]
+            s = s.replace("_", " ").replace("-", " ").strip()
+            if s and len(s) > 4:
+                return s
+        return "Bài thuyết trình"
+
+    def _extract_smart_doc_title(self, raw_content: str, hint: Optional[str] = None) -> str:
+        """Trích xuất tiêu đề thông minh từ trang bìa (350 ký tự đầu) hoặc tên file gốc sạch."""
+        import re
+        # 1. Làm sạch hint (tên file gốc)
+        clean_hint = ""
+        if hint:
+            s = str(hint).strip()
+            if "." in s:
+                s = s.rsplit(".", 1)[0]
+            s = s.replace("_", " ").replace("-", " ")
+            s = re.sub(r"\s+", " ", s).strip()
+            if s and len(s) > 4:
+                clean_hint = s
+
+        # 2. Quét trang bìa (400 ký tự đầu tiên của tài liệu)
+        text_head = (raw_content or "").strip()[:400]
+        lines = [l.strip() for l in text_head.split("\n") if l.strip()]
+        
+        # Bỏ các dòng rác phổ biến ở trang bìa báo cáo đại học
+        garbage_keywords = [
+            "trường đại học", "khoa công nghệ", "bộ giáo dục", "báo cáo bài tập", 
+            "university", "department", "giáo viên hướng dẫn", "sinh viên thực hiện",
+            "thành viên nhóm", "mã số sinh viên", "mssv", "lớp", "nhóm", "bài tập lớn",
+            "btl", "tiểu luận", "luận văn", "đại học bách khoa"
+        ]
+        
+        potential_titles = []
+        for line in lines[:8]:
+            line_lower = line.lower()
+            if any(k in line_lower for k in garbage_keywords):
+                continue
+            words = line.split()
+            # Ưu tiên tiêu đề dài từ 2 đến 12 từ
+            if 2 <= len(words) <= 12:
+                potential_titles.append(line)
+
+        cover_title = potential_titles[0] if potential_titles else ""
+
+        # 3. Kết hợp: Nếu có title trang bìa thì dùng, có thể ghép hậu tố Nhóm từ tên file
+        if cover_title and len(cover_title) >= 6:
+            if clean_hint and ("nhóm" in clean_hint.lower() or "nhom" in clean_hint.lower()):
+                group_match = re.search(r'(nhóm\s+\d+|nhom\s+\d+)', clean_hint, re.IGNORECASE)
+                if group_match:
+                    return f"{cover_title} — {group_match.group(1)}"
+            return cover_title
+            
+        if clean_hint:
+            return clean_hint
+            
+        return "Bài thuyết trình"
 
     async def _extract_compact_content(
         self,
@@ -662,10 +776,12 @@ class ContentExtractor(
             )
 
         ts_eff = max(1, int(target_slides or 1))
-        tokens_per_slide = 200 if compose_mode else 180
-        cap = 10000 if compose_mode else 6000
-        max_tokens = min(ts_eff * tokens_per_slide + 300, cap)
-        max_tokens = max(512, max_tokens)
+        # Tăng budget: 12–18w/bullet × 3–4 bullets/slide × overhead ≈ 280–320 tokens/slide.
+        # Cap cũ (6000) quá thấp cho 10 slides → JSON hay bị cắt → trigger repair loop.
+        tokens_per_slide = 320 if compose_mode else 280
+        cap = 14000 if compose_mode else 10000
+        max_tokens = min(ts_eff * tokens_per_slide + 400, cap)
+        max_tokens = max(768, max_tokens)
 
         base_payload: Dict[str, Any] = {
             "model": _model,
@@ -918,8 +1034,15 @@ class ContentExtractor(
             "2. No markdown code fences.\n"
             "3. Schema:\n"
             "{\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"\"}]}\n\n"
+            "DECK TITLE (top-level \"title\" field):\n"
+            "- Must be a comprehensive title that describes the WHOLE presentation (e.g. \"Phân mảnh Dữ liệu trong CSDL Phân tán\", \"AI Applications in Healthcare\").\n"
+            "- NEVER use a chapter heading (\"Mở đầu\", \"Giới thiệu\", \"Introduction\", \"Chapter 1\") as the deck title.\n"
+            "- Include the document's core topic, domain, or author/group if mentioned (e.g. \"Phân mảnh CSDL — Nhóm 17\").\n"
+            "- 4–10 words max.\n\n"
             "BULLETS:\n"
-            "- Paraphrase in your own words; keep proper names, places, numbers, dates, and technical terms from the source.\n"
+            "- Preserve specific technical terms, function names (e.g. Range_Insert, RoundRobin_partition), algorithms, numbers, percentages, and proper nouns exactly as they appear in the source.\n"
+            "- Each bullet must contain at least one concrete fact, number, term, or result from the source—no generic filler sentences.\n"
+            "- Paraphrase sentences, but do NOT remove domain-specific vocabulary.\n"
             "- Each bullet: full sentence with subject and predicate; ends with a period.\n"
             f"- Each bullet: min ~10 words and ~{bullet_chars} characters (same language as source); max {bullet_limit} words. One bullet = one complete idea with context—not a label.\n"
             "- No double-quote characters inside titles/bullets.\n"
@@ -934,14 +1057,15 @@ class ContentExtractor(
             + ANTI_TRUNCATION_TOKEN_RULE
             + "\n"
             "GOOD bullet examples (illustrative style—use the source language in actual output):\n"
-            "\"Mỹ viện trợ tài chính lớn cho Pháp trong chiến tranh Đông Dương.\"\n"
-            "\"Hiệp định Giơ-ne chia cắt đất nước tạm thời.\"\n\n"
-            "BAD examples (copy, cut off, too short):\n"
-            "\"Tại đông dương, Mỹ là nguồn tài trợ chính và to lớn của Pháp (Tháng 10 năm 1953, phó tổng...\"\n"
+            "\"Hàm Range_Insert phân chia dữ liệu theo giá trị ngưỡng, mỗi shard lưu một khoảng UserID xác định.\"\n"
+            "\"Phép chia dư (modulo) trong RoundRobin đảm bảo dữ liệu phân phối đều trên N bảng con.\"\n\n"
+            "BAD examples (too generic, no technical content):\n"
+            "\"Bài tập này giúp sinh viên học hỏi và phát triển kỹ năng.\" — too vague, no specifics.\n"
             "\"Thắng lợi quân sự.\" — too short, no context."
         )
         user_msg = (
-            "Create slides from the expanded text below. Paraphrase; do not copy verbatim.\n\n"
+            "Create slides from the expanded text below. Paraphrase; do not copy verbatim.\n"
+            "IMPORTANT: Preserve all technical terms, function names, algorithms, and numbers from the source.\n\n"
             f"TEXT:\n{content_preview}\n\n"
             "If near token limit, close JSON properly: correct slide count, full bullets, no broken sentences.\n"
             "Return JSON starting with { and ending with }."
@@ -1007,18 +1131,21 @@ class ContentExtractor(
             + "HARD RULES:\n"
             "1. Return ONLY JSON—no text outside the JSON object.\n"
             "2. Schema: {\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"\"}]}\n"
-            f"3. Each bullet: complete sentence, min ~10 words and ~45 chars, target ~10–18 words, hard max {MAX_WORDS_PER_BULLET} words, ends with a period; keep names, numbers, terms; if an idea is long, use two bullets.\n"
+            f"3. Each bullet: complete sentence, min ~10 words and ~45 chars, target ~10–18 words, hard max {MAX_WORDS_PER_BULLET} words, ends with a period; keep names, numbers, technical terms, function names exactly as in source; if an idea is long, use two bullets.\n"
             f"4. Each slide: 3–{MAX_BULLETS_PER_SLIDE} bullets (prefer 3–4 when tight on length); use {MAX_BULLETS_PER_SLIDE} only when every bullet stays short and complete.\n"
             f"5. The source has about {section_count} major sections.\n"
             f"6. {expansion_rule}"
-            "7. Paraphrase—do not copy verbatim; stay concise but complete.\n"
+            "7. Paraphrase—do not copy verbatim; stay concise but complete; preserve technical vocabulary.\n"
             "8. SLIDE TITLES: Never use generic placeholders ('Nội dung', 'Nội dung 1', 'Slide 1', 'Tiếp theo'). Every slide title must be specific and meaningful.\n"
+            "9. DECK TITLE (top-level \"title\"): Must describe the WHOLE presentation topic—NEVER use a chapter/section heading (\"Mở đầu\", \"Giới thiệu\", \"Introduction\"). Include the core subject or group name if available (e.g. \"Phân mảnh CSDL Phân tán — Nhóm 17\").\n"
+            "10. SPECIFICITY (CRITICAL): Every bullet must contain at least one concrete detail—a function name, algorithm name, number, measurement, or specific result. Generic filler sentences with no technical content are NOT allowed.\n"
             + ANTI_TRUNCATION_TOKEN_RULE
             + "\n"
-            + (f"9. {outline_rule}" if outline_rule else "")
+            + (f"11. {outline_rule}" if outline_rule else "")
         )
         user_msg = (
-            "Below is a summary by major sections (##). Compose the final deck.\n\n"
+            "Below is a summary by major sections (##). Compose the final deck.\n"
+            "IMPORTANT: Preserve all technical terms, function names, numbers, and domain-specific vocabulary from the source.\n\n"
             f"SUMMARY:\n{content_preview}\n\n"
             "Return JSON starting with { and ending with }."
             + self._user_lang_reminder()

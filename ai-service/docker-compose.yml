@@ -5,6 +5,35 @@ services:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
+      - FREE_CHAR_LIMIT=10000
+      - PRO_CHAR_LIMIT=50000
+      - ULTRA_CHAR_LIMIT=100000
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+    depends_on:
+      - redis
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/react-app:/app
+      - frontend-node-modules:/app/node_modules
+    depends_on:
+      - api
+
+  worker:
+    build: .
+    command: ["python", "backend/worker.py"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - FREE_CHAR_LIMIT=10000
+      - PRO_CHAR_LIMIT=50000
+      - ULTRA_CHAR_LIMIT=100000
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
@@ -20,3 +49,4 @@ services:
 
 volumes:
   redis-data:
+  frontend-node-modules:

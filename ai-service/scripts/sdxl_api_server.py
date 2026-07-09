@@ -32,6 +32,33 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        print(f"[env_loader] Path not found: {path}")
+        return
+    try:
+        print(f"[env_loader] Loading env file: {path}")
+        for line in path.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#") or "=" not in raw:
+                continue
+            key, value = raw.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            os.environ[key] = value  # Ghi đè hẳn để đảm bảo cập nhật
+            print(f"[env_loader] Loaded: {key} = {value}")
+    except Exception as e:
+        print(f"[env_loader] Error loading {path}: {e}")
+
+_load_env_file(Path(__file__).resolve().parent / ".env")
+_load_env_file(Path(__file__).resolve().parent.parent / ".env")
+_load_env_file(Path(__file__).resolve().parent.parent / "backend" / ".env")
+
 STATIC_DIR = Path(__file__).resolve().parent / "sdxl_static"
 
 # Lazy load pipeline
@@ -82,6 +109,32 @@ def get_pipe():
     global _pipe
     if _pipe is not None:
         return _pipe
+    import torch
+    from diffusers import FluxPipeline, StableDiffusionXLPipeline
+
+    model_type = (os.getenv("IMAGE_MODEL_TYPE", "sdxl") or "sdxl").strip().lower()
+    model_id = os.getenv("SDXL_MODEL_ID", "SG161222/RealVisXL_V5.0")
+
+    if model_type == "flux":
+        model_id = os.getenv("FLUX_MODEL_ID", "black-forest-labs/FLUX.1-schnell")
+        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        _pipe = FluxPipeline.from_pretrained(model_id, torch_dtype=dtype)
+        _pipe.enable_attention_slicing()
+        if hasattr(_pipe, "vae"):
+            _pipe.vae.enable_slicing()
+            _pipe.vae.enable_tiling()
+        if torch.cuda.is_available():
+            _pipe.enable_model_cpu_offload()
+    else:
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        _pipe = StableDiffusionXLPipeline.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            variant="fp16" if dtype == torch.float16 else None,
+        )
+        if torch.cuda.is_available():
+            _pipe = _pipe.to("cuda")
+    return _pipe
     import torch
     from diffusers import FluxPipeline, StableDiffusionXLPipeline
 
@@ -148,10 +201,10 @@ async def ping():
 class GenerateBody(BaseModel):
     prompt: str = Field(..., min_length=1)
     negative_prompt: str = ""
-    width: int = Field(1024, ge=512, le=1536)
+    width: int = Field(768, ge=512, le=1536)
     height: int = Field(768, ge=512, le=1536)
-    steps: int = Field(30, ge=1, le=80)
-    guidance_scale: float = Field(7.0, ge=0.0, le=15.0)
+    steps: int = Field(4, ge=1, le=20)
+    guidance_scale: float = Field(0.0, ge=0.0, le=15.0)
     seed: Optional[int] = None
     return_base64: bool = False
 
@@ -193,7 +246,8 @@ async def generate(body: GenerateBody) -> Any:
     model_type = (os.getenv("IMAGE_MODEL_TYPE", "sdxl") or "sdxl").strip().lower()
     gen = None
     if body.seed is not None:
-        gen = torch.Generator(device=pipe.device)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        gen = torch.Generator(device=device)
         gen.manual_seed(int(body.seed))
 
     try:
@@ -237,7 +291,8 @@ async def generate(body: GenerateBody) -> Any:
         out = pipe(**kwargs)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    image = out.images[0]
+
+    image = out.images[0]
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     raw = buf.getvalue()

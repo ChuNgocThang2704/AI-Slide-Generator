@@ -1,9 +1,9 @@
-"""Gemini-backed review for chart/table specs before rendering/returning.
+"""Đánh giá được hỗ trợ bởi Gemini cho các đặc tả biểu đồ/bảng trước khi kết xuất hoặc trả về.
 
-The reviewer is intentionally conservative: it may reject a candidate, but it
-does not create new chart/table specs. The source of truth is explicit evidence
-in the user's input or slide text; extraction heuristics and LLM proposals are
-only candidates that must pass the same contract.
+Người phản biện được thiết kế một cách thận trọng: nó có thể từ chối một ứng viên, nhưng nó
+không tạo ra các đặc tả biểu đồ/bảng mới. Nguồn gốc của sự thật là bằng chứng rõ ràng
+trong đầu vào của người dùng hoặc văn bản slide; các thuật toán trích xuất và đề xuất của LLM
+chỉ là các ứng viên phải vượt qua cùng một quy tắc kiểm tra.
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def _reviewable_records(
         if not isinstance(idx_raw, int) or idx_raw not in specs:
             continue
         source = str(rec.get("source") or rec.get("context") or "")
-        if source == "user_json":
+        if source in {"user_json", "raw_comparison_request"}:
             continue
         slide = slides[idx_raw] if idx_raw < len(slides) and isinstance(slides[idx_raw], dict) else {}
         records.append(
@@ -97,7 +97,7 @@ async def review_visual_data_specs(
     kind: str,
     raw_content: str = "",
 ) -> Tuple[Dict[int, Dict[str, Any]], List[Dict[str, Any]]]:
-    """Return filtered specs and updated debug records."""
+    """Trả về các đặc tả đã được lọc và các bản ghi debug đã cập nhật."""
     if not specs or not VISUAL_DATA_REVIEW_ENABLE:
         return specs, debug_records
     if not getattr(content_extractor, "gemini_available", False):

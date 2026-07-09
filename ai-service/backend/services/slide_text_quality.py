@@ -1,4 +1,4 @@
-"""Quality checks and limited refinement for generated slide text."""
+"""Kiểm tra chất lượng và tinh chỉnh giới hạn cho văn bản slide đã được tạo."""
 from __future__ import annotations
 
 import copy
@@ -68,7 +68,7 @@ def _clean_json_text(text: str) -> str:
 
 
 def _sanitize_inline_markup(text: str) -> str:
-    """Normalize any AI-written slide text to plain text."""
+    """Chuẩn hóa bất kỳ văn bản slide nào do AI viết thành văn bản thuần túy."""
     if text is None:
         return ""
     t = unicodedata.normalize("NFKC", html.unescape(str(text))).strip()
@@ -115,7 +115,7 @@ def _sanitize_inline_markup(text: str) -> str:
 
 
 def _sanitize_structured_text(structured: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply the plain-text contract to every user-visible text field."""
+    """Áp dụng quy tắc văn bản thuần túy cho mọi trường văn bản hiển thị với người dùng."""
     if not isinstance(structured, dict):
         return structured
     if isinstance(structured.get("title"), str):
@@ -137,10 +137,9 @@ def _sanitize_structured_text(structured: Dict[str, Any]) -> Dict[str, Any]:
             clean_bullets = []
         if clean_bullets:
             slide["bullets"] = clean_bullets
-        script = _sanitize_inline_markup(slide.get("script") or slide.get("notes") or "")
-        if script:
-            slide["script"] = script
-            slide["notes"] = script
+        notes = _sanitize_inline_markup(slide.get("notes") or slide.get("script") or "")
+        if notes:
+            slide["notes"] = notes
     return structured
 
 
@@ -289,8 +288,8 @@ def _detect_language_issues(slide: Dict[str, Any], source_language: str) -> List
     vn_hits = len(_VN_DIACRITIC_SAFE_RE.findall(text))
     en_function_hits = len(_EN_FUNCTION_RE.findall(text))
     if lang == "vi":
-        # A Vietnamese deck may contain brands/tech terms, but long prose with no
-        # Vietnamese diacritics and many English function words is likely drift.
+        # Một bài thuyết trình tiếng Việt có thể chứa các tên thương hiệu/thuật ngữ kỹ thuật, nhưng một đoạn văn dài
+        # không có dấu tiếng Việt và chứa nhiều hư từ tiếng Anh thì có khả năng là bị lệch ngôn ngữ.
         if vn_hits < 2 and en_function_hits >= 5:
             return ["language_mismatch_vi"]
     elif lang == "en":
@@ -368,7 +367,7 @@ def _evaluate_deck(structured: Dict[str, Any], source_language: str = "auto") ->
 
 
 def _apply_deck_consistency(structured: Dict[str, Any], records: List[Dict[str, Any]]) -> None:
-    """Lightweight deck-level checks without extra LLM calls."""
+    """Kiểm tra tính nhất quán ở cấp độ deck-level một cách nhanh chóng không cần thêm cuộc gọi LLM."""
     if not records:
         return
 
@@ -498,7 +497,7 @@ async def _gemini_review_slide_text(
     records: List[Dict[str, Any]],
     source_language: str = "auto",
 ) -> Tuple[Dict[str, Any], List[int]]:
-    """Ask Gemini to review weak/cut-off slides as a second-opinion critic."""
+    """Yêu cầu Gemini đánh giá các slide yếu/bị cắt cụt với tư cách là một người phản biện độc lập."""
     if not _GEMINI_REVIEW_ENABLE or not getattr(content_extractor, "gemini_available", False):
         return structured, []
     if not hasattr(content_extractor, "_gemini_completion_plain_text"):
@@ -564,9 +563,8 @@ async def _gemini_review_slide_text(
             continue
         slides[idx]["title"] = item["title"]
         slides[idx]["bullets"] = item["bullets"]
-        if item.get("script"):
-            slides[idx]["script"] = item["script"]
-            slides[idx]["notes"] = item["script"]
+        if item.get("script") or item.get("notes"):
+            slides[idx]["notes"] = item.get("script") or item.get("notes")
         changed.append(idx)
 
     return _sanitize_structured_text(improved), changed
@@ -595,11 +593,11 @@ async def _gemini_repair_titles_after_review(
     structured: Dict[str, Any],
     source_language: str = "auto",
 ) -> Tuple[Dict[str, Any], List[int]]:
-    """Use Gemini as a semantic title reviewer for the whole deck.
+    """Sử dụng Gemini như một người phản biện tiêu đề theo ngữ nghĩa cho toàn bộ bài thuyết trình.
 
-    This avoids brittle word-list fixes for incomplete titles like a proper noun
-    or technical phrase being cut in half. The fallback deterministic repair is
-    still available when Gemini is not configured or fails.
+    Điều này giúp tránh các cách sửa lỗi thô cứng dựa trên danh sách từ đối với các tiêu đề chưa hoàn chỉnh như
+    danh từ riêng hoặc cụm từ kỹ thuật bị cắt làm đôi. Giải pháp sửa lỗi dự phòng xác định (deterministic)
+    vẫn khả dụng khi Gemini không được định cấu hình hoặc gặp lỗi.
     """
     if not _GEMINI_REVIEW_ENABLE or not getattr(content_extractor, "gemini_available", False):
         fallback = copy.deepcopy(structured)
@@ -689,7 +687,7 @@ async def _gemini_repair_titles_after_review(
                 changed.append(idx)
             seen.add(key)
 
-    # Catch any slide omitted by Gemini or duplicate introduced by the model.
+    # Bắt bất kỳ slide nào bị Gemini bỏ sót hoặc tiêu đề trùng lặp do mô hình tạo ra.
     changed.extend(i for i in _repair_titles_after_review(improved) if i not in changed)
     return _sanitize_structured_text(improved), sorted(set(changed))
 
@@ -702,7 +700,7 @@ async def improve_slide_text_quality(
     max_refines: int = 3,
     source_language: str = "auto",
 ) -> Dict[str, Any]:
-    """Evaluate slide text and polish at most a few weak slides."""
+    """Đánh giá văn bản slide và làm bóng (polish) tối đa một vài slide yếu."""
     if not isinstance(structured, dict):
         return structured
 
