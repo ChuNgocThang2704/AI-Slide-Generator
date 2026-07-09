@@ -65,7 +65,7 @@ backend/.env
 backend/.env.local
 !backend/.env.example
 service-account.json
-
+front-end/
 # Logs
 *.log
 logs/

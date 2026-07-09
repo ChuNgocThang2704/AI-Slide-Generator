@@ -1,0 +1,58 @@
+server:
+  port: ${SUBSCRIPTION_SERVICE_PORT:8084}
+  servlet:
+    context-path: /api/subscription
+
+spring:
+  application:
+    name: subscription-service
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+
+  datasource:
+    url: ${SUB_DB_URL:${DB_URL:jdbc:postgresql://localhost:5432/subscription_service_db}}
+    driverClassName: org.postgresql.Driver
+    username: ${SUB_DB_USERNAME:${DB_USERNAME:username}}
+    password: ${SUB_DB_PASSWORD:${DB_PASSWORD:password}}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+      connect-timeout: 5000ms
+      timeout: 5000ms
+
+  rabbitmq:
+    host: ${RABBIT_HOST}
+    port: ${RABBIT_PORT:5671}
+    username: ${RABBIT_USER}
+    password: ${RABBIT_PASS}
+    virtual-host: ${RABBIT_VHOST}
+    ssl:
+      enabled: ${RABBIT_SSL_ENABLED:false}
+
+jwt:
+  signerKey: ${JWT_SIGNER_KEY}
+
+app:
+  payment-service:
+    url: ${PAYMENT_SERVICE_URL:http://localhost:8085/api/payment}
+  rabbitmq:
+    queue: ${RABBIT_QUEUE:notification_queue}
+
+payos:
+  return-url: ${PAYOS_RETURN_URL:http://localhost:5173/success}
+  cancel-url: ${PAYOS_CANCEL_URL:http://localhost:5173/cancel}
