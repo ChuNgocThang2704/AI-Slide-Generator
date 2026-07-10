@@ -500,7 +500,12 @@ async def build_table_specs_for_slides(
             best_idx = -1
             best_score = 0
             for idx, slide in enumerate(slides):
-                if idx in used_slides or not isinstance(slide, dict):
+                planned_visual = str(
+                    (visual_plan or {}).get(idx)
+                    or (visual_plan or {}).get(str(idx))
+                    or ""
+                ).strip().lower()
+                if idx in used_slides or not isinstance(slide, dict) or (planned_visual and planned_visual != "table"):
                     continue
                 score = _slide_match_score(slide, candidate)
                 if score > best_score:
@@ -559,7 +564,21 @@ async def build_table_specs_for_slides(
             continue
         if idx in assigned_raw:
             continue
-        planned_visual = str((visual_plan or {}).get(idx) or "").strip().lower()
+        planned_visual = str(
+            (visual_plan or {}).get(idx)
+            or (visual_plan or {}).get(str(idx))
+            or ""
+        ).strip().lower()
+        if planned_visual and planned_visual != "table":
+            debug_records.append(
+                {
+                    "slide_index": idx,
+                    "title": str(slide.get("title") or ""),
+                    "source": "visual_plan",
+                    "status": f"skipped_planned_{planned_visual}",
+                }
+            )
+            continue
         if planned_visual != "table" and chart_intent_from_slide(slide):
             continue
         inline = normalize_table_spec_from_slide(slide)
@@ -575,17 +594,6 @@ async def build_table_specs_for_slides(
                 }
             )
             print(f"[slide_tables] slide {idx} table: inline {len(inline['rows'])} row(s)")
-            continue
-
-        if planned_visual and planned_visual != "table":
-            debug_records.append(
-                {
-                    "slide_index": idx,
-                    "title": str(slide.get("title") or ""),
-                    "source": "visual_plan",
-                    "status": f"skipped_planned_{planned_visual}",
-                }
-            )
             continue
 
         deterministic = deterministic_table_spec_from_slide(slide)
@@ -652,11 +660,18 @@ async def build_table_specs_for_slides(
             for idx, slide in enumerate(slides):
                 if not isinstance(slide, dict) or chart_intent_from_slide(slide):
                     continue
+                planned_visual = str(
+                    (visual_plan or {}).get(idx)
+                    or (visual_plan or {}).get(str(idx))
+                    or ""
+                ).strip().lower()
+                if planned_visual and planned_visual != "table":
+                    continue
                 score = _slide_match_score(slide, comparison_candidate)
                 folded_slide = _fold_text(" ".join([str(slide.get("title") or "")] + _slide_lines(slide)))
                 if any(k in folded_slide for k in ("thu cong", "thong minh", "so sanh", "phuong an")):
                     score += 4
-                if str((visual_plan or {}).get(idx) or "") == "table":
+                if planned_visual == "table":
                     score += 3
                 if score > best_score:
                     best_score = score
@@ -693,11 +708,18 @@ async def build_table_specs_for_slides(
             for idx, slide in enumerate(slides):
                 if not isinstance(slide, dict) or chart_intent_from_slide(slide):
                     continue
+                planned_visual = str(
+                    (visual_plan or {}).get(idx)
+                    or (visual_plan or {}).get(str(idx))
+                    or ""
+                ).strip().lower()
+                if planned_visual and planned_visual != "table":
+                    continue
                 score = _slide_match_score(slide, comparison_candidate)
                 folded_slide = _fold_text(" ".join([str(slide.get("title") or "")] + _slide_lines(slide)))
                 if any(k in folded_slide for k in ("thu cong", "thong minh", "so sanh", "phuong an", "toc do", "chinh xac", "chi phi")):
                     score += 4
-                if str((visual_plan or {}).get(idx) or "") == "table":
+                if planned_visual == "table":
                     score += 3
                 if score > best_score:
                     best_score = score

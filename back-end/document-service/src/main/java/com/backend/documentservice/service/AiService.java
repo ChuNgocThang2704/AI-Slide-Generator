@@ -81,7 +81,6 @@ public class AiService {
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             body.add("text", prompt != null ? prompt : "");
             body.add("plan", resolveAiPlan(userRole));
-            body.add("generate_images", "true");
             body.add("image_limit", null);
 
             if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
@@ -156,6 +155,79 @@ public class AiService {
                     log.warn("[document-service] Could not delete temp AI source file: {}", tempFile.getAbsolutePath(), e);
                 }
             }
+        }
+    }
+
+    public JsonNode reviseSlides(
+            String sourceTaskId,
+            String revisionPrompt,
+            String userRole,
+            Boolean generateImages,
+            String revisionScope,
+            Integer slideIndex,
+            Integer slideNumber,
+            Integer imageLimit,
+            Consumer<String> taskIdConsumer
+    ) throws JsonProcessingException {
+        String submitUrl = buildAiUrl("/api/revise-slide-spec");
+        log.info("[document-service] Calling AI revise endpoint: {}", submitUrl);
+
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add("source_task_id", sourceTaskId);
+            body.add("revision_prompt", revisionPrompt);
+            body.add("plan", resolveAiPlan(userRole));
+            body.add("revision_scope", revisionScope == null || revisionScope.isBlank() ? "auto" : revisionScope);
+
+            if (slideIndex != null) {
+                body.add("slide_index", slideIndex);
+            }
+            if (slideNumber != null) {
+                body.add("slide_number", slideNumber);
+            }
+            if (imageLimit != null) {
+                body.add("image_limit", imageLimit);
+            }
+
+            HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
+            String responseStr = restTemplate.postForObject(submitUrl, requestEntity, String.class);
+            JsonNode submitResponse = objectMapper.readTree(responseStr);
+
+            String taskId = submitResponse.path("task_id").asText("");
+            if (taskId.isBlank()) {
+                throw new RuntimeException("AI revise response does not contain task_id: " + responseStr);
+            }
+
+            if (taskIdConsumer != null) {
+                try {
+                    taskIdConsumer.accept(taskId);
+                } catch (Exception e) {
+                    log.warn("[document-service] Error invoking revise taskIdConsumer", e);
+                }
+            }
+
+            log.info("[document-service] AI revise task submitted, task_id={}, source_task_id={}", taskId, sourceTaskId);
+            return waitForCompletedSpec(taskId);
+        } catch (HttpStatusCodeException e) {
+            String responseBody = e.getResponseBodyAsString();
+            String errorMessage = null;
+            try {
+                JsonNode errorNode = objectMapper.readTree(responseBody);
+                if (errorNode.hasNonNull("detail")) {
+                    errorMessage = errorNode.path("detail").asText();
+                } else if (errorNode.hasNonNull("message")) {
+                    errorMessage = errorNode.path("message").asText();
+                }
+            } catch (Exception jsonEx) {
+                // Ignore
+            }
+            if (errorMessage == null || errorMessage.isBlank()) {
+                errorMessage = "AI revise API error (" + e.getStatusCode() + "): " + responseBody;
+            }
+            throw new AppException(ErrorCode.AI_API_ERROR, errorMessage);
         }
     }
 

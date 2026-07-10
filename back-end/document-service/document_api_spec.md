@@ -1,106 +1,113 @@
-# Tài Liệu API: Theo Dõi Tiến Độ, Hủy Tác Vụ & Quản Lý Slide Page (Document Service)
+# Document Service API Spec - Slide JSON Flow
 
-Tài liệu này hướng dẫn chi tiết cách tích hợp các API quan trọng để **theo dõi tiến độ sinh slide của AI** (kèm chi tiết chunks/images), **hủy bỏ tác vụ sinh slide** và **quản lý dữ liệu Slide Page**.
+This document describes the API that FE should call through API Gateway.
 
----
+Base gateway URL:
 
-## Cấu Hình Chung
+```txt
+http://localhost:8080
+```
 
-* **Base Gateway URL:** `http://localhost:8080` (hoặc domain gateway thực tế)
-* **API Prefix:** `/api/document`
-* **Header bắt buộc:**
-  * `Authorization: Bearer <JWT_TOKEN>` (Token xác thực của người dùng)
-  * `Accept: application/json`
+API prefix:
 
----
+```txt
+/api/document
+```
 
-## 1. API Lấy Tiến Độ Dự Án (Project Progress)
+Required header:
 
-Dùng để FE thực hiện polling định kỳ (ví dụ: mỗi 2-3 giây) để cập nhật tiến độ sinh slide dạng thanh phần trăm (%), chi tiết tiến trình `chunks` hoặc `images` lên giao diện.
+```http
+Authorization: Bearer <JWT_TOKEN>
+Accept: application/json
+```
 
-* **Endpoint:** `/api/document/projects/{id}/progress`
-* **Method:** `GET`
-* **Path Variable:**
-  * `{id}` (UUID): ID của dự án cần lấy tiến trình.
+## Important Integration Rule
 
-### Chi Tiết Cấu Trúc Response Body (200 OK)
+FE calls Document Service only. Document Service calls AI Service internally.
 
-Phản hồi trả về có dạng bọc ngoài là `ApiResponse<ProjectProgressResponse>`:
+FE does not need to know or send AI-specific fields such as:
+
+```txt
+generate_images
+source_task_id
+target_slide_indices
+target_slide_numbers
+```
+
+Image generation is enabled by default in AI Service. AI Service also decides whether a slide should be text, table, chart, or image.
+
+## 1. Create Project And Start AI Generation
+
+```http
+POST /api/document/projects
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "prompt": "Tao dung 4 slide tieng Viet ve he thong bai do xe thong minh. Slide 2 la bang so sanh, slide 3 la bieu do duong, slide 4 co anh minh hoa.",
+  "templateId": null,
+  "sourceDocId": null,
+  "fileUrl": null,
+  "fileName": null,
+  "fileSize": null
+}
+```
+
+Response:
 
 ```json
 {
   "code": 1000,
   "message": "Success",
   "data": {
-    "projectId": "550e8400-e29b-41d4-a716-446655440000",
-    "aiTaskId": "fefe5469-9952-4714-b938-c651b3f911c7",
-    "projectStatus": 0,
-    "aiStatus": "processing",
-    "progress": 45,
-    "result": {
-      "chunks": {
-        "done": 13,
-        "total": 18
-      }
-    },
-    "errorMessage": null
+    "id": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "name": "He thong bai do xe thong minh",
+    "ownerId": "986b8ebf-d232-4b22-a8e6-7e6af4d717cf",
+    "sourceDocId": null,
+    "templateId": null,
+    "initialPrompt": "Tao dung 4 slide tieng Viet...",
+    "slideUrl": null,
+    "status": 0,
+    "aiTaskId": null,
+    "createdAt": "2026-07-10T08:00:00Z",
+    "updatedAt": "2026-07-10T08:00:00Z"
   }
 }
 ```
 
-#### Giải thích các trường dữ liệu trong `data`:
+Project status in the current AI flow:
 
-| Trường | Kiểu dữ liệu | Mô tả |
-| :--- | :--- | :--- |
-| `projectId` | UUID | ID của dự án đang được truy vấn. |
-| `aiTaskId` | String | ID tác vụ được sinh ra bởi AI Engine (có thể `null` ở giây đầu tiên khi vừa submit). |
-| `projectStatus` | Integer | Trạng thái dự án dưới Database: <br>• `0`: `CREATE` (Đang khởi tạo/đang xử lý)<br>• `1`: `DONE` (Hoàn thành sinh slide)<br>• `2`: `FAILED` (Tạo slide thất bại) |
-| `aiStatus` | String | Trạng thái trả về từ AI Engine: <br>• `"processing"`: Đang xử lý<br>• `"completed"`: AI hoàn tất sinh slide spec<br>• `"failed"` / `"error"`: AI xảy ra lỗi khi tạo |
-| `progress` | Integer | Tiến độ phần trăm hoàn thành, nhận giá trị từ `0` đến `100`. |
-| `result` | Object | **[MỚI]** Đối tượng chi tiết tiến trình từ AI Engine. Trong lúc xử lý văn bản sẽ trả về `chunks: { done, total }`, trong lúc sinh ảnh sẽ trả về `images: { done, total }`. |
-| `errorMessage` | String | Thông điệp lỗi chi tiết từ AI Engine nếu quá trình sinh slide bị lỗi (mặc định là `null`). |
-
----
-
-### Các Kịch Bản Phản Hồi Ví Dụ
-
-#### Kịch Bản A: Đang trích xuất và cấu trúc hóa văn bản (Chunks Progress)
-```json
-{
-  "code": 1000,
-  "message": "Success",
-  "data": {
-    "projectId": "550e8400-e29b-41d4-a716-446655440000",
-    "aiTaskId": "fefe5469-9952-4714-b938-c651b3f911c7",
-    "projectStatus": 0,
-    "aiStatus": "processing",
-    "progress": 45,
-    "result": {
-      "chunks": {
-        "done": 13,
-        "total": 18
-      }
-    },
-    "errorMessage": null
-  }
-}
+```txt
+0 = processing
+1 = completed
+2 = failed
 ```
 
-#### Kịch Bản B: Đang sinh ảnh minh họa AI cho slide (Images Progress)
+## 2. Get Project Progress
+
+```http
+GET /api/document/projects/{id}/progress
+```
+
+Processing response:
+
 ```json
 {
   "code": 1000,
   "message": "Success",
   "data": {
-    "projectId": "550e8400-e29b-41d4-a716-446655440000",
-    "aiTaskId": "fefe5469-9952-4714-b938-c651b3f911c7",
+    "projectId": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "aiTaskId": "95915ceb-eda2-4890-a954-efff6069c547",
     "projectStatus": 0,
     "aiStatus": "processing",
-    "progress": 72,
+    "progress": 68,
     "result": {
       "images": {
-        "done": 2,
-        "total": 5
+        "done": 1,
+        "total": 4
       }
     },
     "errorMessage": null
@@ -108,14 +115,15 @@ Phản hồi trả về có dạng bọc ngoài là `ApiResponse<ProjectProgress
 }
 ```
 
-#### Kịch Bản C: Sinh slide thành công hoàn toàn
+Completed response:
+
 ```json
 {
   "code": 1000,
   "message": "Success",
   "data": {
-    "projectId": "550e8400-e29b-41d4-a716-446655440000",
-    "aiTaskId": "fefe5469-9952-4714-b938-c651b3f911c7",
+    "projectId": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "aiTaskId": "95915ceb-eda2-4890-a954-efff6069c547",
     "projectStatus": 1,
     "aiStatus": "completed",
     "progress": 100,
@@ -125,16 +133,35 @@ Phản hồi trả về có dạng bọc ngoài là `ApiResponse<ProjectProgress
 }
 ```
 
----
+FE should consider the deck ready when:
 
-## 2. API Lấy & Cập Nhật Danh Sách Trang Slide (Slide Pages API)
+```txt
+projectStatus = 1
+aiStatus = completed
+```
 
-### 🔹 Lấy danh sách các trang slide của dự án
-* **Endpoint:** `/api/document/projects/{projectId}/pages`
-* **Method:** `GET`
+Failed response:
 
-### 🔹 Phản hồi cấu trúc Slide Page (200 OK)
-Mỗi trang slide trả về bao gồm nội dung và ghi chú (`notes`):
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "data": {
+    "projectStatus": 2,
+    "aiStatus": "failed",
+    "progress": 0,
+    "errorMessage": "AI error message"
+  }
+}
+```
+
+## 3. Get Slide Pages
+
+```http
+GET /api/document/projects/{id}/pages
+```
+
+Response:
 
 ```json
 {
@@ -142,37 +169,295 @@ Mỗi trang slide trả về bao gồm nội dung và ghi chú (`notes`):
   "message": "Success",
   "data": [
     {
-      "id": "b7d19a2e-...",
-      "projectId": "550e8400-e29b-41d4-a716-446655440000",
+      "id": "slide-page-id",
+      "projectId": "57c354ca-cfde-40f9-8733-57bb69d303e5",
       "pageIndex": 0,
-      "title": "Nguyên lý hoạt động của thuật toán Karp-Rabin",
+      "title": "Tong quan he thong",
       "bullets": [
-        "Thuật toán Karp-Rabin sử dụng hàm băm để đơn giản hóa việc so sánh chuỗi.",
-        "Phương pháp này kiểm tra sự tương đồng giữa hai chuỗi con một cách hiệu quả."
+        "He thong bai do xe thong minh tu dong hoa quy trinh ra vao.",
+        "Camera, cam bien IoT va bang dien tu cap nhat du lieu theo thoi gian thuc."
       ],
-      "notes": "Chào mừng quý vị đến với phần trình bày về thuật toán Karp-Rabin...",
+      "notes": "Noi dung thuyet trinh cho slide.",
       "chart": null,
       "table": null,
-      "imageUrl": "http://localhost:8000/outputs/images/fefe5469_1.jpg",
-      "layout": "text_image",
-      "primaryVisual": "image",
-      "likelyMultiPptxSlides": false
+      "imageUrl": null,
+      "layout": "text_only",
+      "primaryVisual": null,
+      "likelyMultiPptxSlides": false,
+      "createdAt": "2026-07-10T08:00:00Z",
+      "updatedAt": "2026-07-10T08:00:00Z"
     }
   ]
 }
 ```
 
----
+Common layouts:
 
-## 3. API Hủy Tác Vụ Sinh Slide (Cancel Project Task)
+```txt
+text_only
+text_image
+text_chart
+text_table
+```
 
-* **Endpoint:** `/api/document/projects/{id}/cancel`
-* **Method:** `POST`
+Render rule:
+
+```txt
+table != null       -> render table
+else chart != null  -> render chart
+else imageUrl set   -> render image
+else                -> render text only
+```
+
+## 4. Revise Project Slides
+
+```http
+POST /api/document/projects/{id}/revise
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "revisionPrompt": "Sua rieng slide 4: doi anh thanh bai do xe trong truong dai hoc hien dai co camera ANPR, cam bien IoT va bang dien tu hien thi so cho trong. Giu nguyen cac slide con lai.",
+  "revisionScope": "auto",
+  "slideNumber": 4,
+  "slideIndex": null,
+  "imageLimit": null
+}
+```
+
+Minimum request:
+
+```json
+{
+  "revisionPrompt": "Sua slide 2 thanh bang so sanh ro rang hon"
+}
+```
+
+Fields:
+
+| Field | Required | Description |
+|---|---:|---|
+| `revisionPrompt` | Yes | Natural-language edit request. |
+| `revisionScope` | No | `auto`, `slide`, or `deck`. Default/recommended: `auto`. |
+| `slideNumber` | No | 1-based slide number. Useful when FE selected a slide. |
+| `slideIndex` | No | 0-based slide index. |
+| `imageLimit` | No | Optional cap for regenerated images. |
+| `generateImages` | No | Deprecated for FE. AI Service defaults to image generation enabled. |
+
+Response:
 
 ```json
 {
   "code": 1000,
   "message": "Success",
-  "data": "Hủy tác vụ thành công"
+  "data": {
+    "id": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "status": 0,
+    "aiTaskId": "64c7ea2d-2dcd-4768-991e-593736dbc600"
+  }
 }
+```
+
+After submit:
+
+```txt
+1. Poll GET /api/document/projects/{id}/progress
+2. When completed, call GET /api/document/projects/{id}/pages
+3. Replace FE slide state with the new pages
+```
+
+Supported behavior:
+
+- Edit text/title/bullets of one slide.
+- Regenerate image for one slide.
+- Convert or update table/chart.
+- Add new slides.
+- Delete slides.
+- Rewrite the full deck.
+
+Examples:
+
+```txt
+Sua rieng slide 1: doi tieu de thanh "Tong quan he thong bai do xe thong minh". Giu nguyen cac slide con lai.
+```
+
+```txt
+Sua rieng slide 2 thanh bang so sanh gom cot Tieu chi, Thu cong, Thong minh, Nhan xet.
+```
+
+```txt
+Sua rieng slide 3: giu bieu do duong va cap nhat so lieu Q1 50%, Q2 62%, Q3 76%, Q4 88%.
+```
+
+```txt
+Sua rieng slide 4: doi anh thanh bai do xe dai hoc co camera ANPR, cam bien IoT va bang dien tu.
+```
+
+```txt
+Them 1 slide cuoi ve loi ich khi trien khai he thong bai do xe thong minh.
+```
+
+```txt
+Xoa slide 3 vi noi dung chua can thiet, giu cac slide con lai.
+```
+
+## 5. Table Contract
+
+```json
+{
+  "title": "Bang so sanh",
+  "headers": ["Tieu chi", "Thu cong", "Thong minh", "Nhan xet"],
+  "rows": [
+    ["Toc do xu ly", "Cham", "Nhanh", "He thong thong minh tot hon"],
+    ["Do chinh xac", "Thap", "Cao", "Giam sai sot"]
+  ]
+}
+```
+
+## 6. Chart Contract
+
+Single-series:
+
+```json
+{
+  "title": "Hieu qua su dung bai do xe theo quy",
+  "chart_type": "line",
+  "type": "line",
+  "labels": ["Q1", "Q2", "Q3", "Q4"],
+  "categories": ["Q1", "Q2", "Q3", "Q4"],
+  "values": [50, 62, 76, 88],
+  "unit": "percent",
+  "is_percent": true
+}
+```
+
+Multi-series:
+
+```json
+{
+  "title": "So sanh hieu suat",
+  "chart_type": "bar",
+  "type": "bar",
+  "labels": ["A", "B", "C"],
+  "categories": ["A", "B", "C"],
+  "series": [
+    {
+      "name": "Nam 2025",
+      "values": [10, 20, 30]
+    }
+  ],
+  "unit": "number",
+  "is_percent": false
+}
+```
+
+FE chart rule:
+
+```txt
+type = chart.chart_type || chart.type
+labels = chart.labels || chart.categories
+if chart.series exists, render multi-series; otherwise render chart.values
+```
+
+## 7. Source Document Upload
+
+```http
+POST /api/document/source-documents/upload
+Content-Type: multipart/form-data
+```
+
+Form field:
+
+```txt
+file=<pdf/docx/txt>
+```
+
+Response:
+
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "data": {
+    "fileName": "report.pdf",
+    "fileUrl": "https://...",
+    "fileSize": 123456
+  }
+}
+```
+
+## 8. Manual Slide Page Update
+
+```http
+POST /api/document/projects/{projectId}/pages/{pageId}
+```
+
+Request can be partial:
+
+```json
+{
+  "title": "Tieu de moi",
+  "bullets": ["Y 1", "Y 2"],
+  "notes": "Script moi",
+  "chart": null,
+  "table": null,
+  "imageUrl": "http://...",
+  "layout": "text_image",
+  "primaryVisual": "image",
+  "likelyMultiPptxSlides": false
+}
+```
+
+## 9. Sync Slide Pages
+
+```http
+POST /api/document/projects/{id}/pages/sync
+```
+
+Request:
+
+```json
+[
+  {
+    "id": "existing-page-id",
+    "title": "Slide 1",
+    "bullets": ["Y 1"],
+    "notes": "Script",
+    "chart": null,
+    "table": null,
+    "imageUrl": "",
+    "layout": "text_only",
+    "primaryVisual": null,
+    "likelyMultiPptxSlides": false
+  }
+]
+```
+
+## 10. Cancel Task
+
+```http
+POST /api/document/projects/{id}/cancel
+```
+
+Response:
+
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "data": "Huy tac vu thanh cong"
+}
+```
+
+## 11. Other Project APIs
+
+```http
+GET /api/document/projects?page=0&size=10&search=
+GET /api/document/projects/{id}
+DELETE /api/document/projects
+GET /api/document/projects/{id}/task-logs
+GET /api/document/projects/{id}/exports
 ```

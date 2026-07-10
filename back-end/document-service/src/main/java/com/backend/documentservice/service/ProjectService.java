@@ -1,6 +1,7 @@
 package com.backend.documentservice.service;
 
 import com.backend.documentservice.dto.request.ProjectCreateRequest;
+import com.backend.documentservice.dto.request.ProjectReviseRequest;
 import com.backend.documentservice.dto.request.ProjectUpdateRequest;
 import com.backend.documentservice.dto.response.ProjectResponse;
 import com.backend.documentservice.dto.response.ProjectProgressResponse;
@@ -265,6 +266,104 @@ public class ProjectService {
     }
 
     @Transactional
+    @CacheEvict(allEntries = true)
+    public ProjectResponse requestSlideRevision(UUID projectId, UUID userId, ProjectReviseRequest request, String userRole) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
+
+        if (!project.getOwnerId().equals(userId)) {
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        }
+
+        if (project.getAiTaskId() == null || project.getAiTaskId().isBlank()) {
+            throw new AppException(ErrorCode.AI_API_ERROR, "Project chua co AI task hoan thanh de sua.");
+        }
+
+        project.setStatus(Constants.PROJECT_STATUS.CREATE);
+        project.setAiTaskId(null);
+        project = projectRepository.save(project);
+
+        AITaskLog reviseLog = AITaskLog.builder()
+                .projectId(projectId)
+                .taskType(Constants.TASK_TYPE.EXTRACT_TEXT)
+                .status(Constants.TASK_STATUS.PROCESSING)
+                .startedAt(Instant.now())
+                .build();
+        aiTaskLogRepository.save(reviseLog);
+
+        return projectMapper.toDto(project);
+    }
+
+    public String getCurrentAiTaskId(UUID projectId, UUID userId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
+
+        if (!project.getOwnerId().equals(userId)) {
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        }
+
+        String taskId = project.getAiTaskId();
+        if (taskId == null || taskId.isBlank()) {
+            throw new AppException(ErrorCode.AI_API_ERROR, "Project chua co AI task hoan thanh de sua.");
+        }
+        return taskId;
+    }
+
+    @Async
+    public void reviseSlidesAsync(UUID projectId, String sourceTaskId, ProjectReviseRequest request, String userRole) {
+        try {
+            Project project = projectRepository.findById(projectId)
+                    .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
+
+            JsonNode aiResponse = aiService.reviseSlides(
+                    sourceTaskId,
+                    request.getRevisionPrompt(),
+                    userRole,
+                    request.getGenerateImages(),
+                    request.getRevisionScope(),
+                    request.getSlideIndex(),
+                    request.getSlideNumber(),
+                    request.getImageLimit(),
+                    taskId -> {
+                        Project proj = projectRepository.findById(projectId).orElse(project);
+                        proj.setAiTaskId(taskId);
+                        projectRepository.save(proj);
+                    }
+            );
+
+            JsonNode parsedResponse = fixJsonNodeEncoding(aiResponse);
+            Project proj = projectRepository.findById(projectId).orElse(project);
+
+            String deckTitle = parsedResponse.path("deck").path("title").asText("");
+            if (!deckTitle.isEmpty()) {
+                proj.setName(deckTitle);
+            }
+
+            replaceSlidePagesFromDeck(proj, parsedResponse);
+            updateAiTaskLogsFromProgress(proj.getId(), "completed", null);
+            proj.setStatus(Constants.PROJECT_STATUS.DONE);
+            projectRepository.save(proj);
+            log.info("[document-service] Da cap nhat slide sau khi revise, project ID: {}", projectId);
+        } catch (AppException e) {
+            log.error("[document-service] Loi ung dung khi revise slide tu AI cho project ID: {}", projectId, e);
+            updateAiTaskLogsFromProgress(projectId, "failed", objectMapper.createObjectNode().put("error", e.getMessage()));
+            Project proj = projectRepository.findById(projectId).orElse(null);
+            if (proj != null) {
+                proj.setStatus(Constants.PROJECT_STATUS.FAILED);
+                projectRepository.save(proj);
+            }
+        } catch (Exception e) {
+            log.error("[document-service] That bai khi revise slide tu AI cho project ID: {}", projectId, e);
+            updateAiTaskLogsFromProgress(projectId, "failed", objectMapper.createObjectNode().put("error", e.getMessage()));
+            Project proj = projectRepository.findById(projectId).orElse(null);
+            if (proj != null) {
+                proj.setStatus(Constants.PROJECT_STATUS.FAILED);
+                projectRepository.save(proj);
+            }
+        }
+    }
+
+    @Transactional
     public ProjectProgressResponse getProjectProgress(UUID projectId, UUID userId) {
         log.info("[document-service] Lấy tiến trình project id: {} của user: {}", projectId, userId);
         Project project = projectRepository.findById(projectId)
@@ -446,6 +545,75 @@ public class ProjectService {
         } catch (Exception e) {
             log.warn("[document-service] Lỗi khi cập nhật ai_task_logs từ tiến trình AI", e);
         }
+    }
+
+    private void replaceSlidePagesFromDeck(Project project, JsonNode aiResponse) {
+        JsonNode generatedSlides = aiResponse.path("deck").path("slides");
+        if (!generatedSlides.isArray()) {
+            throw new AppException(ErrorCode.AI_API_ERROR, "AI response khong co deck.slides hop le.");
+        }
+
+        List<SlidePage> currentPages = slidePageRepository.findByProjectIdOrderByPageIndexAsc(project.getId());
+        if (!currentPages.isEmpty()) {
+            slidePageRepository.deleteAll(currentPages);
+        }
+
+        List<SlidePage> slidePagesToSave = new java.util.ArrayList<>();
+        for (int i = 0; i < generatedSlides.size(); i++) {
+            JsonNode slideNode = generatedSlides.get(i);
+
+            int index = slideNode.path("index").asInt(i);
+            String title = slideNode.path("title").asText("");
+            String notes = slideNode.path("notes").asText("");
+            String layout = slideNode.path("layout").asText("text_only");
+            String primaryVisual = slideNode.path("primary_visual").asText("");
+            boolean likelyMulti = slideNode.path("likely_multi_pptx_slides").asBoolean(false);
+
+            String imageUrl = "";
+            JsonNode imageNode = slideNode.path("image");
+            if (imageNode.isObject()) {
+                imageUrl = imageNode.path("url").asText("");
+            }
+
+            if (imageUrl != null && imageUrl.startsWith("/")) {
+                imageUrl = normalizeBaseUrl(aiUrl) + imageUrl;
+            }
+
+            try {
+                String bulletsJson = objectMapper.writeValueAsString(slideNode.path("bullets"));
+                String chartJson = slideNode.hasNonNull("chart") && !slideNode.path("chart").isNull()
+                        ? objectMapper.writeValueAsString(slideNode.path("chart")) : null;
+                String tableJson = slideNode.hasNonNull("table") && !slideNode.path("table").isNull()
+                        ? objectMapper.writeValueAsString(slideNode.path("table")) : null;
+
+                SlidePage slidePage = SlidePage.builder()
+                        .projectId(project.getId())
+                        .pageIndex(index)
+                        .title(title)
+                        .bullets(bulletsJson)
+                        .notes(notes)
+                        .chart(chartJson)
+                        .table(tableJson)
+                        .imageUrl(imageUrl)
+                        .layout(layout)
+                        .primaryVisual(primaryVisual)
+                        .likelyMultiPptxSlides(likelyMulti)
+                        .build();
+                slidePagesToSave.add(slidePage);
+            } catch (Exception e) {
+                throw new AppException(ErrorCode.AI_API_ERROR, "Khong the luu du lieu slide tu AI: " + e.getMessage());
+            }
+        }
+
+        slidePageRepository.saveAll(slidePagesToSave);
+    }
+
+    private String normalizeBaseUrl(String baseUrl) {
+        String base = baseUrl == null || baseUrl.isBlank() ? "" : baseUrl.trim();
+        while (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return base;
     }
 
     @Transactional

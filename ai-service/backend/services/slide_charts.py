@@ -756,6 +756,15 @@ async def build_chart_specs_for_slides(
                 f"[slide_charts] slide {idx} chart: "
                 f"{spec['chart_type']} {len(spec['labels'])} point(s)"
             )
+    forced_chart_specs = {
+        idx: spec
+        for idx, spec in out.items()
+        if str(
+            (visual_plan or {}).get(idx)
+            or (visual_plan or {}).get(str(idx))
+            or ""
+        ).strip().lower() == "chart"
+    }
     out, debug_records = await review_visual_data_specs(
         content_extractor,
         structured,
@@ -764,6 +773,9 @@ async def build_chart_specs_for_slides(
         kind="chart",
         raw_content=raw_content,
     )
+    for idx, spec in forced_chart_specs.items():
+        if idx not in out:
+            out[idx] = spec
 
     if task_id:
         _write_debug_json(task_id, debug_records)

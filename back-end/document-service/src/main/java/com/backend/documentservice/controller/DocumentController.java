@@ -1,6 +1,7 @@
 package com.backend.documentservice.controller;
 
 import com.backend.documentservice.dto.request.ProjectCreateRequest;
+import com.backend.documentservice.dto.request.ProjectReviseRequest;
 import com.backend.documentservice.dto.request.ProjectUpdateRequest;
 import com.backend.documentservice.dto.request.SlidePageUpdateRequest;
 import com.backend.documentservice.dto.response.ApiResponse;
@@ -86,6 +87,18 @@ public class DocumentController {
     public ApiResponse<ProjectProgressResponse> getProjectProgress(@PathVariable UUID id) {
         return ApiResponse.<ProjectProgressResponse>builder()
                 .data(projectService.getProjectProgress(id, currentUserId()))
+                .build();
+    }
+
+    @PostMapping("/projects/{id}/revise")
+    public ApiResponse<ProjectResponse> reviseProjectSlides(
+            @PathVariable UUID id,
+            @RequestBody @Valid ProjectReviseRequest request) {
+        String sourceTaskId = projectService.getCurrentAiTaskId(id, currentUserId());
+        ProjectResponse response = projectService.requestSlideRevision(id, currentUserId(), request, currentUserRole());
+        projectService.reviseSlidesAsync(id, sourceTaskId, request, currentUserRole());
+        return ApiResponse.<ProjectResponse>builder()
+                .data(response)
                 .build();
     }
 

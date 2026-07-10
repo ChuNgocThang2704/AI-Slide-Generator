@@ -34,6 +34,13 @@ node_modules/
 dist/
 build/
 
+# Java/Maven build outputs
+target/
+*.class
+*.jar
+*.war
+*.ear
+
 # IDEs
 .vscode/
 .idea/
@@ -57,6 +64,23 @@ scripts/_test_sdxl_out.png
 *.png
 *.jpg
 *.jpeg
+
+# Archives and packaged artifacts
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# AI/model artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+*.gguf
 
 # Environment variables & Credentials
 .env

@@ -98,8 +98,8 @@ def _plain_slide_text(value: Any) -> str:
 
 
 def _form_wants_slide_images(generate_images: Optional[str]) -> bool:
-    s = (generate_images or "false").strip().lower()
-    if s not in ("1", "true", "yes", "on"):
+    s = (generate_images or "true").strip().lower()
+    if s in ("0", "false", "no", "off"):
         return False
     if not (IMAGE_GEN_API_BASE_URL or "").strip():
         print("[main] generate_images=true but IMAGE_GEN_API_BASE_URL is empty, skip SDXL.")
@@ -152,6 +152,78 @@ def _detect_requested_slide_count(text: str) -> Optional[int]:
     return None
 
 
+def _explicit_visual_targets_from_prompt(text: str, slide_count: int) -> Dict[int, str]:
+    folded = _fold_revision_text(text)
+    if not folded or slide_count <= 0:
+        return {}
+
+    targets: Dict[int, str] = {}
+    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
+        try:
+            idx = int(match.group(1)) - 1
+        except Exception:
+            continue
+        if not (0 <= idx < slide_count):
+            continue
+
+        window_end = min(len(folded), match.end() + 180)
+        next_slide = re.search(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded[match.end():window_end])
+        if next_slide:
+            window_end = match.end() + next_slide.start()
+        window = folded[match.start():window_end]
+        before = folded[max(0, match.start() - 80): match.start()]
+        context = before + " " + window
+        if re.search(r"\b(?:giu|khong\s+doi|keep)\b", context):
+            continue
+        if re.search(r"\b(?:anh|hinh|image|photo|picture|minh\s+hoa)\b", window):
+            targets[idx] = "image"
+        elif re.search(r"\b(?:bang|table|so\s+sanh)\b", window):
+            targets[idx] = "table"
+        elif re.search(r"\b(?:bieu\s*do|chart|graph)\b", window):
+            targets[idx] = "chart"
+    return targets
+
+
+def _explicit_chart_type_targets_from_prompt(text: str, slide_count: int) -> Dict[int, str]:
+    folded = _fold_revision_text(text)
+    if not folded or slide_count <= 0:
+        return {}
+
+    targets: Dict[int, str] = {}
+    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
+        try:
+            idx = int(match.group(1)) - 1
+        except Exception:
+            continue
+        if not (0 <= idx < slide_count):
+            continue
+
+        window_end = min(len(folded), match.end() + 220)
+        next_slide = re.search(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded[match.end():window_end])
+        if next_slide:
+            window_end = match.end() + next_slide.start()
+        window = folded[match.start():window_end]
+        if not re.search(r"\b(?:bieu\s*do|chart|graph)\b", window):
+            continue
+        if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", window):
+            targets[idx] = "line"
+        elif re.search(r"\b(?:tron|pie|thi\s+phan)\b", window):
+            targets[idx] = "pie"
+        elif re.search(r"\b(?:cot|column|bar)\b", window):
+            targets[idx] = "bar"
+    return targets
+
+
+def _apply_explicit_chart_type_targets(chart_specs: Optional[dict], targets: Dict[int, str]) -> None:
+    if not chart_specs or not targets:
+        return
+    for idx, chart_type in targets.items():
+        spec = chart_specs.get(idx)
+        if isinstance(spec, dict) and chart_type:
+            spec["chart_type"] = chart_type
+            spec["type"] = chart_type
+
+
 def _detect_generate_images_request(text: str) -> bool:
     """Tự động phát hiện xem người dùng có yêu cầu sinh ảnh trong câu lệnh không (ví dụ: 'kèm ảnh', 'có hình', 'sinh ảnh')"""
     if not text:
@@ -198,7 +270,7 @@ def _validate_plan_limits(
         actual_slide_count = slide_count
         if (actual_slide_count is None or actual_slide_count <= 0) and raw_content:
             detected = _detect_requested_slide_count(raw_content)
-            if detected and 4 <= detected <= slide_limit_max:
+            if detected and 1 <= detected <= slide_limit_max:
                 print(f"[api] Detected requested slide count in prompt: {detected}")
                 actual_slide_count = detected
 
@@ -330,8 +402,12 @@ def _build_slide_spec_payload(
             c_spec["type"] = c_spec.get("chart_type")
             c_spec["categories"] = c_spec.get("labels")
             row["chart"] = c_spec
+        elif isinstance(slide.get("chart"), dict):
+            row["chart"] = slide.get("chart")
         if table_specs and idx in table_specs:
             row["table"] = table_specs[idx]
+        elif isinstance(slide.get("table"), dict):
+            row["table"] = slide.get("table")
         if image_paths and idx in image_paths:
             img_path = str(image_paths[idx])
             img_url = _image_url_from_path(img_path)
@@ -400,6 +476,12 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
         image = slide.get("image")
         if isinstance(image, dict) and image.get("url"):
             row["image_url"] = str(image.get("url"))
+        table = slide.get("table")
+        if isinstance(table, dict):
+            row["table"] = table
+        chart = slide.get("chart")
+        if isinstance(chart, dict):
+            row["chart"] = chart
         slides_out.append(row)
 
     if not slides_out:
@@ -489,6 +571,149 @@ def _revision_prompt_mentions_image(text: str) -> bool:
     )
 
 
+def _revision_prompt_mentions_table(text: str) -> bool:
+    folded = _fold_revision_text(text)
+    return bool(
+        re.search(
+            r"\b(?:bang|table|comparison\s+table)\b|\bdu\s+lieu\s+bang\b|\bso\s+sanh\b",
+            folded,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _revision_prompt_add_slide_count(text: str) -> int:
+    folded = _fold_revision_text(text)
+    if not re.search(r"\b(?:them|add|bo\s+sung|chen)\b", folded):
+        return 0
+    match = re.search(r"\b(?:them|add|bo\s+sung|chen)\s*(\d+)?\s*(?:slide|trang)\b", folded)
+    if match:
+        try:
+            return max(1, min(int(match.group(1) or "1"), 10))
+        except Exception:
+            return 1
+    if re.search(r"\b(?:slide|trang)\s+(?:moi|cuoi)\b", folded):
+        return 1
+    return 0
+
+
+def _revision_prompt_delete_slide_indices(text: str, slide_count: int) -> List[int]:
+    folded = _fold_revision_text(text)
+    if slide_count <= 0 or not re.search(r"\b(?:xoa|delete|remove|bo)\b", folded):
+        return []
+    targets: set[int] = set()
+    for match in re.finditer(r"\b(?:xoa|delete|remove|bo)\s*(?:slide|trang)?\s*(?:so|thu)?\s*(\d+)\b", folded):
+        try:
+            idx = int(match.group(1)) - 1
+        except Exception:
+            continue
+        if 0 <= idx < slide_count:
+            targets.add(idx)
+    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
+        before = folded[max(0, match.start() - 60): match.start()]
+        if not re.search(r"\b(?:xoa|delete|remove|bo)\b", before):
+            continue
+        try:
+            idx = int(match.group(1)) - 1
+        except Exception:
+            continue
+        if 0 <= idx < slide_count:
+            targets.add(idx)
+    if re.search(r"\b(?:xoa|delete|remove|bo).{0,30}(?:slide|trang)\s+(?:cuoi|last|final)\b", folded):
+        targets.add(slide_count - 1)
+    if re.search(r"\b(?:xoa|delete|remove|bo).{0,30}(?:slide|trang)\s+(?:dau|first)\b", folded):
+        targets.add(0)
+    return sorted(targets)
+
+
+def _revision_prompt_title_overrides(text: str, slide_count: int) -> Dict[int, str]:
+    raw = str(text or "")
+    folded = _fold_revision_text(raw)
+    if slide_count <= 0 or not re.search(r"\b(?:tieu\s*de|title)\b", folded):
+        return {}
+    overrides: Dict[int, str] = {}
+    patterns = [
+        r"(?is)(?:slide|trang)\s*(?:so|thu)?\s*(\d+).*?(?:tieu\s*de|title).*?(?:thanh|la|to)\s*[\"'“”]?([^\"'“”.\n]+)",
+        r"(?is)(?:doi|sua|change|set).*?(?:tieu\s*de|title).*?(?:slide|trang)\s*(?:so|thu)?\s*(\d+).*?(?:thanh|la|to)\s*[\"'“”]?([^\"'“”.\n]+)",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw):
+            try:
+                idx = int(match.group(1)) - 1
+            except Exception:
+                continue
+            title = _plain_slide_text(match.group(2)).strip(" .:-\"'")
+            if 0 <= idx < slide_count and title:
+                overrides[idx] = title
+    return overrides
+
+
+def _split_revision_list(value: str) -> List[str]:
+    parts = re.split(r"[,;|/]+|\s+-\s+", str(value or ""))
+    return [p.strip(" .:-") for p in parts if p and p.strip(" .:-")]
+
+
+def _fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]]:
+    text = str(prompt or "")
+    folded = _fold_revision_text(text)
+    if not _revision_prompt_mentions_table(text):
+        return None
+
+    headers: List[str] = []
+    rows: List[str] = []
+
+    header_match = re.search(
+        r"(?i)(?:headers?|cot|columns?)\s*(?:gom|la|:)?\s*([^.;\n]+)",
+        text,
+    )
+    if header_match:
+        headers = _split_revision_list(header_match.group(1))
+
+    row_match = re.search(
+        r"(?i)(?:rows?|hang|cac\s+hang)\s*(?:gom|la|:)?\s*([^.;\n]+)",
+        text,
+    )
+    if row_match:
+        rows = _split_revision_list(row_match.group(1))
+
+    if len(headers) < 2:
+        headers = ["Tieu chi", "Noi dung"]
+    if not rows:
+        rows = ["Noi dung can sua"]
+
+    def value_for(header: str, criterion: str) -> str:
+        h = _fold_revision_text(header)
+        c = _fold_revision_text(criterion)
+        if h in {"tieu chi", "criterion", "criteria"} or "tieu chi" in h:
+            return criterion
+        if "thu cong" in h or "manual" in h:
+            if "toc do" in c:
+                return "Cham, phu thuoc thao tac con nguoi"
+            if "chinh xac" in c:
+                return "Thap hon, de sai sot"
+            if "chi phi" in c:
+                return "Cao do ton nhan su va thoi gian"
+            if "trai nghiem" in c:
+                return "Bat tien, phai cho doi"
+            return "Phu thuoc con nguoi"
+        if "thong minh" in h or "smart" in h or "tu dong" in h:
+            if "toc do" in c:
+                return "Nhanh, xu ly tu dong"
+            if "chinh xac" in c:
+                return "Cao, dua tren du lieu thoi gian thuc"
+            if "chi phi" in c:
+                return "Toi uu hon ve dai han"
+            if "trai nghiem" in c:
+                return "Thuan tien, minh bach"
+            return "Tu dong hoa va co du lieu"
+        if "nhan xet" in h or "note" in h or "comment" in h:
+            return "He thong thong minh co loi the hon"
+        return ""
+
+    table_rows = [[value_for(header, criterion) for header in headers] for criterion in rows]
+    return {"title": "Bang so sanh", "headers": headers, "rows": table_rows}
+
+
 async def _build_revised_slide_spec_payload(
     *,
     task_id: str,
@@ -501,6 +726,16 @@ async def _build_revised_slide_spec_payload(
     should_stop,
     target_slide_indices: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
+    old_slides = previous_structured_content.get("slides") or []
+    explicit_add_count = _revision_prompt_add_slide_count(revision_prompt)
+    explicit_delete_targets = _revision_prompt_delete_slide_indices(
+        revision_prompt,
+        len(old_slides),
+    )
+    explicit_title_overrides = _revision_prompt_title_overrides(
+        revision_prompt,
+        len(old_slides),
+    )
     revision_plan = await content_extractor.plan_slide_revision(
         previous_structured_content,
         revision_prompt,
@@ -517,20 +752,29 @@ async def _build_revised_slide_spec_payload(
     ]
     if not plan_targets and target_slide_indices:
         plan_targets = list(target_slide_indices)
+    if not plan_targets and explicit_title_overrides:
+        plan_targets = sorted(explicit_title_overrides.keys())
 
     op_types = {
         str(op.get("type") or "").strip().lower()
         for op in (revision_plan.get("operations") or [])
         if isinstance(op, dict)
     }
+    if explicit_add_count or explicit_delete_targets:
+        op_types.add("restructure_deck")
+    if explicit_title_overrides:
+        op_types.add("rewrite_text")
     if _revision_prompt_mentions_image(revision_prompt):
         op_types.add("regenerate_image")
     text_ops = {"rewrite_text", "change_layout", "restructure_deck"}
     wants_text_revision = bool(op_types & text_ops)
     wants_image_revision = "regenerate_image" in op_types
+    wants_deck_restructure = "restructure_deck" in op_types or (
+        revision_plan.get("scope") == "deck" and not plan_targets
+    )
     changed_fields: List[str] = []
 
-    if "restructure_deck" in op_types or (revision_plan.get("scope") == "deck" and not plan_targets):
+    if wants_deck_restructure:
         revised = await content_extractor.revise_slide_deck(
             previous_structured_content,
             revision_prompt,
@@ -555,12 +799,78 @@ async def _build_revised_slide_spec_payload(
             "slides": [dict(s) for s in (previous_structured_content.get("slides") or []) if isinstance(s, dict)],
         }
 
-    old_slides = previous_structured_content.get("slides") or []
+    if wants_deck_restructure and old_slides:
+        revised_slides = [
+            slide for slide in (revised.get("slides") or []) if isinstance(slide, dict)
+        ]
+        if explicit_delete_targets and len(revised_slides) >= len(old_slides):
+            revised_slides = [
+                dict(slide)
+                for idx, slide in enumerate(old_slides)
+                if idx not in set(explicit_delete_targets) and isinstance(slide, dict)
+            ]
+        if explicit_add_count and len(revised_slides) <= len(old_slides):
+            revised_slides = [dict(slide) for slide in old_slides if isinstance(slide, dict)]
+            for add_idx in range(explicit_add_count):
+                revised_slides.append(
+                    {
+                        "title": "Loi ich trien khai" if explicit_add_count == 1 else f"Loi ich trien khai {add_idx + 1}",
+                        "bullets": [
+                            "Tang hieu qua van hanh va giam thoi gian xu ly.",
+                            "Cai thien trai nghiem nguoi dung nho du lieu thoi gian thuc.",
+                            "Ho tro nha truong ra quyet dinh dua tren so lieu minh bach.",
+                        ],
+                        "notes": "Slide bo sung theo yeu cau cua nguoi dung.",
+                        "layout": "text_only",
+                    }
+                )
+        revised["slides"] = revised_slides
+
+    if plan_targets and old_slides and not wants_deck_restructure:
+        revised_slides = [
+            slide for slide in (revised.get("slides") or []) if isinstance(slide, dict)
+        ]
+        selected_slide_map: Dict[int, Dict[str, Any]] = {}
+        if len(revised_slides) == len(plan_targets) and len(revised_slides) != len(old_slides):
+            selected_slide_map = {
+                target_idx: revised_slides[pos]
+                for pos, target_idx in enumerate(plan_targets)
+                if pos < len(revised_slides)
+            }
+
+        normalized_slides: List[Dict[str, Any]] = []
+        for idx, old_slide in enumerate(old_slides):
+            if not isinstance(old_slide, dict):
+                continue
+            candidate = selected_slide_map.get(idx)
+            if candidate is None and idx < len(revised_slides):
+                candidate = revised_slides[idx]
+            normalized_slides.append(
+                dict(candidate) if idx in plan_targets and isinstance(candidate, dict) else dict(old_slide)
+            )
+        revised["slides"] = normalized_slides
+
+    if explicit_title_overrides:
+        for idx, title in explicit_title_overrides.items():
+            slides = revised.get("slides") or []
+            if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+                slides[idx]["title"] = title
+
     for idx, slide in enumerate(revised.get("slides") or []):
-        if not isinstance(slide, dict) or slide.get("image_url"):
+        if not isinstance(slide, dict):
             continue
-        if idx < len(old_slides) and isinstance(old_slides[idx], dict) and old_slides[idx].get("image_url"):
-            slide["image_url"] = old_slides[idx].get("image_url")
+        if idx < len(old_slides) and isinstance(old_slides[idx], dict):
+            old_slide = old_slides[idx]
+            if plan_targets and idx not in plan_targets:
+                revised["slides"][idx] = dict(old_slide)
+                continue
+            if not slide.get("image_url") and old_slide.get("image_url"):
+                slide["image_url"] = old_slide.get("image_url")
+            if idx not in plan_targets:
+                if "table" not in slide and isinstance(old_slide.get("table"), dict):
+                    slide["table"] = old_slide.get("table")
+                if "chart" not in slide and isinstance(old_slide.get("chart"), dict):
+                    slide["chart"] = old_slide.get("chart")
 
     if wants_image_revision:
         image_instruction_targets = plan_targets or list(range(len(revised.get("slides") or [])))
@@ -578,9 +888,32 @@ async def _build_revised_slide_spec_payload(
         revision_prompt or "",
         want_images=want_images,
     )
+    explicit_visual_targets = _explicit_visual_targets_from_prompt(
+        revision_prompt,
+        len(revised.get("slides") or []),
+    )
+    forced_table_targets: set[int] = set()
+    for idx, visual in explicit_visual_targets.items():
+        visual_plan[idx] = visual
+        if visual == "table":
+            forced_table_targets.add(idx)
+
+    if _revision_prompt_mentions_table(revision_prompt) and not wants_image_revision:
+        table_targets = plan_targets or list(target_slide_indices or [])
+        if not table_targets and len(revised.get("slides") or []) == 1:
+            table_targets = [0]
+        for idx in table_targets:
+            if 0 <= idx < len(revised.get("slides") or []):
+                visual_plan[idx] = "table"
+                forced_table_targets.add(idx)
     if wants_image_revision:
         for idx in image_instruction_targets:
             visual_plan[idx] = "image"
+            slides = revised.get("slides") or []
+            if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+                slides[idx].pop("table", None)
+                slides[idx].pop("chart", None)
+                slides[idx]["layout"] = "text_image"
 
     table_specs = await build_table_specs_for_slides(
         content_extractor,
@@ -590,6 +923,11 @@ async def _build_revised_slide_spec_payload(
         raw_content=revision_prompt or "",
         visual_plan=visual_plan,
     )
+    fallback_table = _fallback_table_from_revision_prompt(revision_prompt)
+    if fallback_table:
+        for idx in forced_table_targets:
+            if idx not in table_specs:
+                table_specs[idx] = fallback_table
     chart_specs = await build_chart_specs_for_slides(
         content_extractor,
         revised,
@@ -598,6 +936,13 @@ async def _build_revised_slide_spec_payload(
         table_indices=set(table_specs.keys()),
         raw_content=revision_prompt or "",
         visual_plan=visual_plan,
+    )
+    _apply_explicit_chart_type_targets(
+        chart_specs,
+        _explicit_chart_type_targets_from_prompt(
+            revision_prompt,
+            len(revised.get("slides") or []),
+        ),
     )
 
     image_paths = None
@@ -630,7 +975,7 @@ async def _build_revised_slide_spec_payload(
         slide_theme=slide_theme,
     )
     spec_payload["revision_plan"] = revision_plan
-    spec_payload["revision_scope"] = "slide" if plan_targets else str(revision_plan.get("scope") or "deck")
+    spec_payload["revision_scope"] = "deck" if wants_deck_restructure else ("slide" if plan_targets else str(revision_plan.get("scope") or "deck"))
     spec_payload["target_slide_indices"] = plan_targets
     spec_payload["changed_fields"] = sorted(set(changed_fields))
     return spec_payload
@@ -744,7 +1089,7 @@ async def generate_slide_spec(
     plan: str = Form("pro"),
     slide_count: Optional[int] = Form(None),
     image_limit: Optional[int] = Form(None),
-    generate_images: str = Form("false"),
+    generate_images: str = Form("true"),
 ):
     """Generate AI slide output as JSON spec (no PPTX rendering)."""
     try:
@@ -885,6 +1230,12 @@ async def generate_slide_spec(
                     raw_content_bg or "",
                     want_images=want_images_bg,
                 )
+                visual_plan_bg.update(
+                    _explicit_visual_targets_from_prompt(
+                        raw_content_bg or "",
+                        len(structured.get("slides") or []),
+                    )
+                )
                 table_specs_bg = await build_table_specs_for_slides(
                     content_extractor,
                     structured,
@@ -901,6 +1252,13 @@ async def generate_slide_spec(
                     table_indices=set(table_specs_bg.keys()),
                     raw_content=raw_content_bg or "",
                     visual_plan=visual_plan_bg,
+                )
+                _apply_explicit_chart_type_targets(
+                    chart_specs_bg,
+                    _explicit_chart_type_targets_from_prompt(
+                        raw_content_bg or "",
+                        len(structured.get("slides") or []),
+                    ),
                 )
                 image_paths_bg = None
                 if want_images_bg:
@@ -1020,7 +1378,7 @@ async def revise_slide_spec(
     plan: str = Form("pro"),
     slide_count: Optional[int] = Form(None),
     image_limit: Optional[int] = Form(None),
-    generate_images: str = Form("false"),
+    generate_images: str = Form("true"),
     revision_scope: str = Form("auto"),
     slide_index: Optional[int] = Form(None),
     slide_number: Optional[int] = Form(None),
@@ -1231,7 +1589,7 @@ async def generate_slide_full(
     slide_count: Optional[int] = Form(None),
     image_limit: Optional[int] = Form(None),
     slide_theme: str = Form("modern"),
-    generate_images: str = Form("false"),
+    generate_images: str = Form("true"),
 ):
     try:
         task_id = str(uuid.uuid4())
@@ -1348,6 +1706,12 @@ async def generate_slide_full(
                     raw_content_bg or "",
                     want_images=want_images_bg,
                 )
+                visual_plan_bg.update(
+                    _explicit_visual_targets_from_prompt(
+                        raw_content_bg or "",
+                        len(structured.get("slides") or []),
+                    )
+                )
                 table_specs_bg = await build_table_specs_for_slides(
                     content_extractor,
                     structured,
@@ -1364,6 +1728,13 @@ async def generate_slide_full(
                     table_indices=set(table_specs_bg.keys()),
                     raw_content=raw_content_bg or "",
                     visual_plan=visual_plan_bg,
+                )
+                _apply_explicit_chart_type_targets(
+                    chart_specs_bg,
+                    _explicit_chart_type_targets_from_prompt(
+                        raw_content_bg or "",
+                        len(structured.get("slides") or []),
+                    ),
                 )
                 image_paths_bg = None
                 if want_images_bg:
