@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import re
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
@@ -146,11 +147,19 @@ async def _process_single_slide(
     url: str,
     should_stop: Optional[Any],
     plan_tier: str = "pro",
+    force_requested: bool = False,
+    requested_instruction: str = "",
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     if should_stop is not None and await should_stop():
         return None, None
 
     slide = _normalize_slide_content(slides[idx])
+    if force_requested and str(requested_instruction or "").strip():
+        instruction = str(requested_instruction).strip()
+        slide["title"] = "Hình minh họa theo yêu cầu"
+        slide["bullets"] = [instruction]
+        slide["content"] = [instruction]
+        slide["_image_revision_instruction"] = instruction
 
     # Continuation slide check
     prev_slide = _normalize_slide_content(slides[idx - 1]) if idx > 0 else None
@@ -196,7 +205,7 @@ async def _process_single_slide(
     slide_type = _detect_slide_type(slide)
     semantic = await _get_image_semantic(content_extractor, slide)
     content_type = str(semantic.get("content_type") or "normal")
-    if content_type == "data":
+    if content_type == "data" and not force_requested:
         print(f"[slide_images] skip image for data slide {idx}")
         rec = {
             "slide_index": idx,
@@ -918,7 +927,7 @@ async def _process_single_slide(
                 prompt=full_prompt,
                 slide=slide,
                 semantic=semantic,
-                min_relevance=0.45,
+                min_relevance=0.80 if force_requested else 0.45,
                 is_stock_photo=True,
             )
             vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
@@ -950,14 +959,24 @@ async def _process_single_slide(
             })
             return bool(vlm_judge_dict.get("pass"))
 
-        external = await _try_stock_photo_fallback(
-            client,
-            slide,
-            semantic,
-            content_type,
-            risk,
-            vlm_validate_fn=_external_vlm_validate,
-        )
+        try:
+            external_call = _try_stock_photo_fallback(
+                client,
+                slide,
+                semantic,
+                content_type,
+                risk,
+                vlm_validate_fn=_external_vlm_validate,
+            )
+            external = (
+                await asyncio.wait_for(external_call, timeout=60.0)
+                if force_requested
+                else await external_call
+            )
+        except asyncio.TimeoutError:
+            external = None
+            debug_record["external_rejection"] = "forced stock fallback timed out after 60s"
+            print(f"[slide_images] slide {idx} forced stock fallback timed out")
         if not external:
             external_candidates = [c for c in tried_candidates if c.get("type") == "external"]
             if external_candidates:
@@ -1113,6 +1132,8 @@ async def build_image_paths_for_slides(
     should_stop: Optional[Any] = None,
     plan: str = "pro",
     target_indices: Optional[List[int]] = None,
+    force_target_indices: Optional[List[int]] = None,
+    force_instructions: Optional[Dict[int, str]] = None,
     visual_plan: Optional[Dict[int, str]] = None,
 ) -> Dict[int, str]:
     import asyncio
@@ -1123,6 +1144,12 @@ async def build_image_paths_for_slides(
     if not slides:
         return {}
 
+    forced_targets = {int(idx) for idx in (force_target_indices or [])}
+    requested_instructions = {
+        int(idx): str(value or "").strip()
+        for idx, value in (force_instructions or {}).items()
+        if str(value or "").strip()
+    }
     configured_limit = max(1, IMAGE_MAX_SLIDES_WITH_IMAGES)
     if image_limit is not None:
         configured_limit = max(0, int(image_limit))
@@ -1236,6 +1263,8 @@ async def build_image_paths_for_slides(
                         url=url,
                         should_stop=should_stop,
                         plan_tier=plan_tier,
+                        force_requested=idx in forced_targets,
+                        requested_instruction=requested_instructions.get(idx, ""),
                     )
                     nonlocal done_count
                     async with progress_lock:

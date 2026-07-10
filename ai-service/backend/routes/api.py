@@ -175,12 +175,19 @@ def _explicit_visual_targets_from_prompt(text: str, slide_count: int) -> Dict[in
         context = before + " " + window
         if re.search(r"\b(?:giu|khong\s+doi|keep)\b", context):
             continue
-        if re.search(r"\b(?:anh|hinh|image|photo|picture|minh\s+hoa)\b", window):
+        if re.search(
+            r"\b(?:chi\s+(?:co\s+)?van\s+ban|text[\s_-]*only)\b"
+            r"|\bkhong\s+(?:co\s+)?bang\b.{0,80}\bkhong\s+(?:co\s+)?bieu\s*do\b"
+            r"|\bkhong\s+(?:co\s+)?bieu\s*do\b.{0,80}\bkhong\s+(?:co\s+)?bang\b",
+            window,
+        ):
+            targets[idx] = "none"
+        elif re.search(r"\b(?:anh|hinh|image|photo|picture|minh\s+hoa)\b", window):
             targets[idx] = "image"
-        elif re.search(r"\b(?:bang|table|so\s+sanh)\b", window):
-            targets[idx] = "table"
         elif re.search(r"\b(?:bieu\s*do|chart|graph)\b", window):
             targets[idx] = "chart"
+        elif re.search(r"\b(?:bang|table|so\s+sanh)\b", window):
+            targets[idx] = "table"
     return targets
 
 
@@ -212,6 +219,20 @@ def _explicit_chart_type_targets_from_prompt(text: str, slide_count: int) -> Dic
         elif re.search(r"\b(?:cot|column|bar)\b", window):
             targets[idx] = "bar"
     return targets
+
+
+def _explicit_slide_instruction_from_prompt(text: str, slide_index: int) -> str:
+    marker_re = re.compile(
+        r"\b(?:slide|trang)\s*(?:(?:số|so|thứ|thu)\s*)?(?:#\s*)?(\d+)\b",
+        flags=re.IGNORECASE,
+    )
+    markers = list(marker_re.finditer(str(text or "")))
+    for pos, marker in enumerate(markers):
+        if int(marker.group(1)) - 1 != int(slide_index):
+            continue
+        end = markers[pos + 1].start() if pos + 1 < len(markers) else len(str(text or ""))
+        return str(text or "")[marker.start():end].strip()
+    return ""
 
 
 def _apply_explicit_chart_type_targets(chart_specs: Optional[dict], targets: Dict[int, str]) -> None:
@@ -1140,6 +1161,16 @@ async def _build_revised_slide_spec_payload(
                 should_stop=should_stop,
                 plan=plan,
                 target_indices=plan_targets or None,
+                force_target_indices=sorted(
+                    idx
+                    for idx, visual in explicit_visual_targets.items()
+                    if str(visual or "").strip().lower() == "image"
+                ),
+                force_instructions={
+                    idx: _explicit_slide_instruction_from_prompt(revision_prompt, idx)
+                    for idx, visual in explicit_visual_targets.items()
+                    if str(visual or "").strip().lower() == "image"
+                },
                 visual_plan=visual_plan,
             )
             if image_paths:
@@ -1147,6 +1178,16 @@ async def _build_revised_slide_spec_payload(
         except Exception as image_error:
             print(f"[revise-spec] image generation failed, continue without images: {image_error!r}")
             image_paths = None
+
+        missing_image_targets = [
+            idx for idx in image_instruction_targets if idx not in (image_paths or {})
+        ]
+        if missing_image_targets:
+            slide_numbers = ", ".join(str(idx + 1) for idx in missing_image_targets)
+            raise RuntimeError(
+                f"Không thể tạo ảnh mới đạt yêu cầu cho slide {slide_numbers}; "
+                "bản sửa không được áp dụng để tránh báo thành công nhưng vẫn dùng ảnh cũ."
+            )
 
     spec_payload = _build_slide_spec_payload(
         task_id=task_id,
@@ -1477,6 +1518,22 @@ async def generate_slide_spec(
                             should_stop=should_stop,
                             progress_cb=on_image_progress,
                             plan=plan_norm,
+                            force_target_indices=sorted(
+                                idx
+                                for idx, visual in _explicit_visual_targets_from_prompt(
+                                    raw_content_bg or "",
+                                    len(structured.get("slides") or []),
+                                ).items()
+                                if str(visual or "").strip().lower() == "image"
+                            ),
+                            force_instructions={
+                                idx: _explicit_slide_instruction_from_prompt(raw_content_bg or "", idx)
+                                for idx, visual in _explicit_visual_targets_from_prompt(
+                                    raw_content_bg or "",
+                                    len(structured.get("slides") or []),
+                                ).items()
+                                if str(visual or "").strip().lower() == "image"
+                            },
                             visual_plan=visual_plan_bg,
                         )
                     except Exception as image_error:
@@ -1956,6 +2013,22 @@ async def generate_slide_full(
                             should_stop=should_stop,
                             progress_cb=on_image_progress,
                             plan=plan_norm,
+                            force_target_indices=sorted(
+                                idx
+                                for idx, visual in _explicit_visual_targets_from_prompt(
+                                    raw_content_bg or "",
+                                    len(structured.get("slides") or []),
+                                ).items()
+                                if str(visual or "").strip().lower() == "image"
+                            ),
+                            force_instructions={
+                                idx: _explicit_slide_instruction_from_prompt(raw_content_bg or "", idx)
+                                for idx, visual in _explicit_visual_targets_from_prompt(
+                                    raw_content_bg or "",
+                                    len(structured.get("slides") or []),
+                                ).items()
+                                if str(visual or "").strip().lower() == "image"
+                            },
                             visual_plan=visual_plan_bg,
                         )
                     except Exception as image_error:

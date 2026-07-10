@@ -374,6 +374,7 @@ class RedisQueue:
         from routes.api import (
             _apply_explicit_chart_type_targets,
             _explicit_chart_type_targets_from_prompt,
+            _explicit_slide_instruction_from_prompt,
             _explicit_visual_targets_from_prompt,
         )
 
@@ -532,6 +533,22 @@ class RedisQueue:
                         progress_cb=on_image_progress,
                         plan=plan_norm,
                         target_indices=sorted(image_target_indices) or None,
+                        force_target_indices=sorted(
+                            idx
+                            for idx, visual in _explicit_visual_targets_from_prompt(
+                                instruction_text,
+                                len(structured_content.get("slides") or []),
+                            ).items()
+                            if str(visual or "").strip().lower() == "image"
+                        ),
+                        force_instructions={
+                            idx: _explicit_slide_instruction_from_prompt(instruction_text, idx)
+                            for idx, visual in _explicit_visual_targets_from_prompt(
+                                instruction_text,
+                                len(structured_content.get("slides") or []),
+                            ).items()
+                            if str(visual or "").strip().lower() == "image"
+                        },
                         visual_plan=visual_plan,
                     )
                 except Exception as image_error:
@@ -657,6 +674,7 @@ class RedisQueue:
             _apply_explicit_chart_type_targets,
             _build_slide_spec_payload,
             _explicit_chart_type_targets_from_prompt,
+            _explicit_slide_instruction_from_prompt,
             _explicit_visual_targets_from_prompt,
             _resolve_plan_image_limit,
         )
@@ -886,6 +904,16 @@ class RedisQueue:
                         progress_cb=on_image_progress,
                         plan=plan_norm,
                         target_indices=sorted(image_target_indices) or None,
+                        force_target_indices=sorted(
+                            idx
+                            for idx, visual in explicit_visual_targets.items()
+                            if str(visual or "").strip().lower() == "image"
+                        ),
+                        force_instructions={
+                            idx: _explicit_slide_instruction_from_prompt(instruction_text, idx)
+                            for idx, visual in explicit_visual_targets.items()
+                            if str(visual or "").strip().lower() == "image"
+                        },
                         visual_plan=visual_plan,
                     )
                 except Exception as image_error:

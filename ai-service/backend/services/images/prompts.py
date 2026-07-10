@@ -336,11 +336,25 @@ def _fold_instruction(text: str) -> str:
 def _revision_visual_phrase(instruction: str) -> str:
     folded = _fold_instruction(instruction)
     parts: List[str] = []
+    if any(k in folded for k in ("o to dien", "xe dien", "electric car", "electric vehicle")):
+        color = ""
+        if any(k in folded for k in ("mau xanh duong", "blue")):
+            color = "blue "
+        elif any(k in folded for k in ("mau do", "red")):
+            color = "red "
+        action = " driving through a raised parking barrier" if any(k in folded for k in ("barie", "barrier", "cong")) else ""
+        parts.append(f"{color}electric car{action}")
     if any(k in folded for k in ("bai do", "bai dau", "parking")):
         parts.append("modern university parking lot")
     if any(k in folded for k in ("cam bien", "iot", "sensor")):
         parts.append("IoT parking sensors")
-    if any(k in folded for k in ("camera", "giam sat", "surveillance")):
+    camera_forbidden = bool(
+        re.search(
+            r"\b(?:khong|cam|tranh|without|no)\b.{0,35}\b(?:camera|giam\s+sat|surveillance)\b",
+            folded,
+        )
+    )
+    if not camera_forbidden and any(k in folded for k in ("camera", "giam sat", "surveillance")):
         parts.append("surveillance cameras")
     if any(k in folded for k in ("bang", "hien thi", "dien tu", "display", "led")):
         parts.append("digital display board showing available parking spaces")

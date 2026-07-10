@@ -330,6 +330,10 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
                 return "Tốn chi phí nhân sự trực ca và giám sát liên tục."
             if "trai nghiem" in cf:
                 return "Người dùng mất thời gian tìm chỗ và chờ xử lý."
+            if "bao mat" in cf:
+                return "Dữ liệu phân tán, dễ thất lạc và khó kiểm soát quyền truy cập."
+            if "mo rong" in cf:
+                return "Khó mở rộng vì phụ thuộc thêm nhân sự và quy trình thủ công."
         if is_smart:
             if "toc do" in cf:
                 return "Nhanh hơn nhờ cảm biến, ANPR và xử lý tự động."
@@ -339,6 +343,10 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
                 return "Giảm chi phí vận hành dài hạn nhờ tối ưu nhân sự."
             if "trai nghiem" in cf:
                 return "Hiển thị chỗ trống, chỉ dẫn nhanh và thanh toán tiện lợi."
+            if "bao mat" in cf:
+                return "Dữ liệu được quản lý tập trung, phân quyền và lưu vết truy cập."
+            if "mo rong" in cf:
+                return "Dễ mở rộng thêm khu vực, thiết bị và người dùng trên cùng nền tảng."
         return ""
 
     headers = ["Tiêu chí", option_a_pretty, option_b_pretty]
@@ -861,9 +869,20 @@ async def build_table_specs_for_slides(
 
     comparison_constraint = _raw_comparison_request(raw_content)
     required_spec = (comparison_constraint or {}).get("spec")
-    if isinstance(required_spec, dict) and out:
+    if isinstance(required_spec, dict):
+        planned_table_indices = [
+            idx
+            for idx in range(len(slides))
+            if str(
+                (visual_plan or {}).get(idx)
+                or (visual_plan or {}).get(str(idx))
+                or ""
+            ).strip().lower()
+            == "table"
+        ]
+        eligible_indices = planned_table_indices or list(out)
         best_idx = max(
-            out,
+            eligible_indices,
             key=lambda idx: (
                 _slide_match_score(slides[idx], comparison_constraint)
                 + (
@@ -877,24 +896,34 @@ async def build_table_specs_for_slides(
                     else 0
                 )
             ),
-        )
-        previous_spec = out[best_idx]
-        merged_spec = _merge_table_with_comparison_request(previous_spec, required_spec)
-        if merged_spec != previous_spec:
+        ) if eligible_indices else -1
+        if best_idx >= 0:
+            previous_spec = out.get(best_idx) or {}
+            merged_spec = _merge_table_with_comparison_request(previous_spec, required_spec)
             out[best_idx] = merged_spec
-            debug_records.append(
-                {
-                    "slide_index": best_idx,
-                    "title": str((slides[best_idx] or {}).get("title") or ""),
-                    "source": "comparison_request_constraint",
-                    "spec": merged_spec,
-                    "status": "completed_requested_rows",
-                }
-            )
-            print(
-                f"[slide_tables] slide {best_idx} table: enforced "
-                f"{len(merged_spec['headers'])} header(s), {len(merged_spec['rows'])} row(s)"
-            )
+            if merged_spec != previous_spec:
+                debug_records.append(
+                    {
+                        "slide_index": best_idx,
+                        "title": str((slides[best_idx] or {}).get("title") or ""),
+                        "source": "comparison_request_constraint",
+                        "spec": merged_spec,
+                        "status": "completed_requested_rows",
+                    }
+                )
+                print(
+                    f"[slide_tables] slide {best_idx} table: enforced "
+                    f"{len(merged_spec['headers'])} header(s), {len(merged_spec['rows'])} row(s)"
+                )
+
+    for idx in list(out):
+        planned_visual = str(
+            (visual_plan or {}).get(idx)
+            or (visual_plan or {}).get(str(idx))
+            or ""
+        ).strip().lower()
+        if planned_visual and planned_visual != "table":
+            out.pop(idx, None)
 
     if task_id:
         _write_debug_json(task_id, debug_records)
