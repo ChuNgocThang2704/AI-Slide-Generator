@@ -39,8 +39,8 @@ from .semantics import (
 
 
 def _estimate_clip_tokens(text: str) -> int:
-    # Approximation for SDXL CLIP token budget warning.
-    # Real tokenization differs, but this is enough to flag risky prompts.
+    # Xấp xỉ cho cảnh báo ngân sách token CLIP của SDXL.
+    # Việc tách từ thực tế (tokenization) có sự khác biệt, nhưng thế này là đủ để gắn cờ các prompt rủi ro.
     chunks = re.findall(r"[A-Za-z0-9]+|[^\w\s]", text or "")
     return len(chunks)
 
@@ -52,11 +52,11 @@ async def _clip_score_image(
     image_bytes: bytes,
     text: str,
 ) -> Optional[float]:
-    """Best-effort CLIP alignment score from image server (/clip-score).
+    """Điểm số căn chỉnh CLIP (tốt nhất có thể) từ máy chủ hình ảnh (/clip-score).
 
-    Returns:
-      - float score when endpoint exists and succeeds
-      - None when disabled/unavailable/error (do not block saving)
+    Trả về:
+      - Điểm dạng số thực (float) khi endpoint tồn tại và thành công
+      - None khi bị tắt/không khả dụng/gặp lỗi (không ngăn cản việc lưu ảnh)
     """
     if not IMAGE_CLIP_VALIDATE_ENABLE:
         return None
@@ -126,10 +126,10 @@ def _image_acceptance_policy(
     *,
     is_stock_photo: bool = False,
 ) -> Dict[str, Any]:
-    """Return broad image acceptance policy by content/domain.
+    """Trả về chính sách chấp nhận hình ảnh chung theo nội dung/domain.
 
-    Keep this generic: rules are grouped by visual risk and expected use, not by
-    individual topics. Specific topics should fall into one of these buckets.
+    Giữ tính tổng quát: các quy tắc được nhóm theo rủi ro hình ảnh và mục đích sử dụng dự kiến, không nhóm theo
+    từng chủ đề riêng lẻ. Các chủ đề cụ thể nên thuộc về một trong các nhóm này.
     """
     content_type = str(semantic.get("content_type") or "normal").strip().lower()
     domain = str(semantic.get("domain") or "general").strip().lower()
@@ -486,7 +486,7 @@ _DEBUG_DIR = Path("outputs") / "debug"
 
 
 def _write_debug_json(task_id: str, name: str, records: List[Dict[str, Any]]) -> None:
-    """Persist raw per-slide debug metadata for later inspection."""
+    """Lưu trữ metadata debug thô của từng slide để kiểm tra sau."""
     if not records:
         return
     try:
@@ -502,7 +502,7 @@ def _write_debug_json(task_id: str, name: str, records: List[Dict[str, Any]]) ->
 
 
 def _write_image_quality_report(task_id: str, records: List[Dict[str, Any]]) -> None:
-    """Aggregate per-slide debug records into a task-level quality summary."""
+    """Tổng hợp các bản ghi debug của từng slide thành một bản tóm tắt chất lượng ở cấp độ task."""
     if not records:
         return
     try:
@@ -642,7 +642,7 @@ def _requires_human_subject(prompt_text: str) -> bool:
 
 
 def _estimate_symmetry_error(gray_128: Image.Image) -> float:
-    """Return mean abs diff between image and horizontal mirror."""
+    """Trả về sai số tuyệt đối trung bình giữa hình ảnh và ảnh đối xứng gương của nó theo chiều ngang."""
     mirrored = gray_128.transpose(Image.FLIP_LEFT_RIGHT)
     diff = ImageChops.difference(gray_128, mirrored)
     stat = ImageStat.Stat(diff)
@@ -650,7 +650,7 @@ def _estimate_symmetry_error(gray_128: Image.Image) -> float:
 
 
 def _validate_output_image(raw: bytes, prompt_text: str = "", strict: bool = True) -> Dict[str, Any]:
-    """Lightweight output validation for unusable generated images."""
+    """Xác thực đầu ra gọn nhẹ cho các hình ảnh được tạo ra nhưng không thể sử dụng."""
     result: Dict[str, Any] = {
         "ok": False,
         "reasons": [],
@@ -707,7 +707,7 @@ def _validate_output_image(raw: bytes, prompt_text: str = "", strict: bool = Tru
                     result["reasons"].append("mostly_white")
                 if near_black_ratio > IMAGE_VALIDATION_MAX_NEAR_BLACK_RATIO:
                     result["reasons"].append("mostly_black")
-                # Distorted generations often become overly symmetric with low local edge variance.
+                # Các ảnh tạo ra bị lỗi/biến dạng thường trở nên đối xứng quá mức với phương sai cạnh cục bộ thấp.
                 if (
                     symmetry_error < IMAGE_VALIDATION_MIN_SYMMETRY_ERROR
                     and edge_mean < max(IMAGE_VALIDATION_MIN_EDGE_MEAN, 9.0)

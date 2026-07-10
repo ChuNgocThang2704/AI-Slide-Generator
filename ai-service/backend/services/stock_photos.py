@@ -1,4 +1,4 @@
-"""Fetch external stock/reference images as a fallback when SDXL fails."""
+"""Tải hình ảnh tham chiếu/kho ảnh (stock) bên ngoài làm phương án dự phòng khi SDXL thất bại."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Callable, Awaitable
@@ -51,7 +51,7 @@ async def _download_image(
     if len(raw) < 32:
         return None
     
-    # Filter out tiny thumbnails/icons
+    # Loại bỏ các ảnh thu nhỏ (thumbnails) hoặc biểu tượng (icons) quá nhỏ
     try:
         with Image.open(io.BytesIO(raw)) as img:
             w, h = img.size
@@ -165,7 +165,7 @@ async def fetch_external_image(
     pexels_api_key: str = "",
     vlm_validate_fn: Optional[Callable[[bytes, Dict[str, Any]], Awaitable[bool]]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Try external providers in order and return binary + metadata."""
+    """Thử lần lượt các nhà cung cấp bên ngoài và trả về dữ liệu nhị phân + siêu dữ liệu (metadata)."""
     query_list = []
     seen = set()
     for raw in queries:
@@ -180,7 +180,7 @@ async def fetch_external_image(
     if not query_list:
         return None
 
-    # Limit to top 5 queries to keep it fast and robust
+    # Giới hạn ở 5 truy vấn hàng đầu để đảm bảo nhanh và hoạt động ổn định
     query_list = query_list[:5]
 
     for provider in providers:
@@ -192,7 +192,7 @@ async def fetch_external_image(
             elif provider_l == "pexels":
                 candidates = await _search_pexels(client, query, api_key=pexels_api_key)
             
-            # Limit to top 3 candidates per query to keep it fast
+            # Giới hạn ở 3 ứng viên hàng đầu cho mỗi truy vấn để đảm bảo nhanh
             candidates = candidates[:3]
             
             for meta in candidates:
@@ -200,7 +200,7 @@ async def fetch_external_image(
                 if not downloaded:
                     continue
                 
-                # Check VLM relevance/safety callback if provided
+                # Kiểm tra gọi lại (callback) độ liên quan/an toàn của VLM nếu được cung cấp
                 if vlm_validate_fn is not None:
                     is_valid = await vlm_validate_fn(downloaded["bytes"], meta)
                     if not is_valid:
@@ -211,4 +211,3 @@ async def fetch_external_image(
                     **downloaded,
                 }
     return None
-

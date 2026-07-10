@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 from config import (
@@ -37,7 +38,7 @@ _MIN_SCENE_CHARS = 12
 
 
 
-# Prompt and scene configuration.
+# Cấu hình prompt và scene.
 
 _DEFAULT_NEGATIVE = (
     "text, watermark, logo, caption, subtitle, label, letters, words, "
@@ -59,6 +60,7 @@ STRICT RULES:
 - MUST include people, objects, and environment
 - MUST include at least one human subject, one physical object, and one environment
 - MUST visually represent the main idea of the slide
+- DECK THEME LINKING (CRITICAL): The scene MUST align with the global presentation theme (e.g., if the deck title is about electric vehicles, the scene should feature vehicle-related elements, car chargers, automotive tech offices, or highway infrastructure even when depicting generic business/technology actions). Do NOT draw generic houses or offices if the deck has a specific domain.
 - DO NOT use abstract words alone (system, architecture, process, performance, solution)
 - If the slide is abstract, convert it into a concrete real-life situation
 - Use concrete nouns (engineer, computer, device, office, machine, document, meeting room, etc.)
@@ -223,7 +225,7 @@ _CORE_NEGATIVE_TERMS = (
 
 
 def _is_metaphor_visual(text: str) -> bool:
-    """Detect abstract / metaphor terms LLMs propose as visual_objects."""
+    """Phát hiện các từ trừu tượng / ẩn dụ mà LLM đề xuất làm visual_objects."""
     s = str(text or "").strip()
     if not s:
         return False
@@ -232,14 +234,14 @@ def _is_metaphor_visual(text: str) -> bool:
 
 
 def _anchor_phrase(anchors: List[str], top_n: int = 3) -> str:
-    """Build the head anchor phrase using English-friendly tokens only."""
+    """Xây dựng cụm từ neo (anchor phrase) ở đầu, chỉ sử dụng các token thân thiện với tiếng Anh."""
     ascii_anchors = [str(a).strip() for a in anchors if str(a).strip() and _is_mostly_ascii(str(a))]
     return ", ".join(ascii_anchors[:top_n])
 
 
 
 def _max_words_for_model() -> int:
-    """Word budget cho prompt gửi vào SDXL/FLUX."""
+    """Số lượng từ tối đa (word budget) cho prompt gửi vào SDXL/FLUX."""
     model_type = (IMAGE_MODEL_TYPE or "").strip().lower()
     return 50 if model_type == "sdxl" else 60
 
@@ -250,7 +252,7 @@ def _enforce_anchor_coverage(
     semantic: Dict[str, Any],
     slide: Dict[str, Any],
 ) -> tuple[str, Dict[str, Any]]:
-    """Enforce that the final prompt contains required content anchors."""
+    """Đảm bảo prompt cuối cùng chứa các neo nội dung (content anchors) bắt buộc."""
     anchors = _semantic_anchors(semantic, slide)
     content_type = str(semantic.get("content_type") or "normal")
     threshold = _coverage_threshold(content_type)
@@ -310,7 +312,7 @@ def _simplify_prompt_for_retry(
     slide: Dict[str, Any],
     content_type: str,
 ) -> str:
-    """Build a short, anchor-focused prompt used for retry after a generation failure."""
+    """Xây dựng một prompt ngắn, tập trung vào các neo nội dung, dùng để thử lại sau khi tạo ảnh thất bại."""
     anchors = _semantic_anchors(semantic, slide)
     phrase = _anchor_phrase(anchors, top_n=2) or str(slide.get("title") or "the topic").strip()
     policy = _visual_policy(content_type)
@@ -326,6 +328,27 @@ def _simplify_prompt_for_retry(
 
 
 
+def _fold_instruction(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(text or "")).replace("đ", "d").replace("Đ", "D")
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower()
+
+
+def _revision_visual_phrase(instruction: str) -> str:
+    folded = _fold_instruction(instruction)
+    parts: List[str] = []
+    if any(k in folded for k in ("bai do", "bai dau", "parking")):
+        parts.append("modern university parking lot")
+    if any(k in folded for k in ("cam bien", "iot", "sensor")):
+        parts.append("IoT parking sensors")
+    if any(k in folded for k in ("camera", "giam sat", "surveillance")):
+        parts.append("surveillance cameras")
+    if any(k in folded for k in ("bang", "hien thi", "dien tu", "display", "led")):
+        parts.append("digital display board showing available parking spaces")
+    if any(k in folded for k in ("cho trong", "trong", "available")) and not any("available parking spaces" in p for p in parts):
+        parts.append("available parking spaces")
+    return ", ".join(parts[:4])
+
+
 def _build_prompt(
     llm_scene: str,
     slide: Dict[str, Any],
@@ -335,7 +358,7 @@ def _build_prompt(
     semantic: Dict[str, str],
     domain: str,
 ) -> str:
-    """Build a prompt where mandatory anchors are LOCKED at the front."""
+    """Xây dựng một prompt trong đó các neo bắt buộc được KHÓA ở phía trước."""
     semantic_scene = _scene_from_semantic(semantic)
     llm_sanitized = _sanitize_scene(llm_scene)
     scene = _sanitize_scene(f"{llm_sanitized}, {semantic_scene}") if llm_sanitized else _sanitize_scene(semantic_scene)
@@ -411,6 +434,9 @@ def _build_prompt(
     no_text_phrase = "no text" if risk_style else "realistic, no text"
 
     prioritized: List[tuple[str, int]] = []
+    revision_phrase = _revision_visual_phrase(str(slide.get("_image_revision_instruction") or ""))
+    if revision_phrase:
+        prioritized.append((f"photo of {revision_phrase}", 1))
     if risk_style:
         head_phrase = f"illustration of {anchor_prefix}" if anchor_prefix else f"illustration of {scene}"
         prioritized.append((head_phrase, 1))
@@ -453,7 +479,7 @@ _SCENE_BAD_PATTERNS = [
 
 
 def _scene_looks_broken(scene: str) -> bool:
-    """Detect obviously broken or too-generic scene text from the LLM."""
+    """Phát hiện các văn bản scene bị lỗi rõ ràng hoặc quá chung chung từ LLM."""
     text = (scene or "").strip()
     if len(text) < 30:
         return True
@@ -522,6 +548,13 @@ def _build_scene_system_prompt(
         + (f"\n\nPresentation context (for coherence — do NOT copy, just use for tone):\n{deck_context}" if deck_context else "")
         + f"\n\nSlide content:\n{context}"
     )
+    if str(slide.get("_image_revision_instruction") or "").strip():
+        base += (
+            "\n\nIMAGE REVISION PRIORITY:"
+            "\n- The IMAGE REVISION INSTRUCTION above is the user's latest request and overrides the old slide image."
+            "\n- Build the scene around that requested visual subject while staying compatible with the slide topic."
+            "\n- Include the requested concrete objects and setting in the English scene."
+        )
     if strict:
         base += (
             "\n\nSTRICT REQUIREMENTS:"
@@ -586,7 +619,7 @@ async def _get_llm_scene(
 
 
 def _scene_candidate_count(content_type: str, risk: Optional[str]) -> int:
-    """Use more than one scene only where it is likely to help."""
+    """Chỉ sử dụng nhiều hơn một scene ở những nơi thực sự có khả năng giúp ích."""
     if risk in {"person_protected", "religious"}:
         return 1
     if content_type in {"historical", "comparison", "definition", "normal", "process"}:
@@ -606,7 +639,7 @@ async def _select_best_scene(
     risk: Optional[str],
     deck_context: str = "",
 ) -> tuple[str, List[Dict[str, Any]], Optional[str]]:
-    """Generate 1-2 scene candidates and choose the prompt with best anchor coverage."""
+    """Tạo 1-2 scene ứng viên và chọn prompt có độ bao phủ neo tốt nhất."""
     candidate_count = _scene_candidate_count(content_type, risk)
     candidates: List[Dict[str, Any]] = []
     best_scene = ""

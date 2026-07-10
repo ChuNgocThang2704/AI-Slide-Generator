@@ -1,132 +1,437 @@
-# FE API Spec - Slide Generation Flow
+# FE API Spec - Slide Generation and Revision
 
-Base URL khi chạy local qua gateway:
+This document is the contract FE should use when integrating the current slide flow.
+
+FE calls the Java BE through API Gateway only. FE must not call the Python AI Service directly.
+
+## Base URL
+
+Local gateway:
 
 ```txt
 http://localhost:8080
 ```
 
-Tất cả API cần đăng nhập dùng header:
+API prefix:
+
+```txt
+/api/document
+```
+
+Required headers for protected APIs:
 
 ```http
 Authorization: Bearer <access_token>
 Content-Type: application/json
+Accept: application/json
 ```
 
-Response chung:
+Common response wrapper:
 
 ```json
 {
-  "code": 200,
-  "message": null,
+  "code": 1000,
+  "message": "Success",
   "data": {}
 }
 ```
 
-## 1. Đăng ký
+## Recommended FE Flow
 
-```http
-POST /api/auth/register
+Create from prompt:
+
+```txt
+1. POST /api/document/projects
+2. Poll GET /api/document/projects/{projectId}/progress
+3. When data.projectStatus = 1 and data.aiStatus = "completed":
+4. GET /api/document/projects/{projectId}/pages
+5. Render pages from JSON
 ```
 
-Request:
+Create from file:
 
-```json
-{
-  "email": "user@example.com",
-  "password": "12345678"
-}
+```txt
+1. POST /api/document/source-documents/upload
+2. POST /api/document/projects with fileUrl/fileName/fileSize and optional prompt
+3. Poll progress
+4. Fetch pages
 ```
 
-Response:
+Revise existing deck:
 
-```json
-{
-  "code": 200,
-  "data": "Create user successfully"
-}
+```txt
+1. POST /api/document/projects/{projectId}/revise
+2. Poll progress
+3. Fetch pages again and replace local slide state
 ```
 
-Ghi chú: user mới có thể cần verify email trước khi login, tùy môi trường.
-
-## 2. Đăng nhập
-
-```http
-POST /api/auth/login
-```
-
-Request:
-
-```json
-{
-  "email": "user@example.com",
-  "password": "12345678"
-}
-```
-
-Response:
-
-```json
-{
-  "code": 200,
-  "data": {
-    "token": "access_token",
-    "refreshToken": "refresh_token"
-  }
-}
-```
-
-FE lưu `data.token` để gọi các API bên dưới.
-
-## 3. Tạo project slide từ prompt
+## 1. Create Slide Project
 
 ```http
 POST /api/document/projects
 ```
 
-Request:
+Request body:
 
 ```json
 {
-  "prompt": "Tạo 3 slide tiếng Việt về lợi ích bãi đỗ xe thông minh trong trường đại học",
+  "prompt": "Tao dung 4 slide tieng Viet ve he thong bai do xe thong minh. Slide 2 la bang so sanh, slide 3 la bieu do duong, slide 4 co anh minh hoa.",
   "templateId": null,
-  "sourceDocId": null
+  "sourceDocId": null,
+  "fileUrl": null,
+  "fileName": null,
+  "fileSize": null
 }
+```
+
+Notes:
+
+- `prompt` is the main natural-language requirement.
+- For file input, upload the file first, then send `fileUrl`, `fileName`, and `fileSize`.
+- FE does not send `generate_images`. AI image generation is enabled by default inside AI Service.
+- FE does not send table/chart/image flags. AI Service detects visual type from prompt/content.
+
+Response:
+
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "data": {
+    "id": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "name": "He thong bai do xe thong minh",
+    "ownerId": "986b8ebf-d232-4b22-a8e6-7e6af4d717cf",
+    "sourceDocId": null,
+    "templateId": null,
+    "initialPrompt": "Tao dung 4 slide tieng Viet...",
+    "slideUrl": null,
+    "status": 0,
+    "aiTaskId": null,
+    "createdAt": "2026-07-10T08:00:00Z",
+    "updatedAt": "2026-07-10T08:00:00Z"
+  }
+}
+```
+
+Project status used by this flow:
+
+```txt
+0 = processing
+1 = completed
+2 = failed
+```
+
+## 2. Poll Project Progress
+
+```http
+GET /api/document/projects/{projectId}/progress
+```
+
+Processing response:
+
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "data": {
+    "projectId": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "aiTaskId": "95915ceb-eda2-4890-a954-efff6069c547",
+    "projectStatus": 0,
+    "aiStatus": "processing",
+    "progress": 68,
+    "result": {
+      "images": {
+        "done": 1,
+        "total": 4
+      }
+    },
+    "errorMessage": null
+  }
+}
+```
+
+Completed response:
+
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "data": {
+    "projectId": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "aiTaskId": "95915ceb-eda2-4890-a954-efff6069c547",
+    "projectStatus": 1,
+    "aiStatus": "completed",
+    "progress": 100,
+    "result": null,
+    "errorMessage": null
+  }
+}
+```
+
+FE should treat the deck as ready when:
+
+```ts
+progress.data.projectStatus === 1 && progress.data.aiStatus === "completed"
+```
+
+Failed response:
+
+```json
+{
+  "code": 1000,
+  "message": "Success",
+  "data": {
+    "projectStatus": 2,
+    "aiStatus": "failed",
+    "progress": 0,
+    "errorMessage": "AI error message"
+  }
+}
+```
+
+## 3. Get Slide Pages
+
+```http
+GET /api/document/projects/{projectId}/pages
 ```
 
 Response:
 
 ```json
 {
-  "code": 200,
+  "code": 1000,
+  "message": "Success",
+  "data": [
+    {
+      "id": "slide-page-id",
+      "projectId": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+      "pageIndex": 0,
+      "title": "Tong quan he thong",
+      "bullets": [
+        "He thong bai do xe thong minh tu dong hoa quy trinh ra vao.",
+        "Camera, cam bien IoT va bang dien tu cap nhat du lieu theo thoi gian thuc."
+      ],
+      "notes": "Noi dung thuyet trinh cho slide.",
+      "chart": null,
+      "table": null,
+      "imageUrl": null,
+      "layout": "text_only",
+      "primaryVisual": null,
+      "likelyMultiPptxSlides": false,
+      "createdAt": "2026-07-10T08:00:00Z",
+      "updatedAt": "2026-07-10T08:00:00Z"
+    }
+  ]
+}
+```
+
+Common layouts:
+
+```txt
+text_only
+text_image
+text_chart
+text_table
+```
+
+Render priority:
+
+```txt
+1. If table is not null, render table.
+2. Else if chart is not null, render chart.
+3. Else if imageUrl has value, render image.
+4. Else render text-only slide.
+```
+
+## 4. Revise Slides With Natural Language
+
+```http
+POST /api/document/projects/{projectId}/revise
+```
+
+Request body:
+
+```json
+{
+  "revisionPrompt": "Sua rieng slide 4: doi anh thanh bai do xe trong truong dai hoc hien dai co camera ANPR, cam bien IoT va bang dien tu hien thi so cho trong. Giu nguyen cac slide con lai.",
+  "revisionScope": "auto",
+  "slideNumber": 4,
+  "slideIndex": null,
+  "imageLimit": null
+}
+```
+
+Minimum request:
+
+```json
+{
+  "revisionPrompt": "Anh slide 3 chua khop, doi thanh bai do xe dai hoc hien dai co cam bien IoT va bang dien tu"
+}
+```
+
+Field notes:
+
+| Field | Required | Description |
+|---|---:|---|
+| `revisionPrompt` | Yes | Natural-language edit request. |
+| `revisionScope` | No | `auto`, `slide`, or `deck`. FE should usually omit it or send `auto`. |
+| `slideNumber` | No | 1-based slide number. Useful when FE has a selected slide. |
+| `slideIndex` | No | 0-based slide index. |
+| `imageLimit` | No | Optional image-generation cap. |
+| `generateImages` | No | Deprecated for FE. Do not send unless intentionally disabling image generation. |
+
+Response when submitted:
+
+```json
+{
+  "code": 1000,
+  "message": "Success",
   "data": {
-    "id": "1954ca70-660c-43a7-aa50-97160f41e532",
-    "name": "Tổng quan về Bãi đỗ xe thông minh trong trường đại học",
-    "ownerId": "e4ecca90-9195-4f71-90ea-2412374f202d",
-    "sourceDocId": null,
-    "templateId": null,
-    "initialPrompt": "Tạo 3 slide tiếng Việt về lợi ích...",
-    "slideUrl": null,
-    "status": 3,
-    "createdAt": "2026-06-21T16:36:24.411362Z",
-    "updatedAt": "2026-06-21T16:36:24.411362Z"
+    "id": "57c354ca-cfde-40f9-8733-57bb69d303e5",
+    "status": 0,
+    "aiTaskId": "64c7ea2d-2dcd-4768-991e-593736dbc600"
   }
 }
 ```
 
-Status project:
+After this, poll progress and fetch pages again.
+
+Supported revise examples:
 
 ```txt
-0 = DRAFT
-1 = REVIEWING
-2 = PROCESSING
-3 = DONE
-4 = FAILED
+Sua rieng slide 1: doi tieu de thanh "Tong quan he thong bai do xe thong minh". Giu nguyen cac slide con lai.
 ```
 
-Hiện tại API này xử lý đồng bộ từ góc nhìn FE: BE sẽ chờ AI sinh xong, lưu DB xong rồi mới trả response. Vì vậy request có thể mất vài chục giây đến vài phút.
+```txt
+Sua rieng slide 2 thanh bang so sanh gom cot Tieu chi, Thu cong, Thong minh, Nhan xet.
+```
 
-## 4. Upload file nguồn
+```txt
+Sua rieng slide 3: giu bieu do duong va cap nhat so lieu Q1 50%, Q2 62%, Q3 76%, Q4 88%.
+```
+
+```txt
+Sua rieng slide 4: doi anh thanh bai do xe dai hoc co camera ANPR, cam bien IoT va bang dien tu.
+```
+
+```txt
+Them 1 slide cuoi ve loi ich khi trien khai he thong bai do xe thong minh.
+```
+
+```txt
+Xoa slide 3 vi noi dung chua can thiet, giu cac slide con lai.
+```
+
+Behavior:
+
+- If user asks to edit one slide, AI Service preserves the other slides.
+- If user asks to add/delete/split/merge/reorder slides, slide count may change.
+- If user asks for a small literal edit, for example title replacement, AI Service should apply it exactly.
+- After revise, BE replaces `slide_pages` with the new AI result. FE should reload pages.
+
+## 5. Table Schema
+
+When `table` is not null:
+
+```json
+{
+  "title": "Bang so sanh",
+  "headers": ["Tieu chi", "Thu cong", "Thong minh", "Nhan xet"],
+  "rows": [
+    ["Toc do xu ly", "Cham", "Nhanh", "He thong thong minh tot hon"],
+    ["Do chinh xac", "Thap", "Cao", "Giam sai sot"]
+  ]
+}
+```
+
+FE should render:
+
+```txt
+table.headers as header row
+table.rows as body rows
+```
+
+## 6. Chart Schema
+
+Single-series chart:
+
+```json
+{
+  "title": "Hieu qua su dung bai do xe theo quy",
+  "chart_type": "line",
+  "type": "line",
+  "labels": ["Q1", "Q2", "Q3", "Q4"],
+  "categories": ["Q1", "Q2", "Q3", "Q4"],
+  "values": [50, 62, 76, 88],
+  "unit": "percent",
+  "is_percent": true
+}
+```
+
+Multi-series chart:
+
+```json
+{
+  "title": "So sanh hieu suat",
+  "chart_type": "bar",
+  "type": "bar",
+  "labels": ["A", "B", "C"],
+  "categories": ["A", "B", "C"],
+  "series": [
+    {
+      "name": "Nam 2025",
+      "values": [10, 20, 30]
+    },
+    {
+      "name": "Nam 2026",
+      "values": [12, 24, 36]
+    }
+  ],
+  "unit": "number",
+  "is_percent": false
+}
+```
+
+FE chart rules:
+
+```txt
+chart type = chart.chart_type || chart.type
+x axis labels = chart.labels || chart.categories
+if chart.series exists, render multi-series
+else render chart.values
+```
+
+Common chart types:
+
+```txt
+bar
+column
+line
+pie
+radar
+```
+
+## 7. Image Field
+
+BE returns image URL in:
+
+```txt
+imageUrl
+```
+
+Example:
+
+```json
+{
+  "imageUrl": "http://localhost:8000/outputs/images/task_4_external.jpg",
+  "layout": "text_image",
+  "primaryVisual": "image"
+}
+```
+
+FE can render `imageUrl` directly. It may be an absolute URL or a URL resolved by BE from AI Service output.
+
+## 8. Upload Source Document
 
 ```http
 POST /api/document/source-documents/upload
@@ -143,7 +448,8 @@ Response:
 
 ```json
 {
-  "code": 200,
+  "code": 1000,
+  "message": "Success",
   "data": {
     "fileName": "report.pdf",
     "fileUrl": "https://...",
@@ -152,164 +458,32 @@ Response:
 }
 ```
 
-Sau khi upload, FE tạo project bằng cách gửi kèm thông tin file:
+Then create project:
 
 ```json
 {
-  "prompt": "Tạo slide từ tài liệu này",
+  "prompt": "Tao slide tu tai lieu nay, tap trung vao ket qua va khuyen nghi.",
   "fileUrl": "https://...",
   "fileName": "report.pdf",
   "fileSize": 123456
 }
 ```
 
-## 5. Lấy danh sách project
+## 9. Update Slide Page Manually
 
-```http
-GET /api/document/projects?page=0&size=10&search=
-```
-
-Response:
-
-```json
-{
-  "code": 200,
-  "data": {
-    "page": 0,
-    "size": 10,
-    "totalElements": 1,
-    "totalPages": 1,
-    "items": [
-      {
-        "id": "1954ca70-660c-43a7-aa50-97160f41e532",
-        "name": "Tổng quan về Bãi đỗ xe thông minh trong trường đại học",
-        "status": 3,
-        "createdAt": "2026-06-21T16:36:24.411362Z"
-      }
-    ]
-  }
-}
-```
-
-## 6. Lấy chi tiết project
-
-```http
-GET /api/document/projects/{projectId}
-```
-
-Response `data` là object `ProjectResponse` giống API tạo project.
-
-## 7. Lấy danh sách slide pages
-
-```http
-GET /api/document/projects/{projectId}/pages
-```
-
-Response:
-
-```json
-{
-  "code": 200,
-  "data": [
-    {
-      "id": "slide-page-id",
-      "projectId": "1954ca70-660c-43a7-aa50-97160f41e532",
-      "pageIndex": 0,
-      "title": "Khác với các bãi đỗ xe truyền thống",
-      "bullets": [
-        "Ý chính 1",
-        "Ý chính 2"
-      ],
-      "notes": "Kịch bản thuyết trình cho slide này...",
-      "chart": null,
-      "table": null,
-      "imageUrl": "http://localhost:8000/outputs/images/example.jpg",
-      "layout": "text_image",
-      "primaryVisual": "image",
-      "likelyMultiPptxSlides": false,
-      "createdAt": "2026-06-21T16:38:00Z",
-      "updatedAt": "2026-06-21T16:38:00Z"
-    }
-  ]
-}
-```
-
-Các layout thường gặp:
-
-```txt
-text_only
-text_image
-text_chart
-text_table
-```
-
-FE nên ưu tiên render theo dữ liệu:
-
-```txt
-Nếu table != null -> render table
-Nếu chart != null -> render chart
-Nếu imageUrl có giá trị -> render image
-Nếu không có visual -> render text only
-```
-
-## 8. Chart schema
-
-Khi slide có chart, field `chart` là object JSON:
-
-```json
-{
-  "type": "bar",
-  "title": "Điểm trung bình theo môn",
-  "labels": ["Toán", "Cấu trúc dữ liệu", "Mạng máy tính"],
-  "series": [
-    {
-      "name": "Điểm TB",
-      "values": [8.2, 7.8, 8.5]
-    }
-  ]
-}
-```
-
-Chart type có thể gặp:
-
-```txt
-bar
-column
-line
-pie
-radar
-```
-
-## 9. Table schema
-
-Khi slide có table, field `table` là object JSON:
-
-```json
-{
-  "title": "So sánh trước và sau",
-  "headers": ["Tiêu chí", "Trước", "Sau"],
-  "rows": [
-    ["Tìm chỗ đỗ", "Thủ công", "Tự động"],
-    ["Thời gian", "Lâu", "Nhanh"]
-  ]
-}
-```
-
-FE nên render `headers` làm dòng đầu, `rows` làm nội dung.
-
-## 10. Cập nhật slide page
+Use this when FE editor changes a slide manually, not through AI revise.
 
 ```http
 POST /api/document/projects/{projectId}/pages/{pageId}
 ```
 
-Request có thể gửi một phần hoặc toàn bộ field:
+Request body can include partial fields:
 
 ```json
 {
-  "title": "Tiêu đề mới",
-  "bullets": ["Ý 1", "Ý 2"],
-  "notes": "Script mới",
+  "title": "Tieu de moi",
+  "bullets": ["Y 1", "Y 2"],
+  "notes": "Script moi",
   "chart": null,
   "table": null,
   "imageUrl": "http://...",
@@ -319,9 +493,7 @@ Request có thể gửi một phần hoặc toàn bộ field:
 }
 ```
 
-Response `data` là slide page đã cập nhật.
-
-## 11. Đồng bộ nhiều slide page
+## 10. Sync Multiple Pages
 
 ```http
 POST /api/document/projects/{projectId}/pages/sync
@@ -334,7 +506,7 @@ Request:
   {
     "id": "existing-page-id",
     "title": "Slide 1",
-    "bullets": ["Ý 1"],
+    "bullets": ["Y 1"],
     "notes": "Script",
     "chart": null,
     "table": null,
@@ -346,58 +518,45 @@ Request:
 ]
 ```
 
-Response `data` là danh sách slide pages sau khi sync.
-
-## 12. Task logs
+## 11. Cancel Running Task
 
 ```http
-GET /api/document/projects/{projectId}/task-logs
+POST /api/document/projects/{projectId}/cancel
 ```
 
 Response:
 
 ```json
 {
-  "code": 200,
-  "data": [
-    {
-      "id": "task-log-id",
-      "projectId": "project-id",
-      "taskType": 0,
-      "status": 2,
-      "errorMessage": null,
-      "startedAt": "2026-06-21T16:36:24Z",
-      "completedAt": "2026-06-21T16:38:24Z",
-      "createdAt": "2026-06-21T16:36:24Z"
-    }
-  ]
+  "code": 1000,
+  "message": "Success",
+  "data": "Huy tac vu thanh cong"
 }
 ```
 
-Task type:
+Cancel is best-effort. FE should still poll progress after cancel if it needs final state.
 
-```txt
-0 = EXTRACT_TEXT
-1 = GEN_IMAGE
-2 = RENDER_PPTX
+## 12. Project List and Detail
+
+List:
+
+```http
+GET /api/document/projects?page=0&size=10&search=
 ```
 
-Task status:
+Detail:
 
-```txt
-0 = PENDING
-1 = PROCESSING
-2 = SUCCESS
-3 = FAILED
+```http
+GET /api/document/projects/{projectId}
 ```
 
-## 13. Xóa project
+Delete:
 
 ```http
 DELETE /api/document/projects
 ```
 
-Request:
+Delete body:
 
 ```json
 [
@@ -406,41 +565,12 @@ Request:
 ]
 ```
 
-Response:
+## 13. FE Integration Notes
 
-```json
-{
-  "code": 200,
-  "data": "Projects deleted successfully"
-}
-```
-
-## FE Flow Khuyến Nghị
-
-Flow tạo slide từ prompt:
-
-```txt
-1. Login -> lấy token
-2. POST /api/document/projects
-3. Lấy projectId từ response
-4. GET /api/document/projects/{projectId}/pages
-5. Render slides từ pages
-```
-
-Flow tạo slide từ file:
-
-```txt
-1. Login -> lấy token
-2. POST /api/document/source-documents/upload
-3. POST /api/document/projects với fileUrl/fileName/fileSize
-4. GET /api/document/projects/{projectId}/pages
-5. Render slides từ pages
-```
-
-Lưu ý quan trọng:
-
-```txt
-FE không gọi trực tiếp AI service.
-FE chỉ gọi BE qua /api/document/** và /api/auth/**.
-BE tự gọi AI, poll status AI, lưu DB, rồi trả JSON cho FE.
-```
+- FE should render from `/pages`, not from AI task result.
+- FE should reload `/pages` after every successful revise.
+- FE should not expose controls for slide count, image count, table/chart/image mode unless product requires it later.
+- User-facing revise UI can be a single text box plus an optional selected slide context.
+- For a selected slide, FE may send `slideNumber`; AI Service can also infer slide number from prompt.
+- FE should handle `table`, `chart`, and `imageUrl` as optional nullable fields.
+- FE should not infer table/chart from bullet text. Use the structured fields only.

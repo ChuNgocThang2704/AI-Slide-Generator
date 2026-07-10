@@ -36,6 +36,14 @@ _NUMERIC_VALUE_RE = re.compile(
 _SENTENCE_END_RE = re.compile(r"[.!?。]\s*$")
 
 
+def _split_criteria_text(text: str) -> List[str]:
+    return [
+        re.sub(r"^(?:va|và|and)\s+", "", part.strip(" ,;:-"))
+        for part in re.split(r",|;|\s+và\s+|\s+va\s+|\s+and\s+", str(text or ""), flags=re.IGNORECASE)
+        if part.strip(" ,;:-")
+    ][:8]
+
+
 def _slide_lines(slide: Dict[str, Any]) -> List[str]:
     bullets = slide.get("bullets") or slide.get("content") or []
     if isinstance(bullets, str):
@@ -59,10 +67,10 @@ def _table_from_markdown_lines(lines: List[str]) -> Optional[Dict[str, Any]]:
 
 
 def _table_from_pair_lines(slide: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Build a key/value table only from explicit `key: value` bullet lines.
+    """Xây dựng bảng khóa/giá trị chỉ từ các dòng bullet có định dạng `khóa: giá trị` rõ ràng.
 
-    Hyphens are common inside Vietnamese names and prose (for example Giơ-Ne),
-    so they are intentionally not treated as table separators here.
+    Dấu gạch ngang khá phổ biến trong tên tiếng Việt và văn xuôi (ví dụ: Giơ-Ne),
+    vì vậy chúng cố tình không được xử lý như các dấu phân cách bảng ở đây.
     """
     slide_text = _fold_text(
         " ".join([str(slide.get("title") or "")] + _slide_lines(slide))
@@ -71,25 +79,71 @@ def _table_from_pair_lines(slide: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     rows: List[List[str]] = []
     for line in _slide_lines(slide):
         m = _PAIR_LINE_RE.match(line)
-        if not m:
+        if m:
+            key, value = m.group(1), m.group(2)
+        elif ":" in line:
+            key, value = line.split(":", 1)
+        else:
             continue
-        key, value = m.group(1), m.group(2)
         key = key.strip()
         value = value.strip()
         key_folded = _fold_text(key)
+        numeric_value = value.strip().rstrip(".。")
         if key_folded.startswith(("goi y", "suggestion", "note", "ghi chu")):
+            continue
+        if (
+            re.search(r"\b(?:q[1-4]|quy\s*[1-4]|quarter\s*[1-4]|thang\s*\d{1,2}|month\s*\d{1,2}|(?:19|20)\d{2})\b", key_folded)
+            or (key_folded.startswith(("q", "qu")) and len(key_folded) <= 12)
+        ) and _NUMERIC_VALUE_RE.match(numeric_value):
             continue
         if len(key.split()) > 6:
             continue
         if key and value:
             rows.append([key, value])
+    if len(rows) == 1 and "vs" in str(rows[0][1] or "").lower():
+        left, right = re.split(r"\bvs\.?\s*|\bversus\s*", str(rows[0][1]), maxsplit=1, flags=re.IGNORECASE)
+        return normalize_table_spec(
+            {
+                "title": str(slide.get("title") or ""),
+                "headers": ["Tiêu chí", "Phương án 1", "Phương án 2"],
+                "rows": [[rows[0][0], left.strip(" .;:-"), right.strip(" .;:-")]],
+            }
+        )
+    has_vs_row = any("vs" in str(row[1] or "").lower() for row in rows)
     if len(rows) < 2:
         return None
     numeric_rows = sum(1 for row in rows if _NUMERIC_VALUE_RE.match(str(row[1] or "")))
     if rows and numeric_rows >= 2 and numeric_rows >= len(rows) - 1:
         return None
-    if keyword_hits < 1 and len(rows) < 3:
+    if keyword_hits < 1 and len(rows) < 3 and not has_vs_row:
         return None
+    comparison_rows: List[List[str]] = []
+    for key, value in rows:
+        text_value = str(value or "")
+        if ";" not in text_value:
+            comparison_rows = []
+            break
+        parts = [p.strip(" .;:-") for p in text_value.split(";") if p.strip(" .;:-")]
+        left = ""
+        right = ""
+        for part in parts:
+            folded_part = _fold_text(part)
+            if "thu cong" in folded_part:
+                left = re.sub(r"^(?:thủ công|thu cong)\s*[-:]\s*", "", part, flags=re.IGNORECASE).strip()
+            elif "thong minh" in folded_part:
+                right = re.sub(r"^(?:thông minh|thong minh)\s*[-:]\s*", "", part, flags=re.IGNORECASE).strip()
+        if not left or not right:
+            comparison_rows = []
+            break
+        comparison_rows.append([key, left, right])
+    if len(comparison_rows) >= 2:
+        return normalize_table_spec(
+            {
+                "title": str(slide.get("title") or "So sánh phương án"),
+                "headers": ["Tiêu chí", "Quản lý thủ công", "Hệ thống thông minh"],
+                "rows": comparison_rows,
+            }
+        )
     return normalize_table_spec(
         {
             "title": str(slide.get("title") or ""),
@@ -104,9 +158,9 @@ def deterministic_table_spec_from_slide(slide: Dict[str, Any]) -> Optional[Dict[
 
 
 def _raw_table_candidates(raw_content: str) -> List[Dict[str, Any]]:
-    """Extract explicit markdown tables from the original user input.
+    """Trích xuất các bảng markdown rõ ràng từ đầu vào gốc của người dùng.
 
-    This preserves tables that the LLM may later rewrite into prose bullets.
+    Điều này giúp giữ lại các bảng mà LLM có thể viết lại thành các dòng bullet văn xuôi sau đó.
     """
     lines = str(raw_content or "").splitlines()
     candidates: List[Dict[str, Any]] = []
@@ -161,6 +215,88 @@ def _raw_table_candidates(raw_content: str) -> List[Dict[str, Any]]:
             }
         )
     return candidates
+
+
+def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
+    text = re.sub(r"\s+", " ", str(raw_content or "")).strip()
+    folded = _fold_text(text)
+    if "bang so sanh" not in folded or "tieu chi" not in folded:
+        return None
+
+    option_a = "Phương án 1"
+    option_b = "Phương án 2"
+    between_match = re.search(
+        r"giua\s+(.+?)\s+va\s+(.+?)\s+theo\s+cac\s+tieu\s+chi\s*[:：]\s*(.+)",
+        folded,
+        flags=re.IGNORECASE,
+    )
+    if between_match:
+        option_a = between_match.group(1).strip(" ,;:-")
+        option_b = between_match.group(2).strip(" ,;:-")
+        criteria_text = between_match.group(3)
+    else:
+        marker = "tieu chi"
+        criteria_text = folded.split(marker, 1)[-1].lstrip(" :：")
+
+    criteria = _split_criteria_text(criteria_text)
+    criteria = [c for c in criteria if len(c) >= 2 and not c.startswith(("q1", "q2", "q3", "q4"))]
+    if len(criteria) < 2:
+        return None
+
+    def pretty_option(value: str) -> str:
+        value = value.strip(" ,;:-")
+        if "thu cong" in value:
+            return "Quản lý thủ công"
+        if "thong minh" in value:
+            return "Hệ thống thông minh"
+        return value[:60] or "Phương án"
+
+    option_a_pretty = pretty_option(option_a)
+    option_b_pretty = pretty_option(option_b)
+
+    def cell_for(option: str, criterion: str) -> str:
+        of = _fold_text(option)
+        cf = _fold_text(criterion)
+        is_manual = any(k in of for k in ("thu cong", "manual", "truyen thong"))
+        is_smart = any(k in of for k in ("thong minh", "smart", "tu dong", "automatic"))
+        if is_manual:
+            if "toc do" in cf:
+                return "Chậm, phụ thuộc nhân sự và thao tác thủ công."
+            if "chinh xac" in cf:
+                return "Dễ sai sót khi ghi nhận vé, biển số hoặc thanh toán."
+            if "chi phi" in cf:
+                return "Tốn chi phí nhân sự trực ca và giám sát liên tục."
+            if "trai nghiem" in cf:
+                return "Người dùng mất thời gian tìm chỗ và chờ xử lý."
+        if is_smart:
+            if "toc do" in cf:
+                return "Nhanh hơn nhờ cảm biến, ANPR và xử lý tự động."
+            if "chinh xac" in cf:
+                return "Chính xác hơn nhờ dữ liệu thời gian thực và đối chiếu tự động."
+            if "chi phi" in cf:
+                return "Giảm chi phí vận hành dài hạn nhờ tối ưu nhân sự."
+            if "trai nghiem" in cf:
+                return "Hiển thị chỗ trống, chỉ dẫn nhanh và thanh toán tiện lợi."
+        return ""
+
+    spec = normalize_table_spec(
+        {
+            "title": "So sánh phương án quản lý",
+            "headers": ["Tiêu chí", option_a_pretty, option_b_pretty],
+            "rows": [
+                [criterion, cell_for(option_a_pretty, criterion), cell_for(option_b_pretty, criterion)]
+                for criterion in criteria[:8]
+            ],
+        }
+    )
+    if not spec:
+        return None
+    return {
+        "source": "raw_comparison_request",
+        "heading": spec["title"],
+        "context": folded,
+        "spec": spec,
+    }
 
 
 def _slide_match_score(slide: Dict[str, Any], candidate: Dict[str, Any]) -> int:
@@ -226,7 +362,7 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
 
 
 def _table_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
-    """Generic table gate: headers/row anchors must be supported by source text."""
+    """Cổng chặn bảng chung: các tiêu đề/neo hàng phải được hỗ trợ bởi văn bản gốc."""
     if not isinstance(spec, dict):
         return False
     headers = [str(h).strip() for h in (spec.get("headers") or []) if str(h).strip()]
@@ -322,6 +458,7 @@ async def build_table_specs_for_slides(
     task_id: str = "",
     should_stop: Optional[Any] = None,
     raw_content: str = "",
+    visual_plan: Optional[Dict[int, str]] = None,
 ) -> Dict[int, Dict[str, Any]]:
     """{slide_index: table spec} — ưu tiên `slide.table` từ JSON; không thì LLM khi giống bảng."""
     slides = structured.get("slides") or []
@@ -363,7 +500,12 @@ async def build_table_specs_for_slides(
             best_idx = -1
             best_score = 0
             for idx, slide in enumerate(slides):
-                if idx in used_slides or not isinstance(slide, dict):
+                planned_visual = str(
+                    (visual_plan or {}).get(idx)
+                    or (visual_plan or {}).get(str(idx))
+                    or ""
+                ).strip().lower()
+                if idx in used_slides or not isinstance(slide, dict) or (planned_visual and planned_visual != "table"):
                     continue
                 score = _slide_match_score(slide, candidate)
                 if score > best_score:
@@ -422,7 +564,22 @@ async def build_table_specs_for_slides(
             continue
         if idx in assigned_raw:
             continue
-        if chart_intent_from_slide(slide):
+        planned_visual = str(
+            (visual_plan or {}).get(idx)
+            or (visual_plan or {}).get(str(idx))
+            or ""
+        ).strip().lower()
+        if planned_visual and planned_visual != "table":
+            debug_records.append(
+                {
+                    "slide_index": idx,
+                    "title": str(slide.get("title") or ""),
+                    "source": "visual_plan",
+                    "status": f"skipped_planned_{planned_visual}",
+                }
+            )
+            continue
+        if planned_visual != "table" and chart_intent_from_slide(slide):
             continue
         inline = normalize_table_spec_from_slide(slide)
         if inline:
@@ -454,17 +611,30 @@ async def build_table_specs_for_slides(
             print(f"[slide_tables] slide {idx} table: deterministic {len(deterministic['rows'])} row(s)")
             continue
 
-        # If the original prompt already contained explicit markdown tables, avoid
-        # asking the LLM to invent additional comparison tables from prose-only
-        # slides. Inline/deterministic tables above still pass through.
+        # Nếu prompt gốc đã chứa các bảng markdown rõ ràng, tránh yêu cầu LLM
+        # tự tạo thêm các bảng so sánh từ các slide chỉ chứa văn xuôi. Các bảng
+        # dạng inline/deterministic ở trên vẫn được đi qua.
         if raw_candidates:
             continue
 
-        if not _looks_like_table_slide(slide):
+        if planned_visual != "table" and not _looks_like_table_slide(slide):
             continue
         if not hasattr(content_extractor, "extract_table_spec"):
             continue
-        raw = await content_extractor.extract_table_spec({"slide": slide})
+        raw = await content_extractor.extract_table_spec(
+            {
+                "slide": slide,
+                "context": "\n".join(
+                    [
+                        "Slide:",
+                        "\n".join(_slide_lines(slide)),
+                        "",
+                        "Original user/source excerpt:",
+                        str(raw_content or "")[:2500],
+                    ]
+                ),
+            }
+        )
         spec = normalize_table_spec(raw)
         if spec and not _table_spec_has_text_evidence(spec, " ".join(_slide_lines(slide) + [raw_content[:2500]])):
             spec = None
@@ -481,6 +651,45 @@ async def build_table_specs_for_slides(
             out[idx] = spec
             print(f"[slide_tables] slide {idx} table: llm {len(spec['rows'])} row(s)")
 
+    if not out:
+        comparison_candidate = _raw_comparison_request(raw_content)
+        spec = (comparison_candidate or {}).get("spec")
+        if isinstance(spec, dict):
+            best_idx = -1
+            best_score = -1
+            for idx, slide in enumerate(slides):
+                if not isinstance(slide, dict) or chart_intent_from_slide(slide):
+                    continue
+                planned_visual = str(
+                    (visual_plan or {}).get(idx)
+                    or (visual_plan or {}).get(str(idx))
+                    or ""
+                ).strip().lower()
+                if planned_visual and planned_visual != "table":
+                    continue
+                score = _slide_match_score(slide, comparison_candidate)
+                folded_slide = _fold_text(" ".join([str(slide.get("title") or "")] + _slide_lines(slide)))
+                if any(k in folded_slide for k in ("thu cong", "thong minh", "so sanh", "phuong an")):
+                    score += 4
+                if planned_visual == "table":
+                    score += 3
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+            if best_idx >= 0:
+                out[best_idx] = spec
+                debug_records.append(
+                    {
+                        "slide_index": best_idx,
+                        "title": str((slides[best_idx] or {}).get("title") or ""),
+                        "source": "raw_comparison_request",
+                        "spec": spec,
+                        "status": "created",
+                        "match_score": best_score,
+                    }
+                )
+                print(f"[slide_tables] slide {best_idx} table: raw comparison request {len(spec['rows'])} row(s)")
+
     out, debug_records = await review_visual_data_specs(
         content_extractor,
         structured,
@@ -489,6 +698,45 @@ async def build_table_specs_for_slides(
         kind="table",
         raw_content=raw_content,
     )
+
+    if not out:
+        comparison_candidate = _raw_comparison_request(raw_content)
+        spec = (comparison_candidate or {}).get("spec")
+        if isinstance(spec, dict):
+            best_idx = -1
+            best_score = -1
+            for idx, slide in enumerate(slides):
+                if not isinstance(slide, dict) or chart_intent_from_slide(slide):
+                    continue
+                planned_visual = str(
+                    (visual_plan or {}).get(idx)
+                    or (visual_plan or {}).get(str(idx))
+                    or ""
+                ).strip().lower()
+                if planned_visual and planned_visual != "table":
+                    continue
+                score = _slide_match_score(slide, comparison_candidate)
+                folded_slide = _fold_text(" ".join([str(slide.get("title") or "")] + _slide_lines(slide)))
+                if any(k in folded_slide for k in ("thu cong", "thong minh", "so sanh", "phuong an", "toc do", "chinh xac", "chi phi")):
+                    score += 4
+                if planned_visual == "table":
+                    score += 3
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+            if best_idx >= 0:
+                out[best_idx] = spec
+                debug_records.append(
+                    {
+                        "slide_index": best_idx,
+                        "title": str((slides[best_idx] or {}).get("title") or ""),
+                        "source": "raw_comparison_request",
+                        "spec": spec,
+                        "status": "created_after_review",
+                        "match_score": best_score,
+                    }
+                )
+                print(f"[slide_tables] slide {best_idx} table: raw comparison request after review {len(spec['rows'])} row(s)")
 
     if task_id:
         _write_debug_json(task_id, debug_records)

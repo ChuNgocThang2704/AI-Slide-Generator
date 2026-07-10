@@ -1,9 +1,10 @@
-"""Chunking, summarization, and reduce-stage helpers."""
+"""Các hàm bổ trợ để phân mảnh (chunking), tóm tắt (summarization) và xử lý ở giai đoạn gộp (reduce-stage)."""
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+import json
 
 from config import (
     LLM_CHUNK_FAST_TIMEOUT_SEC,
@@ -19,7 +20,7 @@ from services.content.prompts import MAX_BULLETS_PER_SLIDE
 
 class ChunkingMixin:
     def _estimate_summary_bullets(self, content: str, fast_mode: bool = False) -> int:
-        """Estimate summary bullet count for the map step."""
+        """Ước lượng số lượng gạch đầu dòng (bullet points) tóm tắt cho bước map (map step)."""
         length = len(content or "")
         if fast_mode:
             return 5
@@ -30,9 +31,9 @@ class ChunkingMixin:
         return 7
 
     def _build_summary_messages(self, content: str, fast_mode: bool = False) -> List[Dict[str, str]]:
-        """Build messages for chunk summarization before final slide composition."""
+        """Tạo danh sách tin nhắn (prompt) để gửi cho LLM tóm tắt đoạn văn bản trước khi tổng hợp slide cuối cùng."""
         normalized = self._normalize_for_llm(content)
-        # Balance speed/quality: trim prefill a bit for non-fast path.
+        # Cân bằng giữa tốc độ và chất lượng: cắt bớt nội dung prefill cho các trường hợp không ưu tiên tốc độ.
         content_limit = 5000 if fast_mode else 5800
         content_preview = normalized[:content_limit] if len(normalized) > content_limit else normalized
         bullet_limit = self._estimate_summary_bullets(content, fast_mode=fast_mode)
@@ -67,7 +68,7 @@ class ChunkingMixin:
         ]
 
     def _fallback_summary(self, content: str, max_bullets: int = 5) -> Dict[str, Any]:
-        """Build a summary section from fallback extraction when LLM summary fails."""
+        """Tạo phần tóm tắt dự phòng từ văn bản thô khi việc tóm tắt bằng LLM bị lỗi."""
         fallback = self._fallback_structure(content)
         title = fallback.get("title") or "Nội dung chính"
         bullets: List[str] = []
@@ -86,7 +87,7 @@ class ChunkingMixin:
         }
 
     async def _summarize_chunk(self, chunk_content: str, fast_mode: bool = False) -> Dict[str, Any]:
-        """Map step: summarize one chunk into a compact set of bullets."""
+        """Bước Map: tóm tắt một phân mảnh (chunk) thành một tập hợp các gạch đầu dòng ngắn gọn."""
         messages = self._build_summary_messages(chunk_content, fast_mode=fast_mode)
         max_bullets = self._estimate_summary_bullets(chunk_content, fast_mode=fast_mode)
         try:
@@ -140,7 +141,7 @@ class ChunkingMixin:
             return self._fallback_summary(chunk_content, max_bullets=max_bullets)
 
     def _merge_chunk_summaries(self, summaries: List[Dict[str, Any]]) -> Dict[str, str]:
-        """Reduce step input: merge chunk summaries into one compact markdown-like document."""
+        """Đầu vào của bước Reduce: gộp các bản tóm tắt phân mảnh thành một tài liệu nhỏ gọn dạng markdown."""
         lines: List[str] = []
         doc_title = "Bài thuyết trình"
         for idx, summary in enumerate(summaries, start=1):
@@ -159,7 +160,7 @@ class ChunkingMixin:
         }
 
     def _partition_bullets(self, bullets: List[str], slide_count: int) -> List[List[str]]:
-        """Split bullets into contiguous groups while preserving order."""
+        """Chia các gạch đầu dòng thành các nhóm liên tiếp nhưng vẫn giữ nguyên thứ tự gốc."""
         clean_bullets = [str(b).strip() for b in bullets if str(b).strip()]
         if not clean_bullets:
             return []
@@ -184,7 +185,7 @@ class ChunkingMixin:
         slides: List[Dict[str, Any]],
         min_slides: int,
     ) -> List[Dict[str, Any]]:
-        """Split rich slides until reaching the minimum target or no useful split remains."""
+        """Tách các slide chứa quá nhiều nội dung thành nhiều slide nhỏ hơn cho đến khi đạt số lượng slide tối thiểu hoặc không thể tách thêm một cách hợp lý."""
         expanded = [
             {
                 "title": str(slide.get("title") or "Nội dung"),
@@ -255,7 +256,7 @@ class ChunkingMixin:
         slide_plan: Dict[str, int],
         outline: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Create the final deck directly from chunk summaries without a final LLM compose step."""
+        """Tạo trực tiếp slide deck cuối cùng từ các bản tóm tắt phân mảnh mà không cần bước LLM tổng hợp (compose) cuối cùng."""
         if not summaries:
             return {"title": "Bài thuyết trình", "slides": []}
 
@@ -324,7 +325,7 @@ class ChunkingMixin:
         return self._normalize_structured_content({"title": doc_title, "slides": expanded_slides})
 
     def _estimate_reduce_slide_plan(self, summaries: List[Dict[str, Any]], merged_content: str) -> Dict[str, int]:
-        """Estimate target/min/max slides for final compose from reduced summaries."""
+        """Ước lượng số lượng slide mục tiêu/tối thiểu/tối đa cho bước tổng hợp cuối cùng từ các bản tóm tắt rút gọn."""
         section_count = max(1, len(summaries))
         bullet_count = sum(len(section.get("bullets", [])) for section in summaries)
         content_len = len(merged_content or "")
@@ -341,23 +342,22 @@ class ChunkingMixin:
 
         target = max(target_from_sections, target_from_bullets, target_from_length)
 
-        # Heavier summaries deserve a slightly broader deck.
+        # Các bản tóm tắt có dung lượng lớn hơn sẽ cần một slide deck rộng hơn một chút.
         if bullet_count >= 36:
             target += 1
         if content_len >= 9000:
             target += 1
 
-        # Khi chạy server mạnh, cho phép deck dày hơn và “thoải mái” số slide hơn.
-        # Tránh tình trạng bị kẹp quá chặt quanh ~10 slide.
-        # Keep quality mode broad, but avoid overly large decks that slow generation.
-        upper_cap = 22 if LLM_QUALITY_MODE else 18
+        # Khi chạy server mạnh, cho phép tự động sinh nhiều slide hơn cho tài liệu dài (tối đa 40 slide).
+        # Tránh tình trạng bị kẹp quá chặt quanh ~10-22 slide cho file 100 trang.
+        upper_cap = 40 if LLM_QUALITY_MODE else 18
         target = max(section_count, min(upper_cap, target))
         min_slides = max(
             section_count,
             (target - 1) if LLM_QUALITY_MODE else (target - 3),
         )
         max_slides = min(
-            28 if LLM_QUALITY_MODE else 20,
+            45 if LLM_QUALITY_MODE else 20,
             target + (5 if LLM_QUALITY_MODE else 2),
         )
         return {
@@ -371,10 +371,10 @@ class ChunkingMixin:
         summaries: List[Dict[str, Any]],
         slide_plan: Dict[str, int],
     ) -> List[Dict[str, Any]]:
-        """Rule-based outline: allocate slides proportionally by bullet count.
+        """Tạo dàn ý dựa trên quy tắc (rule-based): phân bổ số slide tỷ lệ thuận theo số lượng gạch đầu dòng.
 
-        Runs instantly (no LLM call). Gives near-identical results to LLM planning
-        because the LLM also does weighted proportional allocation.
+        Hàm này chạy tức thời (không gọi LLM). Kết quả thu được gần như tương đồng với việc lập kế hoạch bằng LLM 
+        vì LLM thực tế cũng thực hiện phân bổ tỷ lệ có trọng số.
         """
         target = slide_plan["target"]
         min_s = slide_plan["min"]
@@ -384,14 +384,14 @@ class ChunkingMixin:
         bullet_counts = [max(1, len(s.get("bullets", []))) for s in summaries]
         total_bullets = sum(bullet_counts)
 
-        # Proportional allocation, minimum 1 per section
+        # Phân bổ tỷ lệ thuận, tối thiểu 1 slide cho mỗi phần
         raw_alloc = [max(1, round(target * bc / total_bullets)) for bc in bullet_counts]
 
-        # Adjust to hit target exactly
+        # Điều chỉnh để đạt chính xác số lượng slide mục tiêu
         total = sum(raw_alloc)
         diff = target - total
         if diff != 0:
-            # Sort by fractional remainder to decide who gets +1 or -1
+            # Sắp xếp theo phần dư thập phân để quyết định phần nào được cộng thêm 1 hoặc trừ đi 1 slide
             remainders = [
                 (target * bullet_counts[i] / total_bullets) - raw_alloc[i]
                 for i in range(n)
@@ -401,7 +401,7 @@ class ChunkingMixin:
                 idx = order[k % n]
                 raw_alloc[idx] += 1 if diff > 0 else (-1 if raw_alloc[idx] > 1 else 0)
 
-        # Clamp to [min_s, max_s] by distributing excess
+        # Giới hạn số slide trong khoảng [min_s, max_s] bằng cách phân bổ phần dư thừa/thiếu
         total = sum(raw_alloc)
         if total < min_s:
             for i in range(min_s - total):
@@ -425,9 +425,9 @@ class ChunkingMixin:
         merged_content: str,
         slide_plan: Dict[str, int],
     ) -> Optional[List[Dict[str, Any]]]:
-        """Outline planning: rule-based (instant) with no LLM call needed.
+        """Lên kế hoạch dàn ý (outline planning): sử dụng quy tắc (chạy tức thời) không cần gọi LLM.
 
-        Returns list like [{"section": "X", "slides": 2}] or None if < 2 sections.
+        Trả về danh sách dạng [{"section": "X", "slides": 2}] hoặc None nếu có ít hơn 2 phần.
         """
         if len(summaries) < 2:
             return None
@@ -440,10 +440,10 @@ class ChunkingMixin:
         min_sections: int = 5,
         max_sections: int = 8,
     ) -> List[Dict[str, str]]:
-        """FINAL SPEC - Outline step.
+        """Đặc tả cuối cùng (FINAL SPEC) - Bước lên dàn ý (Outline step).
 
-        Input: merged_summary["content"] (đã là bản tóm tắt theo ##)
-        Output: JSON thuần {"sections":[{"title": "...", "description": "..."}]}
+        Đầu vào: merged_summary["content"] (đã là bản tóm tắt phân chia theo tiêu đề ##)
+        Đầu ra: JSON thuần {"sections":[{"title": "...", "description": "..."}]}
         """
         normalized = self._normalize_for_llm(merged_content)
         preview = normalized[:7000] if len(normalized) > 7000 else normalized
@@ -514,7 +514,7 @@ class ChunkingMixin:
         outline_sections: List[Dict[str, Any]],
         target_slides: int,
     ) -> List[Dict[str, str]]:
-        """FINAL SPEC - Expansion step (làm content phong phú hơn, KHÔNG summarize)."""
+        """Đặc tả cuối cùng (FINAL SPEC) - Bước mở rộng (Expansion step - làm nội dung phong phú hơn, KHÔNG tóm tắt)."""
         normalized = self._normalize_for_llm(merged_content)
         preview = normalized[:7000] if len(normalized) > 7000 else normalized
         # Khi user chọn nhiều slide: mở rộng sâu hơn + thêm ví dụ/phân rã.
@@ -574,41 +574,44 @@ class ChunkingMixin:
         expanded = str(expanded or "").strip()
         return expanded if expanded else merged_content
 
-    async def _outline_expand_generate(
+    # ------------------------------------------------------------------
+    # Paragraph-based split (fallback khi không có heading structure)
+    # ------------------------------------------------------------------
+
+    def _split_by_paragraph_blocks(
         self,
-        merged_content: str,
-        slide_plan: Dict[str, int],
-        target_slides_override: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """FINAL SPEC pipeline after summary:
-        outline -> expand -> generate slides -> normalize/balance
+        content: str,
+        max_chars: int = 7000,
+        min_chars: int = 1500,
+    ) -> List[str]:
+        """Chia content theo ranh giới đoạn văn khi không detect được heading.
+
+        Mỗi block có độ dài từ min_chars đến max_chars.
+        Block nhỏ phía sau được merge vào block trước.
         """
-        target_slides = int(target_slides_override or slide_plan.get("target") or 10)
-        min_sections, max_sections = 5, 8
-        print("Planning outline sections (5–8)...")
-        outline_sections = await self._plan_outline_sections(
-            merged_content,
-            min_sections=min_sections,
-            max_sections=max_sections,
-        )
-        print(f"Outline sections: {len(outline_sections)}")
-        expanded_content = await self._expand_content(
-            merged_content,
-            outline_sections=outline_sections,
-            target_slides=target_slides,
-        )
-        # Generate slides from expanded content (không compose_mode).
-        final_result = await self._extract_compact_content(
-            expanded_content,
-            target_slides=target_slides,
-            chunk_mode=False,
-            fast_mode=LLM_FAST_MODE,
-            compose_mode=False,
-        )
-        # FINAL SPEC: đảm bảo slide count đúng {N} kể cả khi post-process
-        # (lọc/dedup/merge) làm trượt số slide.
-        final_result = await self._force_slide_count_exact(final_result, target_slides)
-        return final_result
+        import re as _re
+        paragraphs = _re.split(r'\n{2,}', content.strip())
+        chunks: List[str] = []
+        current: str = ""
+
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            candidate = f"{current}\n\n{para}" if current else para
+            if len(candidate) > max_chars and len(current) >= min_chars:
+                chunks.append(current.strip())
+                current = para
+            else:
+                current = candidate
+
+        if current.strip():
+            if chunks and len(current.strip()) < min_chars:
+                chunks[-1] = f"{chunks[-1]}\n\n{current.strip()}"
+            else:
+                chunks.append(current.strip())
+
+        return chunks if chunks else [content]
 
     async def _summarize_chunk_with_retries(
         self,
@@ -617,7 +620,7 @@ class ChunkingMixin:
         total_chunks: int,
         should_stop: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Map step: một chunk → một hoặc nhiều summary dict (subchunk khi timeout)."""
+        """Bước Map: xử lý một phân mảnh (chunk) -> trả về một hoặc nhiều dictionary tóm tắt (chia nhỏ hơn thành subchunk nếu gặp lỗi timeout)."""
         print(f"Summarizing chunk {chunk_idx + 1}/{total_chunks} ({len(chunk)} chars)...")
         parts: List[Dict[str, Any]] = []
         try:
@@ -678,11 +681,23 @@ class ChunkingMixin:
         target_slides_override: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        Chunking strategy: chia content theo Heading; summary map theo LLM_CHUNK_PARALLEL;
-        merge rồi cùng một luồng `_expand_group_generate_refine_pipeline` như nội dung ngắn.
+        Chiến lược phân mảnh (Chunking strategy): chia nội dung theo Heading; tóm tắt đồng thời (summary map) theo cấu hình LLM_CHUNK_PARALLEL;
+        gộp lại (merge) rồi đưa vào cùng một luồng xử lý `_expand_group_generate_refine_pipeline` như đối với nội dung ngắn.
         """
         chunks = self._split_by_headings(raw_content)
-        
+
+        # Fallback: nếu không detect được heading và content rất dài
+        # → chia theo paragraph để tránh 1 chunk khổng lồ (50+ trang) bị summarize cắt tại 5800 chars.
+        if len(chunks) == 1 and len(raw_content) > 12000:
+            print(
+                f"[chunking] No headings detected in {len(raw_content)}-char content; "
+                "switching to paragraph-block split."
+            )
+            para_chunks = self._split_by_paragraph_blocks(raw_content, max_chars=7000)
+            if len(para_chunks) > 1:
+                chunks = para_chunks
+                print(f"[chunking] Paragraph split: {len(chunks)} blocks")
+
         if len(chunks) == 1:
             if should_stop and await should_stop():
                 raise TaskCancelledError("Task cancelled by user")
@@ -698,6 +713,7 @@ class ChunkingMixin:
             if merged_summary.get("title") and final_result.get("title") == "Bài thuyết trình":
                 final_result["title"] = merged_summary["title"]
             return final_result
+
         
         n_chunks = len(chunks)
         print(
@@ -754,6 +770,3 @@ class ChunkingMixin:
 
         print(f"Done: {len(final_result.get('slides', []))} slides total")
         return final_result
-
-
-

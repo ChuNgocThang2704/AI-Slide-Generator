@@ -1,6 +1,7 @@
 """Quản lý queue bất đồng bộ sử dụng Redis (async-safe)."""
 import json
 import asyncio
+import re
 from typing import Dict, Any, Optional
 from pathlib import Path
 import os
@@ -45,6 +46,14 @@ def _resolve_plan_image_limit(
     if requested is not None:
         return max(0, min(requested, calculated_limit, max_limit))
     return max(0, min(calculated_limit, max_limit))
+
+
+def _task_wants_images(task_data: Dict[str, Any]) -> bool:
+    raw = task_data.get("generate_images")
+    enabled = str(raw if raw is not None else "true").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+    return enabled and bool((IMAGE_GEN_API_BASE_URL or "").strip())
 
 
 def exc_to_error_message(exc: BaseException) -> str:
@@ -281,6 +290,8 @@ class RedisQueue:
                 await self._process_slide_with_images(task_id, task_data)
             elif action == "generate_slide_spec":
                 await self._process_slide_spec(task_id, task_data)
+            elif action == "revise_slide_spec":
+                await self._process_revise_slide_spec(task_id, task_data)
             else:
                 print(f"[queue] Unknown action '{action}' for task {task_id}")
                 await self.update_task_status(
@@ -293,11 +304,78 @@ class RedisQueue:
                 result={"error": exc_to_error_message(e)},
             )
 
+    async def _process_revise_slide_spec(self, task_id: str, task_data: Dict[str, Any]):
+        """Revise a completed JSON spec with a follow-up user prompt."""
+        from services.content_extractor import TaskCancelledError
+        from routes.api import _build_revised_slide_spec_payload
+
+        try:
+            await self.update_task_status(task_id, "processing", progress=10)
+
+            previous_content = task_data.get("previous_content")
+            revision_prompt = str(task_data.get("revision_prompt") or "").strip()
+            if not previous_content:
+                raise ValueError("task_data missing 'previous_content'")
+            if not revision_prompt:
+                raise ValueError("task_data missing 'revision_prompt'")
+
+            async def should_stop() -> bool:
+                return await self.is_task_cancelled(task_id)
+
+            want_img = _task_wants_images(task_data)
+
+            await self.update_task_status(task_id, "processing", progress=35)
+            spec_payload = await _build_revised_slide_spec_payload(
+                task_id=task_id,
+                previous_structured_content=previous_content,
+                revision_prompt=revision_prompt,
+                slide_theme=task_data.get("slide_theme"),
+                want_images=want_img,
+                image_limit=int(task_data.get("image_limit") or 0),
+                plan=(task_data.get("plan") or "pro"),
+                should_stop=should_stop,
+                target_slide_indices=task_data.get("target_slide_indices") or [],
+            )
+            spec_payload["source_task_id"] = task_data.get("source_task_id")
+            spec_payload["revision_prompt"] = revision_prompt
+
+            if await self.is_task_cancelled(task_id):
+                return
+
+            await self.update_task_status(
+                task_id,
+                "completed",
+                progress=100,
+                result=spec_payload,
+            )
+            print(f"[worker] Task {task_id}: JSON Spec revision done")
+
+        except TaskCancelledError:
+            await self.update_task_status(
+                task_id,
+                "cancelled",
+                progress=0,
+                result={"message": "Task cancelled by user"},
+            )
+        except Exception as e:
+            print(f"[worker] Task {task_id} error: {e}")
+            await self.update_task_status(
+                task_id,
+                "error",
+                progress=0,
+                result={"error": exc_to_error_message(e)},
+            )
+
     async def _process_slide_full(self, task_id: str, task_data: Dict[str, Any]):
         """Xử lý tạo slide full: extract → text quality → chart/table → (ảnh) → PPTX."""
         from services.content_extractor import ContentExtractor, TaskCancelledError
         from services.slide_generator import SlideGenerator
         from config import LLM_MODEL
+        from routes.api import (
+            _apply_explicit_chart_type_targets,
+            _explicit_chart_type_targets_from_prompt,
+            _explicit_visual_targets_from_prompt,
+        )
 
         try:
             await self.update_task_status(task_id, "processing", progress=10)
@@ -325,6 +403,8 @@ class RedisQueue:
                 task_data.get("image_limit"),
             )
 
+            doc_title_hint = task_data.get("doc_title_hint")
+
             # ── Extract & structure ───────────────────────────────────
             await self.update_task_status(task_id, "processing", progress=20)
             print(f"[worker] Task {task_id}: extract_and_structure (model={LLM_MODEL})...")
@@ -348,10 +428,13 @@ class RedisQueue:
                 should_stop=should_stop,
                 target_slides_override=target_slides_override,
                 force_exact_slide_count=force_exact_slide_count,
+                user_instruction=task_data.get("user_instruction"),
+                doc_title_hint=doc_title_hint,
             )
 
             # ── Text quality pass ─────────────────────────────────────
             from services.slide_text_quality import improve_slide_text_quality
+            from services.slide_quality import build_visual_plan, improve_deck_source_grounding
             structured_content = await improve_slide_text_quality(
                 content_extractor,
                 structured_content,
@@ -367,7 +450,17 @@ class RedisQueue:
                 structured_content = await content_extractor._force_slide_count_exact(
                     structured_content, int(target_slides_override)
                 )
-
+            if not structured_content.get("_explicit_slide_mode"):
+                structured_content = await improve_deck_source_grounding(
+                    content_extractor,
+                    structured_content,
+                    raw_content or "",
+                    task_id=task_id,
+                )
+                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+                    structured_content = await content_extractor._force_slide_count_exact(
+                        structured_content, int(target_slides_override)
+                    )
             if await self.is_task_cancelled(task_id):
                 return
 
@@ -376,22 +469,42 @@ class RedisQueue:
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
 
+            visual_plan = await build_visual_plan(
+                content_extractor,
+                structured_content,
+                raw_content or "",
+                want_images=_task_wants_images(task_data),
+            )
+            visual_plan.update(
+                _explicit_visual_targets_from_prompt(
+                    raw_content or "",
+                    len(structured_content.get("slides") or []),
+                )
+            )
+
             table_specs = await build_table_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
                 raw_content=raw_content or "",
+                visual_plan=visual_plan,
             )
             chart_specs = await build_chart_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
                 table_indices=set(table_specs.keys()),
                 raw_content=raw_content or "",
+                visual_plan=visual_plan,
+            )
+            _apply_explicit_chart_type_targets(
+                chart_specs,
+                _explicit_chart_type_targets_from_prompt(
+                    instruction_text,
+                    len(structured_content.get("slides") or []),
+                ),
             )
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
-            want_img = str(task_data.get("generate_images") or "").strip().lower() in (
-                "1", "true", "yes", "on",
-            ) and bool((IMAGE_GEN_API_BASE_URL or "").strip())
+            want_img = _task_wants_images(task_data)
 
             image_paths = None
             if want_img:
@@ -418,6 +531,8 @@ class RedisQueue:
                         should_stop=should_stop,
                         progress_cb=on_image_progress,
                         plan=plan_norm,
+                        target_indices=sorted(image_target_indices) or None,
+                        visual_plan=visual_plan,
                     )
                 except Exception as image_error:
                     print(
@@ -427,6 +542,28 @@ class RedisQueue:
 
             if await self.is_task_cancelled(task_id):
                 return
+
+            # ── Hậu xử lý văn bản cho các slide bị hụt ảnh ────────────
+            if want_img:
+                try:
+                    slides = structured_content.get("slides") or []
+                    missing_indices = []
+                    for idx, slide in enumerate(slides):
+                        if not isinstance(slide, dict):
+                            continue
+                        ai_layout = str(slide.get("layout") or "").strip().lower()
+                        needs_visual = ai_layout in ("text_image", "timeline", "split_columns", "big_quote")
+                        has_img_result = bool(image_paths and image_paths.get(idx))
+                        if needs_visual and not has_img_result:
+                            missing_indices.append(idx)
+                            
+                    if missing_indices and hasattr(content_extractor, "_expand_slide_bullets_for_no_image"):
+                        print(f"[worker] Task {task_id}: Expanding text for slides {missing_indices} due to missing image...")
+                        await content_extractor._expand_slide_bullets_for_no_image(
+                            structured_content, missing_indices
+                        )
+                except Exception as post_img_err:
+                    print(f"[worker] Task {task_id}: Post-image text expansion failed: {post_img_err!r}")
 
             # ── Generate PPTX ─────────────────────────────────────────
             await self.update_task_status(task_id, "processing", progress=80)
@@ -516,8 +653,15 @@ class RedisQueue:
         """Xử lý tạo slide spec trong Redis worker."""
         from services.content_extractor import ContentExtractor, TaskCancelledError
         from config import LLM_MODEL
-        from routes.api import _resolve_plan_image_limit, _build_slide_spec_payload
+        from routes.api import (
+            _apply_explicit_chart_type_targets,
+            _build_slide_spec_payload,
+            _explicit_chart_type_targets_from_prompt,
+            _explicit_visual_targets_from_prompt,
+            _resolve_plan_image_limit,
+        )
         from services.slide_text_quality import improve_slide_text_quality
+        from services.slide_quality import build_visual_plan, improve_deck_source_grounding
 
         try:
             await self.update_task_status(task_id, "processing", progress=10)
@@ -549,6 +693,8 @@ class RedisQueue:
 
             content_extractor = ContentExtractor(model_name=LLM_MODEL)
             structured_content = task_data.get("content")
+            raw_content = task_data.get("raw_content") or ""
+            instruction_text = str(task_data.get("user_instruction") or raw_content or "")
 
             if structured_content:
                 # Nếu đã có content structured sẵn
@@ -565,9 +711,7 @@ class RedisQueue:
                     structured_content = await content_extractor._force_slide_count_exact(
                         structured_content, int(target_slides_override)
                     )
-                raw_content = ""
             else:
-                raw_content = task_data.get("raw_content")
                 await self.update_task_status(task_id, "processing", progress=20)
                 
                 async def on_chunk(done: int, total: int):
@@ -585,6 +729,7 @@ class RedisQueue:
                     should_stop=should_stop,
                     target_slides_override=target_slides_override,
                     force_exact_slide_count=force_exact_slide_count,
+                    user_instruction=task_data.get("user_instruction"),
                 )
 
                 structured_content = await improve_slide_text_quality(
@@ -603,6 +748,18 @@ class RedisQueue:
                         structured_content, int(target_slides_override)
                     )
 
+            if not structured_content.get("_explicit_slide_mode"):
+                structured_content = await improve_deck_source_grounding(
+                    content_extractor,
+                    structured_content,
+                    raw_content or "",
+                    task_id=task_id,
+                )
+                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+                    structured_content = await content_extractor._force_slide_count_exact(
+                        structured_content, int(target_slides_override)
+                    )
+
             if await self.is_task_cancelled(task_id):
                 return
 
@@ -611,22 +768,99 @@ class RedisQueue:
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
 
+            visual_plan = await build_visual_plan(
+                content_extractor,
+                structured_content,
+                raw_content or "",
+                want_images=_task_wants_images(task_data),
+            )
+            visual_plan.update(
+                _explicit_visual_targets_from_prompt(
+                    instruction_text,
+                    len(structured_content.get("slides") or []),
+                )
+            )
+            explicit_visual_targets = _explicit_visual_targets_from_prompt(
+                instruction_text,
+                len(structured_content.get("slides") or []),
+            )
+            image_target_indices = {
+                int(idx)
+                for idx, visual in explicit_visual_targets.items()
+                if str(visual or "").strip().lower() == "image"
+            }
+            image_target_indices.update(
+                int(idx)
+                for idx, visual in (visual_plan or {}).items()
+                if str(visual or "").strip().lower() == "image"
+            )
+            if not image_target_indices:
+                folded_raw = instruction_text.lower()
+                for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded_raw):
+                    try:
+                        idx = int(match.group(1)) - 1
+                    except Exception:
+                        continue
+                    window_end = min(len(folded_raw), match.end() + 220)
+                    next_slide = re.search(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded_raw[match.end():window_end])
+                    if next_slide:
+                        window_end = match.end() + next_slide.start()
+                    window = folded_raw[match.start():window_end]
+                    if 0 <= idx < len(structured_content.get("slides") or []) and re.search(r"\b(?:anh|ảnh|hinh|hình|image|photo|minh\s+hoa|minh\s+họa)\b", window):
+                        image_target_indices.add(idx)
+            image_target_indices = {
+                idx
+                for idx in image_target_indices
+                if not (
+                    str(
+                        (visual_plan or {}).get(idx)
+                        or (visual_plan or {}).get(str(idx))
+                        or ""
+                    ).strip().lower() in {"table", "chart"}
+                    and str(explicit_visual_targets.get(idx) or "").strip().lower() != "image"
+                )
+            }
+            if not image_target_indices:
+                for idx, slide in enumerate(structured_content.get("slides") or []):
+                    if not isinstance(slide, dict):
+                        continue
+                    layout = str(slide.get("layout") or "").strip().lower()
+                    if "image" in layout or slide.get("image_url"):
+                        image_target_indices.add(idx)
+            if image_target_indices:
+                print(f"[worker:spec] forced image target slide(s): {sorted(image_target_indices)}")
+
             table_specs = await build_table_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
                 raw_content=raw_content or "",
+                visual_plan=visual_plan,
             )
             chart_specs = await build_chart_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
                 table_indices=set(table_specs.keys()),
                 raw_content=raw_content or "",
+                visual_plan=visual_plan,
             )
+            _apply_explicit_chart_type_targets(
+                chart_specs,
+                _explicit_chart_type_targets_from_prompt(
+                    raw_content or "",
+                    len(structured_content.get("slides") or []),
+                ),
+            )
+            for idx in image_target_indices:
+                table_specs.pop(idx, None)
+                chart_specs.pop(idx, None)
+                slides = structured_content.get("slides") or []
+                if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+                    slides[idx].pop("table", None)
+                    slides[idx].pop("chart", None)
+                    slides[idx]["layout"] = "text_image"
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
-            want_img = str(task_data.get("generate_images") or "").strip().lower() in (
-                "1", "true", "yes", "on",
-            ) and bool((IMAGE_GEN_API_BASE_URL or "").strip())
+            want_img = _task_wants_images(task_data)
 
             image_paths = None
             if want_img:
@@ -651,6 +885,8 @@ class RedisQueue:
                         should_stop=should_stop,
                         progress_cb=on_image_progress,
                         plan=plan_norm,
+                        target_indices=sorted(image_target_indices) or None,
+                        visual_plan=visual_plan,
                     )
                 except Exception as image_error:
                     print(

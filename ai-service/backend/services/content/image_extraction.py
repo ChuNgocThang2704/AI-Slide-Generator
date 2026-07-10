@@ -1,9 +1,8 @@
-"""Image scene / semantic / chart / table extraction.
+"""Trích xuất bối cảnh ảnh / ngữ nghĩa / biểu đồ / bảng biểu từ slide.
 
-ImageExtractionMixin provides methods to extract image prompts, semantic
-metadata, chart specs and table specs from slide content using the LLM.
-Module-level constants and helper functions for slide-type detection and
-SDXL prompt cleaning are also defined here.
+ImageExtractionMixin cung cấp các phương thức để trích xuất prompt ảnh, siêu dữ liệu 
+ngữ nghĩa (semantic metadata), cấu trúc biểu đồ (chart specs) và cấu trúc bảng (table specs) từ nội dung slide bằng LLM.
+Các hằng số cấp mô-đun và hàm bổ trợ để nhận diện loại slide cũng như làm sạch prompt SDXL cũng được định nghĩa ở đây.
 """
 from __future__ import annotations
 
@@ -91,7 +90,7 @@ def _scrub_sdxl_prompt(text: str) -> str:
 class ImageExtractionMixin:
     @staticmethod
     def _scrub_sdxl_positive(text: str) -> str:
-        """Gỡ vài keyword hay đẩy model sang sơ đồ/infographic/typo trong positive prompt."""
+        """Loại bỏ một số từ khóa dễ khiến model sinh ra sơ đồ/infographic/chữ viết trong positive prompt."""
         t = (text or "").strip()
         if not t:
             return t
@@ -119,7 +118,7 @@ class ImageExtractionMixin:
     def _fallback_sdxl_prompt(
         self, title: str, content_points: List[Any]
     ) -> str:
-        """Khi không gọi được LLM: gom đề mục + ý đầu, thêm style cho SDXL (tiếng Anh)."""
+        """Tạo prompt dự phòng cho SDXL (bằng tiếng Anh) khi không gọi được LLM bằng cách kết hợp tiêu đề + ý đầu và thêm phong cách ảnh."""
         topic = (title or "presentation").strip()
         extra = ""
         if content_points:
@@ -134,7 +133,7 @@ class ImageExtractionMixin:
         )[:300]
 
     def _unwrap_slide_content(self, slide_content: Dict[str, Any]):
-        """Unwrap {slide, context} wrapper hoặc dùng trực tiếp. Trả (slide, context)."""
+        """Mở gói {slide, context} hoặc trả về trực tiếp. Trả về (slide, context)."""
         wrapper = slide_content if isinstance(slide_content, dict) else {}
         nested_slide = wrapper.get("slide")
         if isinstance(nested_slide, dict):
@@ -153,7 +152,7 @@ class ImageExtractionMixin:
         max_tokens: int,
         label: str,
     ) -> Dict[str, Any]:
-        """Shared implementation cho extract_image_semantic / chart_spec / table_spec."""
+        """Triển khai dùng chung cho các hàm extract_image_semantic / chart_spec / table_spec."""
         _slide, context = self._unwrap_slide_content(slide_content)
         if not self.vllm_available and not self.gemini_available:
             return {}
@@ -179,19 +178,19 @@ class ImageExtractionMixin:
             return {}
 
     async def extract_image_semantic(self, slide_content: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract compact semantic JSON for image routing and prompt building."""
+        """Trích xuất JSON ngữ nghĩa thu gọn để phục vụ phân loại ảnh và tạo prompt."""
         return await self._extract_json_from_slide(
             slide_content, _IMAGE_SEMANTIC_SYSTEM, 180, "extract_image_semantic"
         )
 
     async def extract_chart_spec(self, slide_content: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract editable chart data from a data-heavy slide."""
+        """Trích xuất dữ liệu biểu đồ có thể chỉnh sửa từ slide có nhiều dữ liệu số."""
         return await self._extract_json_from_slide(
             slide_content, _CHART_SPEC_SYSTEM, 220, "extract_chart_spec"
         )
 
     async def extract_table_spec(self, slide_content: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract table headers + rows from slide content (pipe/markdown style)."""
+        """Trích xuất tiêu đề + hàng của bảng từ nội dung slide (dạng markdown/dấu gạch đứng)."""
         return await self._extract_json_from_slide(
             slide_content, _TABLE_SPEC_SYSTEM, 900, "extract_table_spec"
         )
@@ -199,11 +198,11 @@ class ImageExtractionMixin:
     async def extract_image_scene(
         self, slide_content: Dict[str, Any], system_prompt: str = ""
     ) -> str:
-        """One-pass scene generation from slide content.
+        """Tạo mô tả bối cảnh ảnh (scene) trong một lượt gọi duy nhất từ nội dung slide.
 
-        Supports both input shapes for backward compatibility:
-        - Direct slide dict: {"title", "bullets"/"content", ...}
-        - Wrapper dict: {"slide": {...}, "context": "..."}
+        Hỗ trợ cả hai dạng cấu trúc đầu vào để tương thích ngược:
+        - Dict slide trực tiếp: {"title", "bullets"/"content", ...}
+        - Dict wrapper: {"slide": {...}, "context": "..."}
         """
         wrapper = slide_content if isinstance(slide_content, dict) else {}
         slide, context = self._unwrap_slide_content(slide_content)
@@ -265,6 +264,5 @@ class ImageExtractionMixin:
         return fallback[:300]
 
     async def extract_keywords_for_image(self, slide_content: Dict[str, Any]) -> str:
-        """Backward-compatible wrapper for legacy callers."""
+        """Hàm bọc (wrapper) tương thích ngược cho các phần gọi cũ."""
         return await self.extract_image_scene(slide_content, system_prompt="")
-

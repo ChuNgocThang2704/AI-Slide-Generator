@@ -1,34 +1,35 @@
 # AI Service API Specification
 
-Tài liệu này chỉ mô tả các API BE/FE cần tích hợp. Các API/debug endpoint nội bộ không nằm trong tài liệu này.
+Tai lieu nay mo ta cac API BE/FE can tich hop voi AI Service de sinh va sua slide dang JSON. BE/FE chi can xu ly data output; toan bo xu ly AI nam trong AI Service.
 
-Base URL ví dụ:
+Base URL vi du:
 
 ```txt
 http://localhost:8000
 ```
 
-Trong môi trường deploy, thay bằng domain/IP của AI Service.
+Trong moi truong deploy, thay bang domain/IP cua AI Service.
 
-## Tổng Quan Luồng Tích Hợp
+## Tong Quan Luong Tich Hop
 
-FE/BE nên dùng luồng bất đồng bộ:
+Luong chinh:
 
-1. Gửi yêu cầu tạo slide bằng `POST /api/generate-slide-spec` hoặc `POST /api/generate-slide-full`.
-2. API trả ngay `task_id`.
-3. FE poll `GET /api/status/{task_id}` để cập nhật tiến độ.
-4. Khi `status = completed`, đọc `result`.
-5. Nếu sinh PPTX, dùng `download_url` hoặc `GET /api/view-slide/{task_id}` để tải file.
+1. BE/FE gui prompt hoac file den `POST /api/generate-slide-spec`.
+2. AI Service tra ngay `task_id`.
+3. BE/FE poll `GET /api/status/{task_id}`.
+4. Khi `status = completed`, doc deck JSON tai `result.deck`.
+5. Neu nguoi dung yeu cau sua, goi `POST /api/revise-slide-spec`.
+6. Poll task revise qua `GET /api/status/{task_id}` va render lai `result.deck`.
 
-Các trạng thái chính:
+Trang thai task:
 
 ```txt
 pending | processing | completed | error | cancelled
 ```
 
-## 1. Tạo Slide JSON Cho FE
+## 1. Generate Slide Spec
 
-API này tạo slide dạng JSON để FE render/preview/edit.
+Tao deck slide dang JSON de FE render/edit/export.
 
 ```txt
 POST /api/generate-slide-spec
@@ -37,160 +38,142 @@ Content-Type: multipart/form-data
 
 ### Request Fields
 
-Truyền ít nhất một trong hai field: `text`, `file`.
+Truyen it nhat mot trong hai field: `text`, `file`.
 
-| Field | Type | Required | Mô tả |
+| Field | Type | Required | Description |
 |---|---:|---:|---|
-| `text` | string | No | Prompt hoặc nội dung đầu vào dạng text. |
-| `file` | file | No | File nguồn. Hỗ trợ `.docx`, `.pdf`, `.txt`. |
-| `plan` | string | No | Gói giới hạn tài nguyên: `free`, `pro`, `ultra`. Mặc định `pro`. |
-| `slide_count` | integer | No | Số slide mong muốn. Nếu truyền, service cố gắng trả đúng số slide. |
-| `generate_images` | string | No | `"true"` hoặc `"false"`. Mặc định `"false"`. |
-| `image_limit` | integer | No | Số ảnh tối đa được gắn vào deck. Chỉ có ý nghĩa khi `generate_images=true`. |
+| `text` | string | No | Prompt hoac noi dung dau vao. Neu gui kem `file`, field nay duoc xem la yeu cau/huong dan them cho file. |
+| `file` | file | No | File nguon. Ho tro `.docx`, `.pdf`, `.txt`. |
+| `plan` | string | No | Goi gioi han tai nguyen: `free`, `pro`, `ultra`. Mac dinh `pro`. |
+| `slide_count` | integer | No | So slide mong muon. Neu khong truyen, AI Service tu uoc luong theo noi dung/prompt. |
+| `generate_images` | string | No | `"true"` hoac `"false"`. Neu prompt co yeu cau anh, service co the tu bat sinh anh. |
+| `image_limit` | integer | No | So anh toi da muon sinh. Neu khong truyen, service tu tinh theo plan/so slide. |
 
-### Request Ví Dụ
+### Request Example
 
 ```bash
 curl -X POST "http://localhost:8000/api/generate-slide-spec" \
-  -F "text=Tạo 4 slide tiếng Việt về bãi đỗ xe thông minh trong trường đại học" \
+  -F "text=Tao 8 slide tieng Viet ve he thong bai do xe thong minh trong truong dai hoc. Hay co bieu do Q1 45%, Q2 58%, Q3 72%, Q4 81%. Hay co bang so sanh quan ly thu cong va he thong thong minh theo cac tieu chi: toc do xu ly, do chinh xac, chi phi van hanh, trai nghiem sinh vien." \
   -F "plan=pro" \
-  -F "slide_count=4" \
-  -F "generate_images=false"
+  -F "generate_images=true"
 ```
 
-### Response Ngay Khi Submit
+### Submit Response
 
-API này xử lý bất đồng bộ, nên response ban đầu chưa chứa deck cuối cùng.
+API xu ly bat dong bo, nen response ban dau chi co `task_id`.
 
 ```json
 {
-  "task_id": "49f8685f-3971-49f6-a984-0bae0fbcb1ef",
+  "task_id": "95915ceb-eda2-4890-a954-efff6069c547",
   "status": "processing",
-  "message": "Processing JSON Spec asynchronously in BackgroundTasks.",
-  "check_status_url": "/api/status/49f8685f-3971-49f6-a984-0bae0fbcb1ef"
+  "message": "Processing JSON Spec via Redis worker...",
+  "check_status_url": "/api/status/95915ceb-eda2-4890-a954-efff6069c547"
 }
 ```
 
-Sau đó FE poll:
+Sau do poll:
 
 ```txt
-GET /api/status/{task_id}
+GET /api/status/95915ceb-eda2-4890-a954-efff6069c547
 ```
 
-### Result Khi Hoàn Thành
+## 2. Revise Slide Spec
 
-Khi `GET /api/status/{task_id}` trả `status = completed`, deck JSON nằm trong `result`.
+Sua deck da sinh bang prompt tu nhien. API nay dung de user yeu cau sua noi dung, bang, chart, anh, hoac toan bo deck.
+
+```txt
+POST /api/revise-slide-spec
+Content-Type: multipart/form-data
+```
+
+### Request Fields
+
+| Field | Type | Required | Description |
+|---|---:|---:|---|
+| `source_task_id` | string | Yes | `task_id` cua deck da completed truoc do. |
+| `revision_prompt` | string | Yes | Yeu cau sua bang ngon ngu tu nhien. |
+| `plan` | string | No | `free`, `pro`, `ultra`. Mac dinh `pro`. |
+| `generate_images` | string | No | Nen gui `"true"` neu muon cho phep sua/sinh anh. |
+| `revision_scope` | string | No | `auto`, `slide`, `deck`. Mac dinh nen de `auto`. |
+| `slide_index` | integer | No | Slide can sua, 0-based. Thuong khong can truyen neu prompt da noi ro. |
+| `slide_number` | integer | No | Slide can sua, 1-based. Thuong khong can truyen neu prompt da noi ro. |
+| `target_slide_indices` | string | No | Danh sach index 0-based, co the la JSON array hoac chuoi cach nhau boi dau phay. |
+| `target_slide_numbers` | string | No | Danh sach so slide 1-based, co the la JSON array hoac chuoi cach nhau boi dau phay. |
+| `image_limit` | integer | No | So anh toi da khi yeu cau sua/sinh anh. |
+
+Khuyen nghi BE/FE chi can gui:
+
+```txt
+source_task_id
+revision_prompt
+plan=pro
+generate_images=true
+revision_scope=auto
+```
+
+AI Service se tu hieu sua slide nao hay sua full deck dua tren prompt.
+
+### Request Examples
+
+Sua anh mot slide:
+
+```bash
+curl -X POST "http://localhost:8000/api/revise-slide-spec" \
+  -F "source_task_id=95915ceb-eda2-4890-a954-efff6069c547" \
+  -F "revision_prompt=Anh o slide 3 chua khop, hay doi thanh bai do xe dai hoc hien dai co cam bien IoT, camera giam sat va bang dien tu hien thi so cho trong." \
+  -F "plan=pro" \
+  -F "generate_images=true"
+```
+
+Sua bang:
+
+```bash
+curl -X POST "http://localhost:8000/api/revise-slide-spec" \
+  -F "source_task_id=95915ceb-eda2-4890-a954-efff6069c547" \
+  -F "revision_prompt=Chuyen slide so sanh phuong an thanh bang ro rang hon, gom cac cot: Tieu chi, Quan ly thu cong, He thong thong minh, Nhan xet." \
+  -F "plan=pro" \
+  -F "generate_images=true"
+```
+
+Sua chart:
+
+```bash
+curl -X POST "http://localhost:8000/api/revise-slide-spec" \
+  -F "source_task_id=95915ceb-eda2-4890-a954-efff6069c547" \
+  -F "revision_prompt=O slide co so lieu Q1-Q4, hay doi thanh bieu do duong de the hien xu huong tang theo thoi gian." \
+  -F "plan=pro" \
+  -F "generate_images=true"
+```
+
+Sua full deck:
+
+```bash
+curl -X POST "http://localhost:8000/api/revise-slide-spec" \
+  -F "source_task_id=95915ceb-eda2-4890-a954-efff6069c547" \
+  -F "revision_prompt=Sua toan bo bai cho giong van chuyen nghiep hon, tieu de ngan gon hon, bullet cu the hon va giam cac cau chung chung." \
+  -F "plan=pro" \
+  -F "generate_images=true"
+```
+
+### Submit Response
 
 ```json
 {
-  "status": "completed",
-  "progress": 100,
-  "result": {
-    "task_id": "49f8685f-3971-49f6-a984-0bae0fbcb1ef",
-    "status": "completed",
-    "mode": "json_spec",
-    "spec_version": "1.2",
-    "slide_preset": "modern",
-    "color_theme": "modern",
-    "title_slide": {
-      "title": "Bãi đỗ xe thông minh trong trường đại học",
-      "subtitle": "AI Slide Generator"
-    },
-    "content_slide_footer": "AI Slide Generator",
-    "deck": {
-      "title": "Bãi đỗ xe thông minh trong trường đại học",
-      "slides": [
-        {
-          "index": 0,
-          "title": "Tổng quan hệ thống bãi đỗ xe thông minh",
-          "bullets": [
-            "Hệ thống giúp sinh viên biết tình trạng chỗ đỗ xe theo thời gian thực.",
-            "Cảm biến IoT ghi nhận trạng thái từng vị trí đỗ và gửi dữ liệu về dashboard.",
-            "Ban quản lý có thể theo dõi tải sử dụng và tối ưu vận hành bãi xe."
-          ],
-          "notes": "Ở slide này, em sẽ trình bày tổng quan về hệ thống bãi đỗ xe thông minh...",
-          "chart": null,
-          "table": null,
-          "image": null,
-          "layout": "text_only",
-          "primary_visual": null,
-          "likely_multi_pptx_slides": false
-        }
-      ]
-    }
-  }
+  "task_id": "64c7ea2d-2dcd-4768-991e-593736dbc600",
+  "source_task_id": "95915ceb-eda2-4890-a954-efff6069c547",
+  "revision_scope": "slide",
+  "target_slide_indices": [5],
+  "status": "processing",
+  "message": "Revising JSON Spec via Redis worker...",
+  "check_status_url": "/api/status/64c7ea2d-2dcd-4768-991e-593736dbc600"
 }
 ```
 
-### Slide Object
+Sau do poll `GET /api/status/{task_id}` giong generate.
 
-Mỗi item trong `result.deck.slides` có dạng:
+## 3. Get Task Status
 
-| Field | Type | Mô tả |
-|---|---:|---|
-| `index` | integer | Thứ tự slide, bắt đầu từ `0`. |
-| `title` | string | Tiêu đề slide. |
-| `bullets` | string[] | Nội dung chính để render trên slide. |
-| `notes` | string | Ghi chú/người nói. |
-| `chart` | object/null | Spec biểu đồ nếu slide có chart. |
-| `table` | object/null | Spec bảng nếu slide có table. |
-| `image` | object/null | Thông tin ảnh nếu slide có ảnh. |
-| `layout` | string | Gợi ý layout: `text_only`, `text_image`, `text_chart`, `text_table`. |
-| `primary_visual` | string/null | Visual chính: `image`, `chart`, `table`, hoặc `null`. |
-| `likely_multi_pptx_slides` | boolean | Gợi ý slide có thể bị tách khi render PPTX vì nhiều nội dung. |
-
-### Chart Object
-
-`chart` có thể khác nhẹ theo loại biểu đồ, nhưng thường có dạng:
-
-```json
-{
-  "type": "column",
-  "title": "Mức độ hài lòng",
-  "categories": ["Moodle", "Google Classroom", "Canvas"],
-  "series": [
-    {
-      "name": "Điểm",
-      "values": [7.8, 8.5, 8.2]
-    }
-  ]
-}
-```
-
-FE nên render tolerant: nếu thiếu chart hoặc chart không hỗ trợ thì bỏ qua hoặc hiển thị fallback.
-
-### Table Object
-
-`table` thường có dạng:
-
-```json
-{
-  "title": "So sánh nền tảng học trực tuyến",
-  "headers": ["Tiêu chí", "Moodle", "Google Classroom", "Canvas"],
-  "rows": [
-    ["Chi phí", "Thấp", "Miễn phí cơ bản", "Cao"],
-    ["Tùy biến", "Cao", "Trung bình", "Cao"]
-  ]
-}
-```
-
-### Image Object
-
-`image` có dạng:
-
-```json
-{
-  "path": "E:\\DemoDoan\\ai-service\\outputs\\images\\task_0_external.jpg",
-  "url": "/outputs/images/task_0_external.jpg",
-  "mime": null
-}
-```
-
-FE/BE nên dùng `image.url`. AI Service không yêu cầu FE gửi theme; giao diện/theme do FE tự quyết.
-
-## 2. Kiểm Tra Trạng Thái Task
-
-FE dùng API này để poll tiến độ và lấy kết quả cuối cùng.
+Dung de poll tien do va lay ket qua cuoi cung.
 
 ```txt
 GET /api/status/{task_id}
@@ -201,54 +184,54 @@ GET /api/status/{task_id}
 ```json
 {
   "status": "processing",
-  "progress": 65,
+  "progress": 68,
   "result": {
-    "chunks": {
-      "done": 3,
-      "total": 5
+    "images": {
+      "done": 1,
+      "total": 4
     }
   }
 }
 ```
 
-Khi đang sinh ảnh, `result` có thể có:
+`result` trong luc processing co the rong hoac chua thong tin tam thoi nhu `chunks`, `images`.
 
-```json
-{
-  "images": {
-    "done": 1,
-    "total": 2
-  }
-}
-```
+### Completed Response
 
-### Completed Response Cho JSON Spec
+Khi `status = completed`, deck JSON nam tai `result.deck`.
 
 ```json
 {
   "status": "completed",
   "progress": 100,
   "result": {
-    "task_id": "...",
+    "task_id": "95915ceb-eda2-4890-a954-efff6069c547",
+    "status": "completed",
     "mode": "json_spec",
+    "spec_version": "1.2",
+    "slide_preset": "modern",
+    "color_theme": "modern",
+    "title_slide": {
+      "title": "He thong bai do xe thong minh",
+      "subtitle": "Tao boi AI Slide Generator"
+    },
+    "content_slide_footer": "AI Slide Generator",
     "deck": {
-      "title": "...",
+      "title": "He thong bai do xe thong minh",
       "slides": []
     }
   }
 }
 ```
 
-### Completed Response Cho PPTX
+Voi task revise, `result` co them metadata:
 
 ```json
 {
-  "status": "completed",
-  "progress": 100,
-  "result": {
-    "download_url": "/outputs/deck_name_taskid.pptx",
-    "view_url": "/api/view-slide/taskid"
-  }
+  "revision_scope": "slide",
+  "target_slide_indices": [5],
+  "changed_fields": ["text"],
+  "revision_prompt": "..."
 }
 ```
 
@@ -276,107 +259,221 @@ Khi đang sinh ảnh, `result` có thể có:
 }
 ```
 
-## 3. Tạo File PPTX
+## 4. Output JSON Contract
 
-API này tạo file PowerPoint thật. Luồng vẫn là async giống JSON spec.
+FE nen render dua vao `result.deck.slides`.
 
-```txt
-POST /api/generate-slide-full
-Content-Type: multipart/form-data
-```
-
-### Request Fields
-
-| Field | Type | Required | Mô tả |
-|---|---:|---:|---|
-| `text` | string | No | Prompt hoặc nội dung đầu vào dạng text. |
-| `file` | file | No | File nguồn `.docx`, `.pdf`, `.txt`. |
-| `plan` | string | No | `free`, `pro`, `ultra`. Mặc định `pro`. |
-| `slide_count` | integer | No | Số slide mong muốn. |
-| `image_limit` | integer | No | Số ảnh tối đa. |
-| `generate_images` | string | No | `"true"` hoặc `"false"`. |
-
-Truyền ít nhất một trong hai field: `text`, `file`.
-
-### Request Ví Dụ
-
-```bash
-curl -X POST "http://localhost:8000/api/generate-slide-full" \
-  -F "text=Tạo 5 slide tiếng Việt về lịch sử phát triển Internet tại Việt Nam" \
-  -F "plan=pro" \
-  -F "slide_count=5" \
-  -F "generate_images=false"
-```
-
-### Response Ngay Khi Submit
+### Deck Object
 
 ```json
 {
-  "task_id": "bc9015eb-db85-4a36-b7a8-2631f57a9525",
-  "status": "processing",
-  "message": "Processing asynchronously in BackgroundTasks.",
-  "check_status_url": "/api/status/bc9015eb-db85-4a36-b7a8-2631f57a9525"
+  "title": "He thong bai do xe thong minh",
+  "slides": []
 }
 ```
 
-Sau đó poll:
-
-```txt
-GET /api/status/{task_id}
-```
-
-Khi xong:
+### Slide Object
 
 ```json
 {
-  "status": "completed",
-  "progress": 100,
-  "result": {
-    "download_url": "/outputs/deck_name_taskid.pptx",
-    "view_url": "/api/view-slide/taskid"
-  }
+  "index": 0,
+  "title": "Toc do xu ly",
+  "bullets": [
+    "Toc do xu ly nhanh hon nho cam bien va xu ly tu dong."
+  ],
+  "notes": "Ghi chu thuyet trinh cho slide.",
+  "chart": null,
+  "table": null,
+  "image": null,
+  "layout": "text_only",
+  "primary_visual": null,
+  "likely_multi_pptx_slides": false
 }
 ```
 
-## 4. Tải Hoặc Xem File PPTX
+| Field | Type | Description |
+|---|---:|---|
+| `index` | integer | Thu tu slide, bat dau tu `0`. |
+| `title` | string | Tieu de slide. |
+| `bullets` | string[] | Noi dung chinh. |
+| `notes` | string | Ghi chu/loi thuyet trinh. |
+| `chart` | object/null | Du lieu chart neu slide co chart. |
+| `table` | object/null | Du lieu bang neu slide co table. |
+| `image` | object/null | Thong tin anh neu slide co anh. |
+| `layout` | string | Goi y layout: `text_only`, `text_image`, `text_chart`, `text_table`. |
+| `primary_visual` | string/null | `image`, `chart`, `table`, hoac `null`. |
+| `likely_multi_pptx_slides` | boolean | Goi y slide co the qua dai neu export PPTX. |
 
-```txt
-GET /api/view-slide/{task_id}
+Quan trong:
+
+- `layout = "text_table"` chi khi `table` co data that.
+- `layout = "text_chart"` chi khi `chart` co data that.
+- `layout = "text_image"` chi khi `image.url` hoac `image.path` ton tai.
+- FE khong can tu doan bang/chart tu text.
+
+## 5. Table Object
+
+```json
+{
+  "title": "So sanh phuong an quan ly bai do xe",
+  "headers": ["Tieu chi", "Quan ly thu cong", "He thong thong minh"],
+  "rows": [
+    ["Toc do xu ly", "Cham, phu thuoc nhan vien", "Nhanh, tu dong"],
+    ["Do chinh xac", "Thap, de sai sot", "Cao, du lieu thoi gian thuc"],
+    ["Chi phi van hanh", "Cao", "Thap hon ve dai han"],
+    ["Trai nghiem sinh vien", "Bat tien, cho doi", "Thuan tien, nhanh chong"]
+  ]
+}
 ```
 
-Response là file `.pptx`.
+FE render bang theo:
 
-FE có thể:
+```txt
+table.headers
+table.rows
+```
 
-- mở `view_url` trong tab mới,
-- hoặc tải từ `download_url`,
-- hoặc gọi endpoint này và xử lý blob.
+Neu `table = null`, slide khong co bang.
 
-## 5. Hủy Task
+## 6. Chart Object
+
+Chart co the la single-series hoac multi-series.
+
+### Single-Series Example
+
+```json
+{
+  "title": "Ty le su dung bai do xe theo quy",
+  "chart_type": "line",
+  "type": "line",
+  "labels": ["Quy 1", "Quy 2", "Quy 3", "Quy 4"],
+  "categories": ["Quy 1", "Quy 2", "Quy 3", "Quy 4"],
+  "values": [0.45, 0.58, 0.72, 0.81],
+  "unit": "percent",
+  "is_percent": true
+}
+```
+
+### Multi-Series Example
+
+```json
+{
+  "title": "So sanh hieu suat",
+  "chart_type": "bar",
+  "type": "bar",
+  "labels": ["A", "B", "C"],
+  "categories": ["A", "B", "C"],
+  "series": [
+    {
+      "name": "Nam 2025",
+      "values": [10, 20, 30]
+    },
+    {
+      "name": "Nam 2026",
+      "values": [12, 24, 36]
+    }
+  ],
+  "unit": "number",
+  "is_percent": false
+}
+```
+
+FE render chart theo thu tu uu tien:
+
+1. Neu co `chart.series`, dung `chart.labels`/`chart.categories` + `series`.
+2. Neu khong co `series`, dung `chart.labels`/`chart.categories` + `values`.
+3. Loai chart lay tu `chart.chart_type` hoac `chart.type`.
+
+## 7. Image Object
+
+```json
+{
+  "path": "/app/outputs/images/task_2_external.jpg",
+  "url": "/outputs/images/task_2_external.jpg",
+  "mime": "image/jpeg"
+}
+```
+
+FE nen dung:
+
+```txt
+image.url
+```
+
+Neu FE khac domain voi AI Service, ghep full URL:
+
+```txt
+{AI_SERVICE_BASE_URL}{image.url}
+```
+
+Vi du:
+
+```txt
+http://localhost:8000/outputs/images/task_2_external.jpg
+```
+
+## 8. Cancel Task
+
+Huy task dang chay.
 
 ```txt
 POST /api/cancel/{task_id}
 ```
 
-### Response
+Response:
 
 ```json
 {
-  "task_id": "49f8685f-3971-49f6-a984-0bae0fbcb1ef",
+  "task_id": "95915ceb-eda2-4890-a954-efff6069c547",
   "status": "cancelled",
   "message": "Task cancellation requested"
 }
 ```
 
-Lưu ý: hủy task là best-effort. Nếu task đã gần hoàn thành hoặc đang gọi API ngoài, việc hủy có thể không dừng ngay lập tức.
+Luu y: cancel la best-effort. Neu task dang goi model/image server ben ngoai, viec huy co the khong dung ngay lap tuc.
 
-## Khuyến Nghị Cho FE
+## 9. Integration Notes For BE/FE
 
-- Luôn poll `/api/status/{task_id}` sau khi submit.
-- Không giả định `POST /api/generate-slide-spec` trả deck ngay.
-- Với JSON spec, đọc dữ liệu tại `status.result.deck`.
-- Với PPTX, đọc `status.result.download_url` hoặc `status.result.view_url`.
-- Render tolerant: `chart`, `table`, `image` có thể là `null`.
-- Hiển thị kịch bản thuyết trình từ trường `notes`.
-- Nếu `generate_images=true`, thời gian xử lý sẽ lâu hơn đáng kể.
-- Không phụ thuộc vào field mới chưa document; service có thể thêm field nhưng sẽ cố gắng không đổi/xóa field cũ.
+- BE/FE chi can tich hop async task flow.
+- Khong goi truc tiep model/LLM/image server.
+- Khong can tu tach table/chart/image tu text.
+- Render theo `primary_visual` va object tuong ung:
+  - `primary_visual = "table"`: render `table.headers` + `table.rows`.
+  - `primary_visual = "chart"`: render `chart.labels/categories` + `chart.values/series`.
+  - `primary_visual = "image"`: render `image.url`.
+  - `primary_visual = null`: render text-only.
+- `chart`, `table`, `image` co the la `null`; FE phai render tolerant.
+- BE nen luu lai `task_id`, prompt goc, va `result.deck` sau khi completed.
+- De sua deck, FE/BE gui `source_task_id` cua task completed gan nhat.
+- Sau revise, nen dung `task_id` moi lam source cho lan revise tiep theo.
+
+## 10. Minimal FE Render Rule
+
+Pseudo-code:
+
+```ts
+for (const slide of deck.slides) {
+  renderTitle(slide.title)
+  renderBullets(slide.bullets)
+
+  if (slide.primary_visual === "table" && slide.table) {
+    renderTable(slide.table.headers, slide.table.rows)
+  } else if (slide.primary_visual === "chart" && slide.chart) {
+    renderChart(slide.chart)
+  } else if (slide.primary_visual === "image" && slide.image?.url) {
+    renderImage(API_BASE_URL + slide.image.url)
+  }
+
+  renderNotes(slide.notes)
+}
+```
+
+## 11. API Summary
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/generate-slide-spec` | Tao deck JSON moi. |
+| `POST` | `/api/revise-slide-spec` | Sua deck JSON da sinh. |
+| `GET` | `/api/status/{task_id}` | Poll tien do va lay result. |
+| `POST` | `/api/cancel/{task_id}` | Huy task dang chay. |
+| `GET` | `/outputs/images/...` | Lay file anh da sinh. |

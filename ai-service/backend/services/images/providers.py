@@ -41,10 +41,10 @@ async def _try_secondary_ai_image_fallback(
     negative_prompt: str,
     payload_template: Dict[str, Any],
 ) -> Optional[bytes]:
-    """Try Gemini Imagen as secondary image fallback.
+    """Thử Gemini Imagen làm ảnh dự phòng thứ cấp.
 
-    Replaces Together/FLUX which suffers persistent rate-limit errors.
-    Uses Google Cloud Vertex AI if enabled, otherwise falls back to AI Studio.
+    Thay thế Together/FLUX vốn thường xuyên gặp lỗi giới hạn tần suất (rate-limit).
+    Sử dụng Google Cloud Vertex AI nếu được bật, nếu không sẽ chuyển sang AI Studio.
     """
     model = (IMAGE_FALLBACK_MODEL or "").strip()
     if not model or model.startswith("black-forest-labs") or model.startswith("imagen-3.0"):
@@ -162,12 +162,12 @@ async def _try_secondary_ai_image_fallback(
         
         b64_val = None
         if "imagen-4.0" in attempt_model:
-            # Response shape for Imagen 4: {"predictions": [{"bytesBase64Encoded": "<b64>", "mimeType": "image/png"}]}
+            # Định dạng phản hồi của Imagen 4: {"predictions": [{"bytesBase64Encoded": "<b64>", "mimeType": "image/png"}]}
             predictions = data.get("predictions") or []
             if predictions and isinstance(predictions[0], dict):
                 b64_val = predictions[0].get("bytesBase64Encoded")
         else:
-            # Response shape for Imagen 3: {"generatedImages": [{"image": {"imageBytes": "<b64>"}}]}
+            # Định dạng phản hồi của Imagen 3: {"generatedImages": [{"image": {"imageBytes": "<b64>"}}]}
             generated = data.get("generatedImages") or []
             if generated and isinstance(generated[0], dict):
                 image_obj = (generated[0] or {}).get("image") or {}
@@ -180,7 +180,7 @@ async def _try_secondary_ai_image_fallback(
         if not raw:
             print(f"[slide_images] Gemini Imagen fallback: decoded bytes empty ({attempt_model})")
             continue
-        # Imagen returns JPEG/PNG; accept both.
+        # Imagen trả về JPEG/PNG; chấp nhận cả hai.
         if raw.startswith(b"\x89PNG") or raw.startswith(b"\xff\xd8\xff"):
             print(f"[slide_images] Gemini Imagen fallback succeeded ({attempt_model})")
             return raw
@@ -229,7 +229,7 @@ def _stock_photo_queries(
     content_type: str,
     risk: Optional[str],
 ) -> List[str]:
-    """Build search queries for external stock/reference fallback providers."""
+    """Xây dựng các truy vấn tìm kiếm cho các nhà cung cấp ảnh stock/tham chiếu dự phòng bên ngoài."""
     title = str(slide.get("title") or "").strip()
     context = _semantic_context(slide, max_chars=320)
     topic = str(semantic.get("main_topic") or title).strip()
@@ -238,12 +238,12 @@ def _stock_photo_queries(
     obj = str(semantic.get("object") or "").strip()
     queries: List[str] = []
 
-    # Priority 1: Use LLM-generated search queries if available
+    # Ưu tiên 1: Sử dụng các truy vấn tìm kiếm do LLM tạo ra nếu có
     llm_queries = _semantic_list(semantic.get("stock_queries"))
     if llm_queries:
         queries.extend(llm_queries)
 
-    # Priority 2: Standard heuristic queries
+    # Ưu tiên 2: Các truy vấn heuristic chuẩn
     if risk == "person_protected":
         queries.extend(entities[:2])
         if title:
@@ -276,7 +276,7 @@ def _stock_photo_queries(
     if context:
         queries.append(context)
 
-    # Priority 3: Simpler fallbacks (medium tier)
+    # Ưu tiên 3: Các phương án dự phòng đơn giản hơn (nhóm trung bình)
     if topic:
         queries.append(topic)
     for ent in entities:
@@ -285,7 +285,7 @@ def _stock_photo_queries(
         for part in obj.split(","):
             queries.append(part.strip())
 
-    # Priority 4: Generic domain fallbacks (fail-safe)
+    # Ưu tiên 4: Các phương án dự phòng theo domain chung (an toàn tối đa)
     is_vietnam = False
     if _has_vietnamese_diacritics(title) or _has_vietnamese_diacritics(context):
         is_vietnam = True
@@ -298,7 +298,7 @@ def _stock_photo_queries(
         else:
             queries.extend(["Vietnam workspace", "Vietnam school", "Vietnam"])
     
-    # Generic domain fallback queries
+    # Các truy vấn dự phòng theo domain chung
     domain = str(semantic.get("domain") or "general").strip().lower()
     if domain == "business":
         queries.extend(["business office meeting", "corporate workspace", "business professional"])
@@ -311,18 +311,18 @@ def _stock_photo_queries(
     else:
         queries.extend(["workspace documentation", "office desk laptop", "office presentation"])
 
-    # Filter and preserve order: try specific queries (>=2 words) first, then single-word fallbacks
+    # Lọc và giữ nguyên thứ tự: thử các truy vấn cụ thể (>=2 từ) trước, sau đó là các từ đơn dự phòng
     seen = set()
     ordered = []
     for q in queries:
         q_clean = " ".join(str(q or "").strip().split())
         if not q_clean:
             continue
-        # Replace map-related terms with "documents" to avoid getting stock photos with incorrect country maps
+        # Thay thế các thuật ngữ liên quan đến bản đồ bằng "documents" để tránh lấy phải ảnh stock có bản đồ quốc gia không chính xác
         q_clean = re.sub(r"\b(world map|country map|vietnam map|map of vietnam|map|maps)\b", "documents", q_clean, flags=re.IGNORECASE)
         q_clean = " ".join(q_clean.split())
         
-        # Strip Vietnamese diacritics to make it compatible with search engines and ASCII checks
+        # Loại bỏ dấu tiếng Việt để tương thích với các công cụ tìm kiếm và kiểm tra ASCII
         q_ascii = _remove_vietnamese_diacritics(q_clean)
         
         if not q_ascii or q_ascii.lower() in seen or not _is_mostly_ascii(q_ascii):
@@ -335,7 +335,7 @@ def _stock_photo_queries(
 
 
 def _stock_photo_providers(content_type: str, risk: Optional[str]) -> List[str]:
-    """Prefer Wikimedia for factual/historical content; Pexels for generic stock."""
+    """Ưu tiên Wikimedia cho nội dung thực tế/lịch sử; Pexels cho ảnh stock chung chung."""
     factual_reference_risks = {
         "person_protected",
         "cultural",
@@ -359,7 +359,7 @@ async def _gemini_stock_photo_queries(
     content_type: str,
     risk: Optional[str],
 ) -> List[str]:
-    """Generate short English stock/reference search queries for weak semantic cases."""
+    """Tạo các truy vấn tìm kiếm ảnh stock/tham chiếu ngắn bằng tiếng Anh cho các trường hợp ngữ nghĩa yếu."""
     if not GEMINI_API_KEY:
         return []
     title = str(slide.get("title") or "").strip()

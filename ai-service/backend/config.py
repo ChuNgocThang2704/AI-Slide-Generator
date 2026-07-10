@@ -143,7 +143,7 @@ IMAGE_FALLBACK_MODEL = os.getenv(
     "IMAGE_FALLBACK_MODEL", "imagen-4.0-generate-001"
 ).strip()
 # Giới hạn số slide có ảnh (mỗi ảnh một gọi SDXL — có thể lâu).
-IMAGE_MAX_SLIDES_WITH_IMAGES = int(os.getenv("IMAGE_MAX_SLIDES_WITH_IMAGES", "12"))
+IMAGE_MAX_SLIDES_WITH_IMAGES = int(os.getenv("IMAGE_MAX_SLIDES_WITH_IMAGES", "35"))
 
 # Giới hạn Slide
 FREE_SLIDE_LIMIT = int(os.getenv("FREE_SLIDE_LIMIT", "10"))
@@ -156,9 +156,9 @@ PRO_IMAGE_LIMIT_MAX = int(os.getenv("PRO_IMAGE_LIMIT_MAX", "15"))
 ULTRA_IMAGE_LIMIT_MAX = int(os.getenv("ULTRA_IMAGE_LIMIT_MAX", "35"))
 
 # Giới hạn ký tự đầu vào (được trích xuất từ text hoặc file)
-FREE_CHAR_LIMIT = int(os.getenv("FREE_CHAR_LIMIT", "5000"))
-PRO_CHAR_LIMIT = int(os.getenv("PRO_CHAR_LIMIT", "20000"))
-ULTRA_CHAR_LIMIT = int(os.getenv("ULTRA_CHAR_LIMIT", "50000"))
+FREE_CHAR_LIMIT = int(os.getenv("FREE_CHAR_LIMIT", "10000"))
+PRO_CHAR_LIMIT = int(os.getenv("PRO_CHAR_LIMIT", "50000"))
+ULTRA_CHAR_LIMIT = int(os.getenv("ULTRA_CHAR_LIMIT", "100000"))
 
 # Số lượng luồng sinh ảnh song song đồng thời.
 IMAGE_GEN_CONCURRENCY = int(os.getenv("IMAGE_GEN_CONCURRENCY", "3"))

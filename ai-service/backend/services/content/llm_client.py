@@ -1,4 +1,4 @@
-"""LLM provider helpers for content extraction."""
+"""Các hàm hỗ trợ nhà cung cấp LLM để trích xuất nội dung."""
 
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ from config import (
 
 
 class LLMClientMixin:
-    """Provider calls shared by the extraction pipeline.
+    """Các lệnh gọi nhà cung cấp LLM dùng chung cho pipeline trích xuất.
 
-    The owning class must define:
+    Lớp sở hữu (owning class) phải định nghĩa:
     - model_name
     - vllm_available
     - vllm_base_url
@@ -37,17 +37,10 @@ class LLMClientMixin:
         temperature: float = 0.55,
         json_mode: bool = False,
     ) -> str:
-        """Run one chat completion and return plain text."""
+        """Thực hiện một lượt hoàn thành trò chuyện (chat completion) và trả về văn bản thuần túy."""
         model_name = self.model_name
         if self.vllm_available:
             nothink_msgs = list(messages)
-            if "qwen3" in (model_name or "").lower() and nothink_msgs:
-                first = dict(nothink_msgs[0])
-                if first.get("role") == "system":
-                    content = first.get("content", "")
-                    if not content.startswith("/nothink"):
-                        first["content"] = "/nothink\n" + content
-                    nothink_msgs[0] = first
 
             def _strip_think(text: str) -> str:
                 text = text.strip()
@@ -65,6 +58,12 @@ class LLMClientMixin:
                 "top_p": 0.92,
                 "max_tokens": int(max_tokens),
             }
+            if json_mode:
+                payload["response_format"] = {"type": "json_object"}
+            if "qwen3.5" in (model_name or "").lower():
+                payload["extra_body"] = {
+                    "chat_template_kwargs": {"enable_thinking": False}
+                }
             try:
                 async with httpx.AsyncClient(timeout=timeout_cfg) as client:
                     resp = await client.post(
@@ -82,7 +81,7 @@ class LLMClientMixin:
                     print(f"[LLMClient] vLLM connection failed: {e}. Disabling vLLM for this session.")
                     self.vllm_available = False
                 
-                # Fallback to Gemini if available
+                # Dự phòng (fallback) sang Gemini nếu có sẵn
                 if self.gemini_available:
                     print("Falling back to Gemini plain text completion.")
                     return await self._gemini_completion_plain_text(
@@ -109,7 +108,7 @@ class LLMClientMixin:
             role = str(msg.get("role") or "user").strip().upper()
             content = str(msg.get("content") or "").strip()
             if content:
-                # Strip Qwen3-specific /nothink instruction for Gemini/Vertex
+                # Loại bỏ chỉ dẫn /nothink đặc thù của Qwen3 đối với Gemini/Vertex
                 if content.startswith("/nothink"):
                     content = content.replace("/nothink", "", 1).strip()
                 parts.append(f"{role}:\n{content}")
@@ -148,7 +147,7 @@ class LLMClientMixin:
             )
         timeout_cfg = httpx.Timeout(float(GEMINI_TIMEOUT_SEC), connect=25.0)
         
-        # Increase token limits for Gemini fallback to prevent truncation
+        # Tăng giới hạn token cho dự phòng Gemini để ngăn chặn việc bị cắt cụt văn bản
         max_output_tokens = max(2048, int(max_tokens * 1.5))
         if json_mode:
             max_output_tokens = max(4096, max_output_tokens)

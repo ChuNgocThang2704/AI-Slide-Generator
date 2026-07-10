@@ -1,4 +1,4 @@
-"""Build editable chart specs for data-heavy slides."""
+"""Xây dựng các đặc tả biểu đồ có thể chỉnh sửa cho các slide chứa nhiều số liệu."""
 from __future__ import annotations
 
 import json
@@ -48,20 +48,21 @@ def _slide_context(slide: Dict[str, Any], max_chars: int = 700) -> str:
     return ". ".join([title] + points)[:max_chars]
 
 
-def chart_intent_from_slide(slide: Dict[str, Any]) -> Optional[str]:
-    text = _slide_context(slide, max_chars=1200).lower()
-    if not any(k in text for k in ("chart", "biểu đồ", "bieu do", "graph")):
-        return None
-    if any(k in text for k in ("tròn", "tron", "pie", "thị phần", "thi phan")):
-        return "pie"
-    if any(k in text for k in ("đường", "duong", "line", "xu hướng", "trend")):
-        return "line"
-    if any(k in text for k in ("cột", "cot", "column", "bar")):
-        return "bar"
-    return "bar"
+def chart_intent_from_slide(slide: Dict[str, Any], slide_spec: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    # 1. Ưu tiên đọc trực tiếp loại biểu đồ do AI tự quyết định trong slide spec (nếu có)
+    if slide_spec and isinstance(slide_spec, dict):
+        ai_chart = slide_spec.get("chart")
+        if isinstance(ai_chart, dict) and ai_chart.get("chart_type"):
+            ai_type = str(ai_chart.get("chart_type")).strip().lower()
+            if ai_type in _ALLOWED_CHART_TYPES:
+                return ai_type
+        # Kiểm tra nếu chart_type nằm trực tiếp ở mức slide
+        if slide_spec.get("chart_type"):
+            ai_type = str(slide_spec.get("chart_type")).strip().lower()
+            if ai_type in _ALLOWED_CHART_TYPES:
+                return ai_type
 
-
-def chart_intent_from_slide(slide: Dict[str, Any]) -> Optional[str]:
+    # 2. Fallback: sử dụng heuristic từ khóa thô nếu AI không định nghĩa
     text = _fold_text(_slide_context(slide, max_chars=1200))
     if not any(k in text for k in ("chart", "bieu do", "graph")):
         return None
@@ -117,7 +118,7 @@ def _looks_like_data_slide(slide: Dict[str, Any]) -> bool:
 
 
 def _has_comparable_numeric_evidence(text: str) -> bool:
-    """Generic chart gate: at least two numeric facts tied to nearby labels."""
+    """Cổng chặn biểu đồ chung: có ít nhất hai số liệu liên quan đến các nhãn gần đó."""
     folded = _fold_text(text)
     if folded.count("|") >= 4:
         return True
@@ -131,7 +132,7 @@ def _has_comparable_numeric_evidence(text: str) -> bool:
 
 
 def _chart_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
-    """Validate that labels and numeric values are supported by the slide/raw text."""
+    """Xác thực xem các nhãn và giá trị số liệu có được hỗ trợ bởi slide/văn bản gốc hay không."""
     folded = _fold_text(text)
     folded_numeric = re.sub(r"[^\d%.,/\-+]", " ", folded)
     compact_numeric = re.sub(r"[^\d]", "", folded)
@@ -244,10 +245,10 @@ def _chart_from_markdown_table(slide: Dict[str, Any]) -> Optional[Dict[str, Any]
     header = headers[best_col] if best_col < len(headers) else "Data"
     context = _slide_context(slide, max_chars=1200).lower()
     is_percent = "%" in " ".join(best_raw) or any(k in str(header).lower() for k in ("%", "percent", "tăng", "growth", "rate", "ratio"))
-    chart_type = chart_intent_from_slide(slide) or ("pie" if any(k in context for k in ("thị phần", "thi phan")) else "bar")
+    chart_type = chart_intent_from_slide(slide, slide_spec=slide) or ("pie" if any(k in context for k in ("thị phần", "thi phan")) else "bar")
     return normalize_chart_spec(
         {
-            "title": str(slide.get("title") or header or "Data overview"),
+            "title": str(slide.get("title") or header or "Tổng quan số liệu"),
             "chart_type": chart_type,
             "labels": labels,
             "values": values,
@@ -285,7 +286,7 @@ def _pair_chart_from_lines(title: str, lines: List[str], chart_type: str) -> Opt
     is_percent = "%" in " ".join(raw_values)
     return normalize_chart_spec(
         {
-            "title": title or "Data overview",
+            "title": title or "Tổng quan số liệu",
             "chart_type": chart_type or "bar",
             "labels": labels,
             "values": values,
@@ -447,7 +448,7 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if chart_type in {"pie", "doughnut"} and len(series_out) > 1:
         series_out = [series_out[0]]
 
-    title = str(raw.get("title") or "Data overview").strip()[:80]
+    title = str(raw.get("title") or "Tổng quan số liệu").strip()[:80]
     primary_values = series_out[0]["values"]
     return {
         "title": title,
@@ -536,8 +537,9 @@ async def build_chart_specs_for_slides(
     should_stop: Optional[Any] = None,
     table_indices: Optional[Set[int]] = None,
     raw_content: str = "",
+    visual_plan: Optional[Dict[int, str]] = None,
 ) -> Dict[int, Dict[str, Any]]:
-    """Return {slide_index: editable chart spec} for data-heavy slides."""
+    """Trả về {slide_index: đặc tả biểu đồ có thể chỉnh sửa} cho các slide nhiều số liệu."""
     slides = structured.get("slides") or []
     if not slides:
         return {}
@@ -667,8 +669,20 @@ async def build_chart_specs_for_slides(
             )
             continue
 
+        planned_visual = str((visual_plan or {}).get(idx) or "").strip().lower()
+        if planned_visual and planned_visual != "chart":
+            debug_records.append(
+                {
+                    "slide_index": idx,
+                    "title": str(slide.get("title") or ""),
+                    "context": "visual_plan",
+                    "status": f"skipped_planned_{planned_visual}",
+                }
+            )
+            continue
+
         markdown_chart = _chart_from_markdown_table(slide)
-        if markdown_chart and (idx not in skip or chart_intent_from_slide(slide)):
+        if markdown_chart and (idx not in skip or chart_intent_from_slide(slide, slide_spec=slide)):
             out[idx] = markdown_chart
             debug_records.append(
                 {
@@ -696,7 +710,7 @@ async def build_chart_specs_for_slides(
             [str(x) for x in (slide.get("bullets") or slide.get("content") or [])]
             if not isinstance(slide.get("bullets") or slide.get("content") or [], str)
             else str(slide.get("bullets") or slide.get("content") or "").splitlines(),
-            chart_intent_from_slide(slide) or "bar",
+            chart_intent_from_slide(slide, slide_spec=slide) or "bar",
         )
         if pair_chart:
             out[idx] = pair_chart
@@ -742,6 +756,15 @@ async def build_chart_specs_for_slides(
                 f"[slide_charts] slide {idx} chart: "
                 f"{spec['chart_type']} {len(spec['labels'])} point(s)"
             )
+    forced_chart_specs = {
+        idx: spec
+        for idx, spec in out.items()
+        if str(
+            (visual_plan or {}).get(idx)
+            or (visual_plan or {}).get(str(idx))
+            or ""
+        ).strip().lower() == "chart"
+    }
     out, debug_records = await review_visual_data_specs(
         content_extractor,
         structured,
@@ -750,6 +773,9 @@ async def build_chart_specs_for_slides(
         kind="chart",
         raw_content=raw_content,
     )
+    for idx, spec in forced_chart_specs.items():
+        if idx not in out:
+            out[idx] = spec
 
     if task_id:
         _write_debug_json(task_id, debug_records)

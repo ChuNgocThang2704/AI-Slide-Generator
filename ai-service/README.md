@@ -365,10 +365,11 @@ vllm serve Qwen/Qwen3-8B \
   --host 0.0.0.0 \
   --port 8000 \
   --dtype auto \
-  --gpu-memory-utilization 0.92 \
-  --max-model-len 8192 \
-  --max-num-seqs 6 \
-  --served-model-name Qwen3-8B
+  --gpu-memory-utilization 0.90 \
+  --max-model-len 16384 \
+  --max-num-seqs 8 \
+  --served-model-name Qwen3-8B \
+  --enable-prefix-caching
 ```
 
 ## License

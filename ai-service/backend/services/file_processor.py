@@ -1,10 +1,19 @@
 """Xử lý file: docx, pdf, txt"""
 from pathlib import Path
 from docx import Document
-import pdfplumber
 from typing import Union
 import re
 import asyncio
+import logging
+
+try:
+    import fitz  # PyMuPDF
+    _FITZ_AVAILABLE = True
+except ImportError:
+    _FITZ_AVAILABLE = False
+    import pdfplumber  # fallback
+
+logger = logging.getLogger(__name__)
 
 class FileProcessor:
     """Xử lý các loại file input"""
@@ -201,20 +210,61 @@ class FileProcessor:
         result = await asyncio.to_thread(self._extract_docx_text, file_path)
         return self._clean_extracted_text(result)
 
-    def _extract_pdf_text(self, file_path: Path) -> str:
-        """Đọc text PDF theo luồng sync (clean một lần ở cuối)."""
-        text_content = []
+    def _validate_extraction_quality(self, text: str) -> bool:
+        """Phát hiện text bị nối liền do PDF extract lỗi (ví dụ: 'MỤCLỤC2LỜICẢMƠN3').
 
+        Trả về False nếu tỷ lệ 'từ dài bất thường' vượt ngưỡng 15%.
+        """
+        words = text.split()
+        if not words:
+            return False
+        # Từ > 25 ký tự và không phải URL → bất thường
+        long_word_count = sum(
+            1 for w in words
+            if len(w) > 25 and not w.startswith(("http", "www", "ftp"))
+        )
+        ratio = long_word_count / max(1, len(words))
+        if ratio > 0.15:
+            logger.warning(
+                "[pdf_extract] %.0f%% abnormal long words detected — "
+                "PDF may have lost whitespace (e.g. pdfplumber layout bug). "
+                "Consider a text-layer PDF or DOCX.",
+                ratio * 100,
+            )
+            return False
+        return True
+
+    def _extract_pdf_text_fitz(self, file_path: Path) -> str:
+        """Dùng PyMuPDF (fitz) — giữ đúng khoảng trắng và cấu trúc dòng."""
+        doc = fitz.open(str(file_path))
+        pages: list[str] = []
+        for page in doc:
+            # "text" mode + preserve_whitespace giữ đúng layout
+            text = page.get_text("text")  # type: ignore[arg-type]
+            if text and text.strip():
+                pages.append(text)
+        doc.close()
+        return "\n\n".join(pages)
+
+    def _extract_pdf_text_plumber(self, file_path: Path) -> str:
+        """Fallback: dùng pdfplumber khi fitz không available."""
+        import pdfplumber  # lazy import
+        text_content: list[str] = []
         with pdfplumber.open(file_path) as pdf:
             for page in pdf.pages:
-                text = page.extract_text()
+                text = page.extract_text(x_tolerance=2, y_tolerance=3)
                 if text:
                     text_content.append(text)
-
         return "\n\n".join(text_content)
 
+    def _extract_pdf_text(self, file_path: Path) -> str:
+        """Đọc text PDF theo luồng sync — ưu tiên fitz, fallback pdfplumber."""
+        if _FITZ_AVAILABLE:
+            return self._extract_pdf_text_fitz(file_path)
+        return self._extract_pdf_text_plumber(file_path)
+
     async def _process_pdf(self, file_path: Path) -> str:
-        """Xử lý file PDF"""
+        """Xử lý file PDF với validate chất lượng extract."""
         raw_text = await asyncio.to_thread(self._extract_pdf_text, file_path)
         cleaned = self._clean_extracted_text(raw_text)
         if len(cleaned.strip()) < 100:
@@ -222,6 +272,8 @@ class FileProcessor:
                 "PDF này có vẻ là file scan hoặc không có text layer nên không trích xuất được nội dung. "
                 "Vui lòng dùng PDF có text layer, DOCX hoặc TXT."
             )
+        # Validate chất lượng — cảnh báo nhưng không chặn (vẫn trả về để pipeline cố gắng xử lý)
+        self._validate_extraction_quality(cleaned)
         return cleaned
 
     async def _process_txt(self, file_path: Path) -> str:

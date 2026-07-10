@@ -1,16 +1,16 @@
-"""Content extraction package.
+"""Package trích xuất nội dung.
 
-Public API:
+API công khai (Public API):
   from services.content.extractor import ContentExtractor, TaskCancelledError
 
-Internal modules (import directly if needed):
+Các module nội bộ (import trực tiếp nếu cần):
   - chunking          ChunkingMixin
   - input_processing  InputProcessingMixin
   - llm_client        LLMClientMixin
   - slide_normalizer  SlideNormalizerMixin
   - slide_pipeline    SlidePipelineMixin
   - image_extraction  ImageExtractionMixin
-  - prompts           All prompt strings and JSON schemas
+  - prompts           Toàn bộ các chuỗi prompt và JSON schema
   - json_utils        parse_json_response, try_fix_json
   - errors            TaskCancelledError
 """

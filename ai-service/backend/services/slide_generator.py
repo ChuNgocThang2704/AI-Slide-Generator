@@ -31,11 +31,11 @@ class SlideGenerator:
         )
     
     def __init__(self):
-        # Widescreen 16:9
+        # Màn hình rộng 16:9
         self.slide_width = Inches(13.333)
         self.slide_height = Inches(7.5)
 
-        # Layout constants
+        # Các hằng số bố cục (layout)
         self.margin_x = Inches(0.8)
         self.margin_y = Inches(0.6)
         self.title_h = Inches(1.0)
@@ -45,7 +45,7 @@ class SlideGenerator:
         self.font_title = "Segoe UI"
         self.font_body = "Segoe UI"
         
-        # Theme colors - Professional themes
+        # Màu sắc chủ đề - Các chủ đề chuyên nghiệp
         self.themes = {
             "default": {
                 "bg_start": RGBColor(241, 245, 249),  # Slate-100
@@ -87,7 +87,7 @@ class SlideGenerator:
                 "muted": RGBColor(251, 146, 60),    # Orange-400
                 "accent": RGBColor(249, 115, 22)
             },
-            # --- UI presets (Corporate / Modern / Minimal) ---
+            # --- Các bộ preset giao diện (Corporate / Modern / Minimal) ---
             "corporate": {
                 "bg_start": RGBColor(248, 250, 252),
                 "bg_end": RGBColor(255, 255, 255),
@@ -114,7 +114,7 @@ class SlideGenerator:
             },
         }
         
-        # Default theme
+        # Chủ đề mặc định
         self.current_theme = "default"
         self._preset: str = ""
 
@@ -129,9 +129,9 @@ class SlideGenerator:
         return None
 
     def _clean_title(self, text: str) -> str:
-        """Strip markdown heading markers (#, ##, ###) and excess whitespace."""
+        """Loại bỏ các ký tự đánh dấu tiêu đề markdown (#, ##, ###) và khoảng trắng thừa."""
         t = str(text).strip()
-        t = re.sub(r'^#+\s*', '', t)  # remove leading # ## ### etc.
+        t = re.sub(r'^#+\s*', '', t)  # loại bỏ dấu # ## ### ở đầu.
         return t.strip()
 
     def _derive_chunk_title(self, bullets: List[Any], fallback: str) -> str:
@@ -177,7 +177,7 @@ class SlideGenerator:
         return Inches(max(0.0, self._to_inches_f(val)))
 
     def _title_font_size(self, text: str, max_pt: int = 40, min_pt: int = 22) -> object:
-        """Auto-scale title font size based on text length."""
+        """Tự động điều chỉnh kích thước phông chữ tiêu đề dựa trên độ dài của văn bản."""
         return Pt(self._title_font_points(text, max_pt=max_pt, min_pt=min_pt))
 
     def _title_font_points(self, text: str, max_pt: int = 40, min_pt: int = 22) -> float:
@@ -195,11 +195,10 @@ class SlideGenerator:
 
     @staticmethod
     def _word_wrap_line_count(text: str, chars_per_line: float) -> int:
-        """Simulate PowerPoint word-wrap: count how many lines text occupies.
+        """Mô phỏng ngắt dòng (word-wrap) trong PowerPoint: đếm xem văn bản chiếm bao nhiêu dòng.
 
-        Unlike ceil(len/cpl), this respects word boundaries — a word is never
-        split across lines, so the actual line count can be lower than the
-        simple character-division estimate.
+        Khác với phép tính ceil(len/cpl), hàm này tôn trọng ranh giới từ — một từ không bao giờ
+        bị cắt đôi giữa các dòng, giúp kết quả đếm dòng chính xác hơn so với ước tính chia ký tự đơn thuần.
         """
         cpl = max(4, chars_per_line)
         words = text.split()
@@ -225,32 +224,32 @@ class SlideGenerator:
         max_pt: int = 40,
         min_pt: int = 22,
     ) -> float:
-        """Ước lượng chiều cao tiêu đề bằng word-wrap simulation.
+        """Ước lượng chiều cao tiêu đề bằng mô phỏng ngắt dòng (word-wrap).
 
-        Calibration (Inter/Calibri, 5.32-inch column with image):
-          40pt → ~30 chars/line  (factor 0.32)
-          34pt → ~35 chars/line  (factor 0.32, scaled)
-        Verified against real slides:
-          "Các yếu tố chính trong SEO"              → 1 line  ✓
-          "Khái niệm và đặc điểm của Digital Marketing" → 2 lines ✓
-          "Vai trò của Digital Marketing trong bối cảnh số hóa toàn cầu" → 2 lines ✓
+        Hiệu chuẩn (Inter/Calibri, cột 5.32 inch có hình ảnh):
+          40pt → ~30 ký tự/dòng (hệ số 0.32)
+          34pt → ~35 ký tự/dòng (hệ số 0.32, đã tỷ lệ)
+        Đã xác thực trên các slide thực tế:
+          "Các yếu tố chính trong SEO"              → 1 dòng  ✓
+          "Khái niệm và đặc điểm của Digital Marketing" → 2 dòng  ✓
+          "Vai trò của Digital Marketing trong bối cảnh số hóa toàn cầu" → 2 dòng  ✓
         """
         t = (title_text or "").strip()[:200]
         if not t:
             return float(self.title_h.inches if hasattr(self.title_h, "inches") else 1.0)
 
         fp = self._title_font_points(t, max_pt=max_pt, min_pt=min_pt)
-        # Factor 0.32: calibrated empirically for proportional Latin/Vietnamese fonts.
-        # Lower than naïve 0.55 because spaces + narrow letters reduce average width.
+        # Hệ số 0.32: được hiệu chuẩn thực nghiệm cho các phông chữ tỷ lệ Latin/Vietnamese.
+        # Thấp hơn mức naïve 0.55 vì khoảng trắng + các chữ cái hẹp làm giảm chiều rộng trung bình.
         avg_char_in = max(0.008, (fp / 72.0) * 0.32)
         chars_per_line = avail_width_inches / avg_char_in
 
-        # Word-wrap simulation: never splits a word → more accurate than ceil(total/cpl).
+        # Mô phỏng word-wrap: không bao giờ cắt đôi một từ -> chính xác hơn ceil(total/cpl).
         n_lines = self._word_wrap_line_count(t, chars_per_line)
         n_lines = min(4, n_lines)
 
         line_h_in = (fp / 72.0) * 1.35
-        pad_in = 0.06          # small padding only (box sized tightly to text)
+        pad_in = 0.06          # chỉ là padding nhỏ (khung có kích thước vừa khít văn bản)
         base = float(self.title_h.inches) if hasattr(self.title_h, "inches") else 1.0
         h = n_lines * line_h_in + pad_in
         cap = float(self.slide_height.inches) * 0.36 if hasattr(self.slide_height, "inches") else 2.5
@@ -291,12 +290,12 @@ class SlideGenerator:
 
     @staticmethod
     def _split_bullets_balanced(bullets: List[Any], max_bullets: int = 6) -> List[List[Any]]:
-        """Split bullets into near-even chunks to avoid sparse '(tiếp)' slides.
+        """Chia các bullet thành các nhóm cân bằng để tránh các slide '(tiếp)' quá thưa thớt.
 
-        Example:
-        - 7 bullets -> 4/3 (not 6/1)
-        - 8 bullets -> 4/4
-        - 10 bullets -> 5/5
+        Ví dụ:
+        - 7 bullet -> 4/3 (không phải 6/1)
+        - 8 bullet -> 4/4
+        - 10 bullet -> 5/5
         """
         items = [b for b in (bullets or []) if str(b).strip()]
         n = len(items)
@@ -317,7 +316,7 @@ class SlideGenerator:
 
     @staticmethod
     def _should_show_image(bullets: List[Any], img_path: Optional[str]) -> bool:
-        """Hide image on text-sparse slides to avoid empty-looking layout."""
+        """Ẩn ảnh trên các slide ít chữ để tránh bố cục trông bị trống trải."""
         if not img_path or not Path(str(img_path)).exists():
             return False
         texts = [str(b).strip() for b in (bullets or []) if str(b).strip()]
@@ -428,7 +427,7 @@ class SlideGenerator:
             output_path: Đường dẫn file output
             generate_images: Có sinh ảnh không
             image_paths: Dict {slide_index: image_path} nếu đã có ảnh
-            chart_specs: Dict {slide_index: chart spec} cho native editable charts
+            chart_specs: Dict {slide_index: chart spec} cho các biểu đồ chỉnh sửa được trực tiếp
             table_specs: Dict {slide_index: table spec} (headers + rows)
             preset: corporate | modern | minimal — nếu None thì giữ hành vi cũ (theme theo từ khóa title).
         """
@@ -448,7 +447,7 @@ class SlideGenerator:
             theme_name = self._detect_theme(structured_content.get("title", ""))
             self.current_theme = theme_name
         
-        # Always use blank layout for predictable visuals
+        # Luôn sử dụng layout trống để đảm bảo các yếu tố trực quan hiển thị như dự đoán
         blank = prs.slide_layouts[6]
 
         # Slide tiêu đề (custom)
@@ -570,7 +569,7 @@ class SlideGenerator:
             self.slide_width,
             self.slide_height
         )
-        # Use private spTree API intentionally to enforce z-order with python-pptx.
+        # Cố tình sử dụng API spTree nội bộ để bắt buộc thứ tự hiển thị (z-order) trong python-pptx.
         background.element.getparent().remove(background.element)
         slide.shapes._spTree.insert(0, background.element)
         
@@ -633,7 +632,7 @@ class SlideGenerator:
         theme = self.themes[self.current_theme]
         w = self.slide_width
         
-        # Hero band for title block
+        # Khung nền (hero band) cho khối tiêu đề
         dark_rect = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
             Inches(0.45),
@@ -647,7 +646,7 @@ class SlideGenerator:
         dark_rect.line.color.rgb = self._lighten_color(theme["accent"], 70)
         dark_rect.line.width = Pt(1.2)
 
-        # Soft overlay for depth
+        # Khung phủ mềm để tạo chiều sâu
         soft_overlay = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
             Inches(0.55),
@@ -659,13 +658,13 @@ class SlideGenerator:
         soft_overlay.fill.fore_color.rgb = self._lighten_color(theme["title"], 28)
         soft_overlay.line.fill.background()
 
-        # Keep hero block behind text
+        # Giữ khối hero phía sau văn bản
         dark_rect.element.getparent().remove(dark_rect.element)
         slide.shapes._spTree.insert(3, dark_rect.element)
         soft_overlay.element.getparent().remove(soft_overlay.element)
         slide.shapes._spTree.insert(4, soft_overlay.element)
 
-        # Decorative accent bars (left and right)
+        # Các thanh trang trí nhấn mạnh (bên trái và bên phải)
         left_bar = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
             Inches(0.8),
@@ -704,7 +703,7 @@ class SlideGenerator:
         p.font.color.rgb = RGBColor(255, 255, 255)
         p.space_after = Pt(12)
 
-        # Decorative line under title
+        # Đường trang trí bên dưới tiêu đề
         title_line = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
             w / 2 - Inches(1.8),
@@ -843,7 +842,7 @@ class SlideGenerator:
         if not hasattr(body_h, "inches"):
             body_h = Inches(max(1.2, self._to_inches_f(body_h)))
 
-        # Add a soft panel for reading comfort (behind text — insert trước shape chữ nếu cần)
+        # Thêm một khung panel mềm để dễ đọc hơn (phía sau văn bản — chèn trước shape chữ nếu cần)
         body_panel = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
             self._ensure_length(body_left - Inches(0.12)),
@@ -892,7 +891,7 @@ class SlideGenerator:
         p.font.color.rgb = theme["title"]
         p.space_after = Pt(6)
 
-        # Accent line under title
+        # Đường nhấn mạnh (accent) dưới tiêu đề
         title_accent = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
             self.margin_x,
@@ -941,7 +940,7 @@ class SlideGenerator:
             clean.append(s)
 
         if not clean and not has_table:
-            clean = ["(khong co noi dung)"]
+            clean = ["(không có nội dung)"]
 
         for i, text in enumerate(clean):
             para = btf.paragraphs[0] if i == 0 else btf.add_paragraph()
@@ -974,7 +973,7 @@ class SlideGenerator:
                 theme,
             )
 
-        # Optional image/chart on right (~1/3 chiều ngang; cao gần bằng vùng body)
+        # Tùy chọn ảnh/biểu đồ ở bên phải (~1/3 chiều ngang; cao gần bằng vùng body)
         if has_img:
             img_left = self._ensure_length(self.margin_x + body_w + gap)
             img_top = self._ensure_length(body_top + Inches(0.12))
@@ -993,7 +992,7 @@ class SlideGenerator:
             chart_h = Inches(max(2.7, min(4.45, bh - 0.05)))
             self._add_native_chart(slide, chart_spec or {}, chart_left, chart_top, chart_w, chart_h)
 
-        # Footer with subtle line
+        # Chân trang (footer) với đường kẻ mảnh
         footer_line = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE,
             self.margin_x,
@@ -1103,7 +1102,7 @@ class SlideGenerator:
                     pass
 
     def _add_native_chart(self, slide, chart_spec: Dict[str, Any], left, top, width, height) -> None:
-        """Add an editable PowerPoint chart (multi-series + richer types)."""
+        """Thêm biểu đồ PowerPoint có thể chỉnh sửa trực tiếp (nhiều chuỗi dữ liệu + nhiều loại phong phú)."""
         labels = [str(x)[:38] for x in (chart_spec.get("labels") or []) if str(x).strip()]
         series_list = chart_spec.get("series")
         if not isinstance(series_list, list) or not series_list:
@@ -1195,5 +1194,7 @@ class SlideGenerator:
             data_labels.font.size = Pt(8)
             if chart_spec.get("is_percent"):
                 data_labels.number_format = "0%"
+            else:
+                data_labels.number_format = "General"
         except Exception:
             pass

@@ -1,8 +1,8 @@
-"""Slide deck bullet cleaning, normalization, and balancing.
+"""Làm sạch, chuẩn hóa và cân bằng danh sách bullet của slide deck.
 
-SlideNormalizerMixin provides all post-processing logic for the slide JSON
-produced by the LLM: cleaning bullets, balancing the deck, repairing
-truncated sentences, and enforcing exact slide counts.
+SlideNormalizerMixin cung cấp tất cả logic hậu xử lý cho JSON slide được tạo
+bởi LLM: làm sạch các bullet, cân bằng deck, sửa các câu bị cắt cụt và
+bắt buộc số lượng slide chính xác.
 """
 from __future__ import annotations
 
@@ -55,54 +55,54 @@ _BULLET_WEAK_TAIL_WORDS = frozenset(
         "một",
         "đặc",
         "biệt",
-        # Connector-words that always need continuation to form a complete idea.
-        "nhằm",  # "in order to" — always precedes a verb phrase
-        "gồm",   # "includes" — always precedes its items
-        "nhờ",   # "thanks to / through" — always precedes the means
+        # Các từ nối luôn cần phần tiếp theo để tạo thành ý nghĩa hoàn chỉnh.
+        "nhằm",  # "in order to" — luôn đi trước một cụm động từ
+        "gồm",   # "includes" — luôn đi trước danh sách các mục
+        "nhờ",   # "thanks to / through" — luôn đi trước phương tiện/nguyên nhân
     }
 )
 
-# Sino-Vietnamese bound morphemes that NEVER legitimately end a sentence alone.
-# Each entry is the FIRST syllable of a common compound that must be followed
-# by its complement (e.g. "trung" → trung thành / trung tâm / trung thực).
-# Detected in _repair_incomplete_tail and _is_truncated_bullet.
+# Các từ Hán-Việt liên kết KHÔNG BAO GIỜ kết thúc câu một cách hợp lệ khi đứng một mình.
+# Mỗi mục là âm tiết ĐẦU TIÊN của một từ ghép phổ biến mà bắt buộc phải có từ đi kèm
+# (ví dụ: "trung" → trung thành / trung tâm / trung thực).
+# Được phát hiện trong _repair_incomplete_tail và _is_truncated_bullet.
 _VN_BOUND_PREFIXES = frozenset({
     "trung",   # trung thành, trung tâm, trung thực, trung bình, trung lập
     "bất",     # bất kỳ, bất ngờ, bất hợp (pháp)
     "vô",      # vô cùng, vô ích, vô lý, vô hiệu
     "siêu",    # siêu thị, siêu tốc, siêu âm
     "tiểu",    # tiểu thuyết, tiểu học, tiểu đường
-    "đại",     # đại học, đại diện, đại dương (as sentence-final: extremely rare)
+    "đại",     # đại học, đại diện, đại dương (đứng cuối câu rất hiếm)
     "phi",     # phi lợi nhuận, phi tập trung
-    "hợp",     # hợp pháp, hợp lệ, hợp đồng (standalone: rare in slide context)
+    "hợp",     # hợp pháp, hợp lệ, hợp đồng (đứng độc lập ở cuối câu rất hiếm trong slide)
     "tương",   # tương tác, tương lai, tương đương
-    "thực",    # thực tế, thực hành, thực hiện (standalone ending: odd in slides)
-    "chính",   # chính sách, chính xác (only when clearly the first morpheme)
+    "thực",    # thực tế, thực hành, thực hiện (kết thúc độc lập trông lạ trong slide)
+    "chính",   # chính sách, chính xác (chỉ khi rõ ràng là âm tiết đầu)
 })
 
-# Comprehensive Vietnamese + English function words.
-# These words carry no standalone meaning at sentence END: prepositions,
-# conjunctions, determiners, auxiliaries. Used to detect dangling tails
-# without enumerating specific phrase patterns.
+# Danh sách đầy đủ các hư từ (function words) tiếng Việt + tiếng Anh.
+# Các từ này không mang ý nghĩa độc lập khi đứng ở CUỐI câu: giới từ,
+# liên từ, từ hạn định, trợ từ. Dùng để phát hiện các đoạn cuối bị lơ lửng
+# mà không cần liệt kê từng mẫu cụm từ cụ thể.
 _VN_FUNCTION_WORDS = frozenset({
-    # Vietnamese prepositions (always need NP/VP after them)
+    # Giới từ tiếng Việt (luôn cần cụm danh từ/cụm động từ phía sau)
     "của", "cho", "với", "từ", "theo", "để", "nhằm", "gồm", "nhờ", "qua",
     "về", "đến", "thành", "trong", "ngoài", "bởi", "sau", "trước", "giữa",
     "đối", "tại", "vào", "ra", "lên", "xuống", "suốt", "trên", "dưới",
     "cạnh", "ngang", "dọc", "tới", "cùng",
-    # Vietnamese conjunctions (connect to what follows)
+    # Liên từ tiếng Việt (kết nối với phần đi sau)
     "và", "hoặc", "hay", "mà", "nhưng", "song", "vừa",
     "khi", "nếu", "tuy", "dù", "hễ", "miễn", "vì",
-    # Vietnamese determiners / quantifiers (require following noun)
+    # Từ hạn định / từ chỉ số lượng tiếng Việt (yêu cầu danh từ đi sau)
     "các", "những", "một", "mọi", "từng", "nhiều", "ít", "vài", "mấy",
-    # English equivalents
+    # Các từ tương đương trong tiếng Anh
     "the", "a", "an", "of", "and", "or", "for", "to", "in", "on", "at",
     "by", "with", "from", "as", "but", "nor", "yet", "so", "when", "if",
     "including", "through", "via", "based", "such", "than", "rather",
     "which", "that", "this", "these", "those",
 })
 
-# Belt-and-suspenders: specific multi-word dangling connectors for extra coverage.
+# Biện pháp dự phòng bổ sung: các từ nối lơ lửng gồm nhiều từ để tăng độ bao phủ.
 _DANGLING_TAIL_RE = re.compile(
     r"[\s,]+"
     r"(?:"
@@ -150,12 +150,12 @@ _GENERIC_TITLE_EXACT = frozenset({
 
 _GENERIC_TITLE_PREFIX_RE = re.compile(
     r"""^(?:
-        # numbered Vietnamese — "Nội dung 1", "Phần 2", v.v. (có số đằng sau = placeholder)
+        # Số thứ tự tiếng Việt — "Nội dung 1", "Phần 2", v.v. (có số đằng sau = placeholder)
         n[o\u1ed9][i\u1ecb]\s*dung\s*\d+    |  # nội dung 1, noi dung 2
         ph[a\u1ea7]n\s*\d+                   |  # phần 1, phan 2
         ch[\u01b0\u01a1u][o\u01a1]ng\s*\d+  |  # chương 1
         m[u\u1ee5]c\s*\d+                    |  # mục 1
-        # numbered English — "Slide 1", "Section 2", v.v.
+        # Số thứ tự tiếng Anh — "Slide 1", "Section 2", v.v.
         slide\s*\d+                          |  # slide 1
         section\s*\d+                        |  # section 1
         part\s*\d+                           |  # part 1
@@ -194,7 +194,7 @@ def _is_generic_title(title: str) -> bool:
 class SlideNormalizerMixin:
 
     def _sanitize_inline_markup(self, text: str) -> str:
-        """Normalize model output to plain slide text, without markdown formatting."""
+        """Chuẩn hóa đầu ra của mô hình thành văn bản slide thuần túy, không có định dạng markdown."""
         if text is None:
             return ""
         t = unicodedata.normalize("NFKC", html.unescape(str(text))).strip()
@@ -258,7 +258,7 @@ class SlideNormalizerMixin:
         *,
         max_words: int = 11,
     ) -> str:
-        """Create a concrete slide title from the chunk's own bullets."""
+        """Tạo tiêu đề slide cụ thể từ các bullet của chính chunk đó."""
         fallback_clean = self._sanitize_title(str(fallback or "Nội dung chính")) or "Nội dung chính"
         fallback_clean = re.sub(r"\s+-\s+Ph\S*\s+\d+\s*$", "", fallback_clean, flags=re.IGNORECASE).strip() or fallback_clean
         fallback_norm = re.sub(r"\W+", " ", fallback_clean.lower()).strip()
@@ -355,15 +355,15 @@ class SlideNormalizerMixin:
         return " ".join([opener] + body_parts).strip()
 
     def _normalize_structured_content(self, structured_content: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize to canonical slide JSON format.
+        """Chuẩn hóa cấu trúc nội dung về định dạng JSON slide chuẩn.
 
-        Canonical format:
+        Định dạng chuẩn:
         {
           "title": str,
           "slides": [{"title": str, "bullets": [str], "notes": str}]
         }
 
-        Backward compat: accepts legacy "content" as bullets.
+        Tương thích ngược: chấp nhận trường "content" cũ dưới dạng các bullet.
         """
         if not isinstance(structured_content, dict):
             return {"title": "Bài thuyết trình", "slides": []}
@@ -406,7 +406,6 @@ class SlideNormalizerMixin:
                     "title": title_clean,
                     "bullets": bullets_clean[:MAX_BULLETS_PER_SLIDE],
                     "notes": notes,
-                    "script": notes,
                 }
                 for visual_key in ("table", "chart", "image_url"):
                     if slide.get(visual_key):
@@ -419,23 +418,23 @@ class SlideNormalizerMixin:
             }
 
         def _clean_bullet(text: str, _max_words: int) -> str:
-            """Strip artifacts, repair tails, hard-cut tại _max_words để giữ bullet súc tích."""
+            """Loại bỏ các ký tự thừa, sửa các câu bị cụt, cắt cứng tại _max_words để giữ bullet súc tích."""
             t = (text or "").strip()
-            # Remove accidental markdown/heading markers inside bullets
+            # Loại bỏ các ký tự markdown/tiêu đề vô tình xuất hiện trong bullet
             t = re.sub(r"^\s*#{1,6}\s*", "", t)
             t = re.sub(r"^\s*[-*•]\s*", "", t)
             t = re.sub(r"^\s*[→>]+\s*", "", t)
-            # Remove leading numbering like "1.", "2.3", "1-"
+            # Loại bỏ số thứ tự ở đầu như "1.", "2.3", "1-"
             t = re.sub(r"^\s*\d+(\.\d+)*\s*[-:.)]\s*", "", t)
-            # Strip trailing ... or … (model's copy-paste artifact)
+            # Loại bỏ các dấu ... hoặc … ở cuối (lỗi sao chép-dán của mô hình)
             t = re.sub(r'[…\.]{2,}\s*$', '', t).strip()
             t = t.rstrip(',(').strip()
             t = re.sub(r'\s+', ' ', t)
-            # Length cap: respect sentence boundaries to avoid mid-sentence cuts.
+            # Giới hạn độ dài: tôn trọng ranh giới câu để tránh cắt giữa chừng.
             if _max_words and _max_words > 0:
                 words = t.split()
                 if len(words) > _max_words:
-                    # Strategy A: sentence boundary BEFORE the limit (ideal).
+                    # Chiến lược A: ranh giới câu TRƯỚC giới hạn từ (lý tưởng).
                     candidate = " ".join(words[:_max_words])
                     cut = None
                     for sep in (".", "!", "?", ";"):
@@ -445,9 +444,9 @@ class SlideNormalizerMixin:
                             break
 
                     if cut is None:
-                        # Strategy B: no boundary before limit — try to extend up to
-                        # _max_words + 8 to find where the current sentence naturally ends.
-                        # This avoids raw mid-sentence cuts entirely.
+                        # Chiến lược B: không có ranh giới câu trước giới hạn từ — cố gắng mở rộng thêm tối đa
+                        # _max_words + 8 để tìm nơi câu hiện tại kết thúc một cách tự nhiên.
+                        # Điều này tránh hoàn toàn việc cắt ngang giữa câu.
                         extended = " ".join(words[: _max_words + 8])
                         ext_cut = None
                         for sep in (".", "!", "?"):
@@ -458,8 +457,8 @@ class SlideNormalizerMixin:
                         if ext_cut:
                             cut = ext_cut
                         else:
-                            # Strategy C: no sentence boundary at all — cut at last
-                            # clause boundary (comma) to keep at least one full clause.
+                            # Chiến lược C: hoàn toàn không có ranh giới câu — cắt tại ranh giới mệnh đề cuối cùng
+                            # (dấu phẩy) để giữ lại ít nhất một mệnh đề hoàn chỉnh.
                             pos = candidate.rfind(",")
                             if pos > len(candidate) // 3:
                                 cut = candidate[:pos].strip()
@@ -518,7 +517,7 @@ class SlideNormalizerMixin:
                     slide_title = "Nội dung"
 
             def _norm_compare(s: str) -> str:
-                # Normalize for approximate equality checks (avoid accepting bullet duplicated title).
+                # Chuẩn hóa để kiểm tra độ trùng lặp xấp xỉ (tránh việc bullet trùng với tiêu đề).
                 t = (s or "").strip().lower()
                 t = re.sub(r"\s+", " ", t)
                 t = t.strip(" \t\n\r\"'“”“”‘’.,;:!?-—–()[]{}")
@@ -537,7 +536,7 @@ class SlideNormalizerMixin:
             cleaned_bullets = cleaned_bullets[:MAX_BULLETS_PER_SLIDE]
 
             def _bullet_ok(s: str) -> bool:
-                """Loại bullet kiểu vài chữ / không đủ ngữ cảnh (hay gặp khi model lười)."""
+                # Loại bullet kiểu vài chữ / không đủ ngữ cảnh (hay gặp khi model lười).
                 s = (s or "").strip()
                 w = len(s.split())
                 c = len(s)
@@ -568,7 +567,7 @@ class SlideNormalizerMixin:
                 recovered = [b for b in cleaned_bullets if b and _bullet_loose_ok(b)]
                 bullets_list = recovered if len(recovered) >= 3 else cleaned_bullets
 
-            # Remove bullets that duplicate the slide title (common failure mode).
+            # Loại bỏ các bullet trùng lặp với tiêu đề slide (lỗi phổ biến).
             title_norm = _norm_compare(slide_title)
             dedup_by_text: List[str] = []
             seen_norm: set[str] = set()
@@ -581,7 +580,7 @@ class SlideNormalizerMixin:
                     continue
                 if title_norm and bn == title_norm:
                     continue
-                # Also dedup bullets approximately to avoid repeated lines.
+                # Đồng thời loại bỏ các bullet trùng lặp xấp xỉ để tránh lặp lại các dòng.
                 if bn in seen_norm:
                     continue
                 seen_norm.add(bn)
@@ -603,7 +602,6 @@ class SlideNormalizerMixin:
                 "title": self._sanitize_title(slide_title.strip())[:120],
                 "bullets": bullets_list,
                 "notes": notes,
-                "script": notes,
             }
             for visual_key in ("table", "chart", "image_url"):
                 if slide.get(visual_key):
@@ -611,7 +609,7 @@ class SlideNormalizerMixin:
             slides_out.append(out_slide)
 
         slides_out = self._balance_deck(slides_out)
-        # Global bullet dedup across the whole deck (reduce "repetition across slides").
+        # Loại bỏ trùng lặp bullet trên toàn bộ slide deck (giảm thiểu "lặp lại giữa các slide").
         try:
             global_seen: set[str] = set()
             for s in slides_out:
@@ -631,17 +629,16 @@ class SlideNormalizerMixin:
                     new_bs.append(b)
                 s["bullets"] = new_bs
         except Exception:
-            # Never fail the request because of dedup heuristics.
+            # Không bao giờ làm hỏng yêu cầu chỉ vì các thuật toán loại trùng.
             pass
         for s in slides_out:
             if not isinstance(s, dict):
                 continue
-            notes = str(s.get("script") or s.get("speaker_notes") or s.get("notes") or "").strip()
-            notes = self._sanitize_inline_markup(notes)
-            if not notes:
-                notes = self._build_default_speaker_notes(str(s.get("title") or ""), s.get("bullets") or [])
-            s["notes"] = notes
-            s["script"] = notes
+            slide_notes = str(s.get("speaker_notes") or s.get("notes") or "").strip()
+            slide_notes = self._sanitize_inline_markup(slide_notes)
+            if not slide_notes:
+                slide_notes = self._build_default_speaker_notes(str(s.get("title") or ""), s.get("bullets") or [])
+            s["notes"] = slide_notes
         title_counts: Dict[str, int] = {}
         for s in slides_out:
             if not isinstance(s, dict):
@@ -691,11 +688,11 @@ class SlideNormalizerMixin:
         return set(words)
 
     def _balance_deck(self, slides: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Post-process slide list: dedup by title + semantic similarity, drop empties, rescue sparse slides."""
+        """Hậu xử lý danh sách slide: loại trùng theo tiêu đề + độ tương đồng ngữ nghĩa, bỏ slide trống, cứu các slide thưa thớt."""
         if not slides:
             return slides
 
-        # 1. Dedup by exact title: keep first, merge bullets if duplicate found
+        # 1. Loại trùng theo tiêu đề khớp chính xác: giữ slide đầu tiên, gộp bullet nếu tìm thấy tiêu đề trùng lặp
         seen_titles: Dict[str, int] = {}
         deduped: List[Dict[str, Any]] = []
         for slide in slides:
@@ -738,7 +735,7 @@ class SlideNormalizerMixin:
                     kept.append(dict(slide))
             slides = kept
 
-        # 2. Drop slides with 0 bullets
+        # 2. Bỏ các slide không có bullet nào
         slides = [s for s in slides if s["bullets"]]
 
         # 3. Rescue thin slides: đảm bảo mỗi slide có ít nhất 3 bullets (đúng spec),
@@ -753,7 +750,7 @@ class SlideNormalizerMixin:
                     continue
                 if len(bs_i) >= min_required:
                     continue
-                # Take from previous if previous has dư
+                # Lấy từ slide trước nếu slide trước có dư
                 if i - 1 >= 0:
                     bs_prev = slides[i - 1].get("bullets") or []
                     if isinstance(bs_prev, list) and len(bs_prev) > min_required:
@@ -761,7 +758,7 @@ class SlideNormalizerMixin:
                         slides[i]["bullets"].insert(0, donated)
                         changed = True
                         continue
-                # Take from next if previous không đủ
+                # Lấy từ slide sau nếu slide trước không đủ
                 if i + 1 < len(slides):
                     bs_next = slides[i + 1].get("bullets") or []
                     if isinstance(bs_next, list) and len(bs_next) > min_required:
@@ -769,7 +766,7 @@ class SlideNormalizerMixin:
                         slides[i]["bullets"].append(donated)
                         changed = True
 
-        # 4. Merge pairs of consecutive 1-bullet slides into one
+        # 4. Gộp các cặp slide liên tiếp chỉ có 1 bullet thành một slide
         merged: List[Dict[str, Any]] = []
         i = 0
         while i < len(slides):
@@ -837,7 +834,7 @@ class SlideNormalizerMixin:
         return merged
 
     def _clean_result_text(self, text: str) -> str:
-        """Strip thinking blocks and markdown fences before JSON parsing."""
+        """Loại bỏ các khối suy nghĩ (thinking blocks) và các khối markdown trước khi phân tích JSON."""
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
         text = text.strip()
         if "```" in text:
@@ -847,7 +844,7 @@ class SlideNormalizerMixin:
         return text
 
     def _has_balanced_delimiters(self, text: str) -> bool:
-        """Check simple delimiter balance to catch half-open phrases."""
+        """Kiểm tra sự cân bằng của các dấu ngoặc/dấu nháy để phát hiện các cụm từ bị mở một nửa."""
         if not text:
             return True
         stack: List[str] = []
@@ -862,7 +859,7 @@ class SlideNormalizerMixin:
         if stack:
             return False
 
-        # Quote balance (ignore apostrophes inside words).
+        # Cân bằng dấu nháy (bỏ qua dấu nháy đơn bên trong từ).
         clean = re.sub(r"(?<=\w)'(?=\w)", "", text)
         clean = re.sub(r'(?<=\w)"(?=\w)', "", clean)
         if clean.count('"') % 2 != 0:
@@ -873,31 +870,31 @@ class SlideNormalizerMixin:
 
     @staticmethod
     def _count_content_words(phrase: str) -> int:
-        """Count words NOT in the function-word set (carry real semantic meaning)."""
+        """Đếm các từ KHÔNG nằm trong tập hợp hư từ (mang ý nghĩa ngữ nghĩa thực sự)."""
         return sum(
             1 for w in phrase.split()
             if re.sub(r"[^\w]+", "", w).lower() not in _VN_FUNCTION_WORDS
         )
 
     def _repair_incomplete_tail(self, text: str) -> str:
-        """Trim dangling tail clauses using content-word density + specific patterns.
+        """Cắt bỏ các mệnh đề lơ lửng ở cuối bằng mật độ từ mang ý nghĩa + các mẫu cụ thể.
 
-        General principle: after the last , or ; the remaining tail must contain
-        ≥ 3 content words (non-function-words) to be considered meaningful.
-        This catches ANY dangling pattern regardless of specific word choice.
+        Nguyên tắc chung: sau dấu , hoặc ; cuối cùng, phần đuôi còn lại phải chứa
+        ≥ 3 từ mang ý nghĩa (không phải hư từ) để được coi là có nghĩa.
+        Điều này phát hiện BẤT KỲ mẫu lơ lửng nào bất kể từ ngữ cụ thể được chọn.
         """
         t = re.sub(r"\s+", " ", (text or "").strip())
         if not t:
             return t
 
-        # Remove hanging delimiters first.
+        # Loại bỏ các dấu phân cách lơ lửng trước tiên.
         t = re.sub(r"[,;:\-——/]\s*$", "", t).strip()
 
-        # ── General content-word check (language-agnostic) ─────────────────────
-        # If the last clause (after , or ;) has < 3 content words it is dangling.
-        # Examples that get trimmed:
-        #   "... kỹ thuật, thiết bị di động và."    → tail has 2 content words → drop
-        #   "... tối ưu hóa thông qua các công cụ." → tail has 3+ content words → keep
+        # ── Kiểm tra từ mang ý nghĩa nói chung (không phụ thuộc ngôn ngữ) ────────
+        # Nếu mệnh đề cuối cùng (sau dấu , hoặc ;) có < 3 từ mang ý nghĩa thì nó là lơ lửng.
+        # Các ví dụ sẽ bị cắt bỏ:
+        #   "... kỹ thuật, thiết bị di động và."    → phần đuôi có 2 từ mang ý nghĩa → bỏ
+        #   "... tối ưu hóa thông qua các công cụ." → phần đuôi có >= 3 từ mang ý nghĩa → giữ
         m = re.search(r"([,;])\s*(.+)$", t)
         if m:
             tail_raw = m.group(2).strip().rstrip(".!?")
@@ -908,7 +905,7 @@ class SlideNormalizerMixin:
                 if len(head.split()) >= 4:
                     t = head
 
-        # ── Belt-and-suspenders: specific multi-word dangling connectors ────────
+        # ── Biện pháp dự phòng bổ sung: các từ nối lơ lửng gồm nhiều từ ────────
         bare = t.rstrip(".!?").rstrip()
         m2 = _DANGLING_TAIL_RE.search(bare)
         if m2:
@@ -916,17 +913,17 @@ class SlideNormalizerMixin:
             if len(head.split()) >= 4:
                 t = head
 
-        # ── Sino-Vietnamese bound morpheme ending ──────────────────────────────
-        # e.g. "...xây dựng cộng đồng trung." → LLM wrote "trung" but meant
-        # "trung thành"; the morpheme cannot stand alone → drop it.
+        # ── Từ Hán-Việt ghép bị cụt ─────────────────────────────────────────────
+        # Ví dụ: "...xây dựng cộng đồng trung." → LLM viết "trung" nhưng ý là
+        # "trung thành"; từ ghép không thể đứng một mình → bỏ nó đi.
         words = t.rstrip(".!?").split()
         if words:
             last = re.sub(r"[^\w]+", "", words[-1]).lower()
             if last in _VN_BOUND_PREFIXES and len(words) >= 4:
                 t = " ".join(words[:-1]).strip()
-                words = t.rstrip(".!?").split()  # refresh for next check
+                words = t.rstrip(".!?").split()  # cập nhật lại để kiểm tra tiếp
 
-        # ── Single function-word ending ─────────────────────────────────────────
+        # ── Kết thúc bằng một hư từ đơn độc ───────────────────────────────────────
         if words:
             last = re.sub(r"[^\w]+", "", words[-1]).lower()
             if last in _VN_FUNCTION_WORDS and len(words) >= 5:
@@ -938,14 +935,14 @@ class SlideNormalizerMixin:
         return t
 
     def _is_truncated_bullet(self, text: str) -> bool:
-        """Score-based truncated detection, mostly language-agnostic."""
+        """Phát hiện câu bị cắt cụt dựa trên điểm số, phần lớn không phụ thuộc ngôn ngữ."""
         raw = (text or "").strip()
         if not raw:
             return False
         t = re.sub(r"\s+", " ", raw)
         score = 0
 
-        # Strong signals.
+        # Tín hiệu mạnh.
         if re.search(r"(?:\.\.\.|…)\s*$", t):
             score += 3
         if re.search(r"[,;:\-——/]\s*$", t):
@@ -955,7 +952,7 @@ class SlideNormalizerMixin:
         if not self._has_balanced_delimiters(t):
             score += 2
 
-        # General: last clause (after , or ;) has too few content words → dangling.
+        # Tổng quát: mệnh đề cuối cùng (sau dấu , hoặc ;) có quá ít từ mang ý nghĩa → lơ lửng.
         _mc = re.search(r"[,;]\s*(.+)$", t)
         if _mc:
             _tail = _mc.group(1).strip().rstrip(".!?")
@@ -964,11 +961,11 @@ class SlideNormalizerMixin:
             if _cc < 3 and _tw <= 7:
                 score += 3
 
-        # Specific multi-word dangling connector at end (belt-and-suspenders).
+        # Các cụm từ nối lơ lửng cụ thể ở cuối.
         if _DANGLING_TAIL_RE.search(t.rstrip(".!?")):
             score += 3
 
-        # Sino-Vietnamese bound morpheme at sentence end (never valid standalone).
+        # Tiền tố Hán-Việt liên kết ở cuối câu (không bao giờ đứng độc lập).
         _w = t.rstrip(".!?").split()
         if _w:
             _last = re.sub(r"[^\w]+", "", _w[-1]).lower()
@@ -977,7 +974,7 @@ class SlideNormalizerMixin:
             elif _last in _VN_FUNCTION_WORDS and len(_w) >= 4:
                 score += 3
 
-        # Weak signal: tail clause after separator is too short to form meaning.
+        # Tín hiệu yếu: mệnh đề cuối sau dấu phân cách quá ngắn để tạo thành nghĩa.
         m = re.search(r"[,;:]\s*([^,;:]+)$", t)
         if m:
             tail = m.group(1).strip().rstrip(".!?")
@@ -985,7 +982,7 @@ class SlideNormalizerMixin:
             if len(t) >= 18 and (len(tail_words) <= 3 or len(tail) <= 14):
                 score += 2
 
-        # Very short bullets tend to be labels, but keep room for genuine short facts.
+        # Các bullet rất ngắn có xu hướng là nhãn (label), nhưng vẫn giữ không gian cho các sự thật ngắn thực sự.
         words = t.rstrip(".!?").split()
         if len(words) <= 2 and len(t) >= 12:
             score += 1
@@ -1006,10 +1003,10 @@ class SlideNormalizerMixin:
 
 
     async def _force_slide_count_exact(self, structured_content: Dict[str, Any], desired_slides: int) -> Dict[str, Any]:
-        """Force deck slide count to exactly `desired_slides`.
+        """Bắt buộc số lượng slide của deck phải chính xác bằng `desired_slides`.
 
-        - If too many slides: trim.
-        - If too few: split bullets from the slide with most bullets.
+        - Nếu quá nhiều slide: cắt bỏ bớt.
+        - Nếu quá ít slide: tách bullet từ slide có nhiều bullet nhất.
         """
         if not isinstance(structured_content, dict):
             return structured_content
@@ -1021,14 +1018,14 @@ class SlideNormalizerMixin:
         if not isinstance(slides, list):
             return structured_content
 
-        # Drop empty/broken slides first.
+        # Loại bỏ các slide trống hoặc bị lỗi trước.
         slides = [s for s in slides if isinstance(s, dict) and (s.get("bullets") or [])]
         structured_content["slides"] = slides
 
         original_count = len(slides)
 
         def _split_one(slides_list: List[Dict[str, Any]]) -> bool:
-            # Pick slide with max bullets (>1) to split.
+            # Chọn slide có nhiều bullet nhất (>1) để tách.
             candidates = [
                 (idx, len(s.get("bullets") or []))
                 for idx, s in enumerate(slides_list)
@@ -1054,12 +1051,12 @@ class SlideNormalizerMixin:
                 if len(b) < 80:
                     return False
 
-                # Prefer split by sentence end.
+                # Ưu tiên tách theo kết thúc câu.
                 sentences = re.split(r'(?<=[\.!?])\s+', b)
                 sentences = [s.strip() for s in sentences if s.strip()]
 
                 if len(sentences) >= 2:
-                    # Take first N sentences until half length
+                    # Lấy N câu đầu tiên cho đến khi đạt một nửa độ dài
                     half = len(b) // 2
                     left_parts: List[str] = []
                     left_len = 0
@@ -1074,14 +1071,14 @@ class SlideNormalizerMixin:
                     left = " ".join(left_parts).strip()
                     right = " ".join(right_parts).strip()
                 else:
-                    # Fallback split by comma/semicolon/colon
+                    # Giải pháp dự phòng: tách theo dấu phẩy/dấu chấm phẩy/dấu hai chấm
                     parts = re.split(r'[,;:]\s+', b, maxsplit=1)
                     if len(parts) < 2:
                         return False
                     left = parts[0].strip()
                     right = parts[1].strip()
 
-                # Validate parts
+                # Xác thực các phần
                 lw = len(left.split())
                 rw = len(right.split())
                 if lw < 5 or rw < 5:
@@ -1121,20 +1118,20 @@ class SlideNormalizerMixin:
             ).strip() or str(slide.get("title") or "Nội dung")
             new_slide["title"] = f"{base_title} - Phần 2"
             new_slide["bullets"] = right
-            # Insert after current slide.
+            # Chèn sau slide hiện tại.
             slides_list.insert(idx + 1, new_slide)
             return True
 
-        # Trim if too many.
+        # Cắt bớt nếu quá nhiều.
         if len(slides) > desired_slides:
             structured_content["slides"] = slides[:desired_slides]
             return structured_content
 
-        # Split until enough.
+        # Tách cho đến khi đủ.
         while len(slides) < desired_slides:
             ok = _split_one(slides)
             if not ok:
-                # If we can't split further (mostly 1-bullet slides), pad by duplicating last slide.
+                # Nếu không thể tách thêm (hầu hết là slide 1 bullet), đệm thêm bằng cách nhân bản slide cuối.
                 if not slides:
                     break
                 last = dict(slides[-1])
@@ -1152,7 +1149,7 @@ class SlideNormalizerMixin:
             slides = slides[:desired_slides]
         structured_content["slides"] = slides
 
-        # HARD FIX: nếu slide có <2 bullets thì chuyển 1 bullet từ slide lân cận sang
+        # Hỗ trợ khẩn cấp: nếu slide có <2 bullets thì chuyển 1 bullet từ slide lân cận sang
         # (giữ nguyên slide count, chỉ "bơm chữ" để tránh 1 slide 1 dòng).
         try:
             for i in range(len(slides)):
@@ -1164,14 +1161,14 @@ class SlideNormalizerMixin:
                 if len(bs) >= 2:
                     continue
 
-                # Try from previous
+                # Thử từ slide trước
                 if i - 1 >= 0:
                     prev = slides[i - 1].get("bullets") or []
                     if isinstance(prev, list) and len(prev) > 1 and len(bs) < MAX_BULLETS_PER_SLIDE:
-                        # Move one bullet
+                        # Di chuyển một bullet
                         bs.insert(0, prev.pop())
 
-                # Try from next
+                # Thử từ slide tiếp theo
                 if len(bs) < 2 and i + 1 < len(slides):
                     nxt = slides[i + 1].get("bullets") or []
                     if isinstance(nxt, list) and len(nxt) > 1 and len(bs) < MAX_BULLETS_PER_SLIDE:
@@ -1181,7 +1178,7 @@ class SlideNormalizerMixin:
         except Exception:
             pass
 
-        # If slide count changed or any "(tiếp)" slides are present, run density and quality gates.
+        # Nếu số lượng slide thay đổi hoặc có slide "(tiếp)", chạy lại bộ lọc mật độ và chất lượng.
         has_tiep_slides = any("(tiếp)" in str(s.get("title") or "") or "(continued)" in str(s.get("title") or "").lower() for s in slides)
         if len(slides) != original_count or has_tiep_slides:
             try:

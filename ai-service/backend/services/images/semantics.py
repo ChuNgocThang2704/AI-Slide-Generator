@@ -24,12 +24,12 @@ _ABSTRACT_CONCEPT_KEYS_SORTED: Optional[List[str]] = None
 
 
 def _is_mostly_ascii(text: str) -> bool:
-    """SDXL/CLIP only understand latin tokens well; reject any string that
-    contains Vietnamese diacritics or other non-ASCII letters.
+    """SDXL/CLIP chỉ hiểu tốt các token chữ Latinh; từ chối bất kỳ chuỗi nào
+    chứa dấu tiếng Việt hoặc các chữ cái không thuộc bảng mã ASCII khác.
 
-    Numbers, spaces, dashes and a few common punctuation chars are allowed
-    (so "UNFCCC 1992" or "CO2/CH4" still pass) but a single accented letter
-    like 'á', 'đ' is enough to disqualify the string.
+    Chữ số, khoảng trắng, dấu gạch ngang và một số ký tự dấu câu phổ biến được phép dùng
+    (chẳng hạn "UNFCCC 1992" hoặc "CO2/CH4" vẫn vượt qua) nhưng chỉ một chữ cái có dấu
+    như 'á', 'đ' là đủ để loại chuỗi đó.
     """
     s = str(text or "").strip()
     if not s:
@@ -41,12 +41,12 @@ def _is_mostly_ascii(text: str) -> bool:
 
 
 def _vlm_has_severe_failure(reasons: List[str]) -> bool:
-    """Return true for failures that should reject even high-relevance images.
+    """Trả về true đối với các lỗi nghiêm trọng làm bác bỏ cả những hình ảnh có độ liên quan cao.
 
-    Gemini often assigns high artifact scores for small SDXL issues such as
-    fingers or a soft keyboard while still saying the image is suitable. Those
-    should not force a fallback. Severe mismatches, text-heavy images, broken
-    anatomy, and unreadable/corrupt outputs still reject.
+    Gemini thường đánh giá điểm artifact cao cho các lỗi nhỏ của SDXL như ngón tay
+    hoặc bàn phím ảo trong khi vẫn nhận định hình ảnh phù hợp. Những lỗi đó không nên ép
+    phải dùng ảnh dự phòng. Các trường hợp không khớp nội dung nghiêm trọng, hình ảnh quá nhiều chữ,
+    giải phẫu bị lỗi, và các kết quả đầu ra không thể đọc được/bị hỏng vẫn sẽ bị từ chối.
     """
     severe_terms = (
         "unrelated",
@@ -98,15 +98,11 @@ def _vlm_has_severe_failure(reasons: List[str]) -> bool:
     )
     combined = " ".join(str(r) for r in reasons or []).lower()
     for term in severe_terms:
-        # Match negation patterns preceding the term (with optional words in-between, e.g. "free of glitches or watermarks")
+        # Khớp các mẫu phủ định đứng trước thuật ngữ (có thể có các từ tùy chọn ở giữa, ví dụ: "free of glitches or watermarks")
         pattern = r"\b(?:no|not|without|free of|clear of|clean of|doesn't|does not|avoid|avoids)\b[a-zA-Z0-9\s,]*?\b" + re.escape(term) + r"s?\b"
         combined = re.sub(pattern, " ", combined)
         
     return any(term in combined for term in severe_terms)
-
-
-
-
 
 
 def _detect_emotion(text: str) -> Optional[str]:
@@ -127,9 +123,8 @@ def _detect_emotion(text: str) -> Optional[str]:
     return None
 
 
-
 def _normalize_brand_terms(text: str) -> str:
-    """Replace brand names with generic equivalents to avoid wrong logos and copyright issues."""
+    # Thay thế tên thương hiệu bằng các từ tương đương chung chung để tránh hiển thị sai logo và các vấn đề về bản quyền."""
     if not text:
         return text
     out = text
@@ -144,10 +139,10 @@ def _normalize_brand_terms(text: str) -> str:
 
 
 def _word_in_text(word: str, text: str) -> bool:
-    """Word-boundary match: avoid 'cu' matching inside 'cuộc/của'.
+    """Khớp ranh giới từ (word-boundary): tránh việc từ 'cu' khớp bên trong 'cuộc/của'.
 
-    Uses regex with Unicode word boundaries when possible. For multi-word phrases,
-    falls back to substring match (multi-word phrases are rarely false positives).
+    Sử dụng biểu thức chính quy (regex) với ranh giới từ Unicode khi có thể. Đối với các cụm từ gồm nhiều từ,
+    sẽ sử dụng khớp chuỗi con làm phương án dự phòng (các cụm từ gồm nhiều từ hiếm khi tạo ra kết quả khớp sai lệch).
     """
     if not word or not text:
         return False
@@ -182,22 +177,22 @@ def _any_word_in_text(words: List[str], text: str) -> bool:
 
 
 def _strip_diacritics(text: str) -> str:
-    """ASCII-ish copy for robust Vietnamese keyword matching."""
+    """Tạo bản sao dạng ASCII để khớp từ khóa tiếng Việt chính xác hơn."""
     s = unicodedata.normalize("NFD", str(text or ""))
     s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
     return s.replace("đ", "d").replace("Đ", "D")
 
 
 def _looks_like_person_reference(text: str) -> bool:
-    """Detect if text references a specific person.
+    """Phát hiện xem văn bản có tham chiếu đến một người cụ thể hay không.
 
-    Conservative detection (only honorific + famous-name list).
+    Phát hiện một cách thận trọng (chỉ dựa trên danh từ xưng hô + danh sách tên nổi tiếng).
 
-    Earlier versions had a proper-noun fallback that flagged any 2-word
-    capitalized phrase ("Amazon Rainforest", "Hà Nội", "Tesla", etc.) as
-    a person reference, causing too many over-triggers of person_protected
-    style override. We trust the LLM to mark real persons via honorifics or
-    via the famous-name list; unlisted modern figures are acceptable risk.
+    Các phiên bản trước đó có cơ chế dự phòng danh từ riêng đánh dấu bất kỳ cụm từ viết hoa
+    2 từ nào ("Amazon Rainforest", "Hà Nội", "Tesla", v.v.) là một tham chiếu đến con người,
+    gây ra việc kích hoạt nhầm cơ chế ghi đè style person_protected quá nhiều. Chúng tôi tin tưởng
+    LLM sẽ đánh dấu những nhân vật thực sự thông qua danh từ xưng hô hoặc danh sách tên nổi tiếng;
+    những nhân vật hiện đại không nằm trong danh sách được xem là rủi ro chấp nhận được.
     """
     if not text:
         return False
@@ -210,13 +205,13 @@ def _looks_like_person_reference(text: str) -> bool:
 
 
 
-# Routing, risk handling, and historical context.
+# Định tuyến, xử lý rủi ro và bối cảnh lịch sử.
 
 def _classify_risk(slide: Dict[str, Any], semantic: Dict[str, Any], content_type: str) -> Optional[str]:
-    """Classify whether the slide content is risky for photoreal SDXL output.
+    """Phân loại xem nội dung slide có rủi ro đối với đầu ra tả thực của SDXL hay không.
 
-    Returns a risk tag (key into _RISK_STYLE_OVERRIDES) or None if no risk.
-    Order matters: historical with person -> person_protected, otherwise historical.
+    Trả về thẻ rủi ro (khóa trong _RISK_STYLE_OVERRIDES) hoặc None nếu không có rủi ro.
+    Thứ tự rất quan trọng: slide lịch sử có chứa người -> person_protected, ngược lại là historical.
     """
     title = str(slide.get("title") or "")
     bullets = slide.get("bullets") or slide.get("content") or []
@@ -271,7 +266,7 @@ def _looks_like_historical_slide(slide: Dict[str, Any]) -> bool:
         "chiến tranh", "kháng chiến", "hiệp định", "cách mạng",
         "miền bắc", "miền nam", "hai miền",
         "chiáº¿n tranh", "khÃ¡ng chiáº¿n", "hiá»‡p", "cÃ¡ch máº¡ng",
-        "miá»n báº¯c", "miá»n nam", "hai miá»n",
+        "miá» n báº¯c", "miá» n nam", "hai miá» n",
     )
     return any(term in text for term in history_terms)
 
@@ -285,10 +280,10 @@ def _risk_style_override(risk: Optional[str]) -> Optional[str]:
 
 
 def _is_catastrophic_risk(slide: Dict[str, Any]) -> Optional[str]:
-    """Return reason string when slide content is catastrophic-risk for any image.
+    """Trả về chuỗi lý do khi nội dung slide chứa rủi ro thảm họa đối với bất kỳ hình ảnh nào.
 
-    For these cases, the safest action is to skip image entirely instead of
-    rendering anything that could be wrong or disrespectful.
+    Trong những trường hợp này, hành động an toàn nhất là bỏ qua việc chèn hình ảnh thay vì
+    hiển thị bất kỳ thứ gì có thể sai lệch hoặc thiếu tôn trọng.
     """
     title = str(slide.get("title") or "")
     bullets = slide.get("bullets") or slide.get("content") or []
@@ -306,7 +301,7 @@ def _is_catastrophic_risk(slide: Dict[str, Any]) -> Optional[str]:
 
 
 def _abstract_keys_sorted() -> List[str]:
-    """Sort keys longest-first so 'machine learning' matches before 'learning'."""
+    """Sắp xếp các khóa dài nhất lên trước để 'machine learning' được khớp trước 'learning'."""
     global _ABSTRACT_CONCEPT_KEYS_SORTED
     if _ABSTRACT_CONCEPT_KEYS_SORTED is None:
         _ABSTRACT_CONCEPT_KEYS_SORTED = sorted(
@@ -318,10 +313,10 @@ def _abstract_keys_sorted() -> List[str]:
 
 
 def _detect_abstract_concept(text: str) -> Optional[str]:
-    """Return a concrete metaphor if the slide text matches an abstract concept.
+    """Trả về một ẩn dụ cụ thể nếu văn bản slide khớp với một khái niệm trừu tượng.
 
-    - Longest key matched first (so 'machine learning' beats 'learning')
-    - Short keys (<=3 chars) require word-boundary match (so 'ar' won't match 'Sartre')
+    - Khóa dài nhất được khớp trước (để 'machine learning' thắng 'learning')
+    - Các khóa ngắn (<=3 ký tự) yêu cầu khớp ranh giới từ (để 'ar' không khớp với 'Sartre')
     """
     if not text:
         return None
@@ -379,12 +374,16 @@ def _slide_prompt_context(slide: Dict[str, Any], max_chars: int = 900) -> str:
     if points:
         lines.append("SLIDE BULLETS:")
         lines.extend(f"- {p}" for p in points)
+    image_instruction = str(slide.get("_image_revision_instruction") or "").strip()
+    if image_instruction:
+        lines.append("IMAGE REVISION INSTRUCTION:")
+        lines.append(image_instruction)
     return "\n".join(lines)[:max_chars]
 
 
 
 def _extract_semantic(slide: Dict[str, Any]) -> Dict[str, Any]:
-    """Fallback semantic extraction when LLM completely fails or is unavailable."""
+    """Khai thác ngữ nghĩa dự phòng khi LLM thất bại hoàn toàn hoặc không khả dụng."""
     return {
         "source": "rule",
         "content_type": "normal",
@@ -614,7 +613,7 @@ def _override_scene_by_content_type(
     semantic: Dict[str, Any],
     base_scene: str,
 ) -> str:
-    """Override scene by content type while preserving the topic/entity at the front."""
+    """Ghi đè scene theo content type trong khi vẫn bảo toàn chủ đề/thực thể ở phía trước."""
     topic = (str(semantic.get("main_topic") or title or "the topic")).strip()
     full_text = f"{title}. {source_text}"
     base_scene_clean = (base_scene or "").strip()
@@ -738,13 +737,13 @@ def _meaningful_terms(text: str, limit: int = 6, keep_generic: bool = False) -> 
 
 
 def _semantic_anchors(semantic: Dict[str, Any], slide: Dict[str, Any]) -> List[str]:
-    """Build content anchors with priority: entities > topic tail > visual objects > bullet nouns > deck title.
+    """Xây dựng các neo nội dung với độ ưu tiên: entities > topic tail > visual objects > bullet nouns > deck title.
 
-    Anchors are the *must-appear* concepts that bind a prompt to slide content.
-    Generic words (overview, introduction, ...) are filtered out by default.
+    Neo là các khái niệm *bắt buộc phải xuất hiện* để gắn kết prompt với nội dung slide.
+    Các từ chung chung (tổng quan, giới thiệu, ...) được lọc bỏ theo mặc định.
 
-    For very short slides (few bullets, few words), fall back to deck title terms
-    so anchors never collapse to a single word.
+    Đối với các slide rất ngắn (ít đầu dòng, ít từ), sẽ chuyển sang sử dụng các từ từ tiêu đề slide (deck title)
+    để các neo không bao giờ bị thu hẹp về một từ duy nhất.
     """
     anchors: List[str] = []
 
@@ -790,11 +789,11 @@ def _semantic_anchors(semantic: Dict[str, Any], slide: Dict[str, Any]) -> List[s
 
 
 def _scoreable_anchors(anchors: List[str]) -> List[str]:
-    """Coverage check should only consider anchors SDXL can read (English/ASCII).
+    """Kiểm tra độ bao phủ (coverage check) chỉ nên xem xét các neo mà SDXL có thể đọc (tiếng Anh/ASCII).
 
-    Vietnamese anchors are intentionally excluded from prompt scoring because
-    they cannot survive in the prompt (we filter VN tokens from the prompt
-    itself) and would produce false-negative coverage failures.
+    Các neo tiếng Việt được cố ý loại trừ khỏi việc chấm điểm prompt vì chúng không thể tồn tại
+    trong prompt (chúng tôi lọc bỏ các token tiếng Việt khỏi bản thân prompt) và sẽ tạo ra
+    các lỗi đánh giá độ bao phủ sai (false-negative).
     """
     ascii_anchors = [a for a in anchors if _is_mostly_ascii(str(a))]
     return ascii_anchors if ascii_anchors else anchors
@@ -833,7 +832,7 @@ def _missed_anchors(prompt: str, anchors: List[str]) -> List[str]:
 # Bắt được biến thể chưa xuất hiện mà không cần thêm tay.
 _METAPHOR_VISUAL_RE = re.compile(
     r"(?i)"
-    # Nhóm 1: Explicit abstract label — "abstract X", "concept of X", "notion of X"
+    # Nhóm 1: Nhãn trừu tượng rõ ràng — "abstract X", "concept of X", "notion of X"
     r"\babstract\s+\w+"
     r"|\b(?:concept|notion|idea|principle|philosophy|ideology|paradigm)\b"
     # Nhóm 2: Standalone single-word metaphors LLM hay đề xuất.
@@ -843,14 +842,14 @@ _METAPHOR_VISUAL_RE = re.compile(
     r"|unity|diversity|integration|transformation|evolution|revolution"
     r"|innovation|alignment|momentum|resilience|sustainability"
     r"|empowerment|disruption|ecosystem|globalization|interconnection)$"
-    # Nhóm 3: Planetary / cosmic symbol khi là chủ thể chính
+    # Nhóm 3: Biểu tượng hành tinh / vũ trụ khi là chủ thể chínhhính
     r"|\bthe\s+(?:world|earth|globe|planet|universe|society|humanity|civilization)\b"
     r"|^(?:the\s+)?(?:world|earth|globe|planet)$"
-    # Nhóm 4: "X of Y" process metaphor — "cycle of life", "flow of information"
+    # Nhóm 4: Ẩn dụ quy trình "X of Y" — "cycle of life", "flow of information"
     r"|\b(?:cycle|flow|web|wheel|fabric|thread|tapestry)\s+of\b"
-    # Nhóm 5: "global/universal + abstract noun" — "global initiative", "universal value"
+    # Nhóm 5: "global/universal + danh từ trừu tượng" — "global initiative", "universal value"
     r"|\b(?:global|universal)\s+(?:initiative|concept|approach|movement|vision|mission)\b"
-    # Nhóm 6: Scale / balance imagery (renders as weighing scale off-topic)
+    # Nhóm 6: Hình ảnh cái cân / sự cân bằng (tránh việc vẽ ra cái cân không liên quan)
     r"|\bscales?\s+of\b|\bbalance\s+scale\b",
 )
 

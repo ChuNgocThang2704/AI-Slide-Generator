@@ -9,10 +9,16 @@ from services.content.prompts import (
     ANTI_TRUNCATION_TOKEN_RULE,
     MAX_BULLETS_PER_SLIDE,
     MAX_WORDS_PER_BULLET,
+    MIN_WORDS_PER_BULLET,
+    BULLET_WORD_RANGE,
+    SLIDE_DECK_JSON_SCHEMA,
+    SECTIONS_JSON_SCHEMA,
+    BULLET_JSON_SCHEMA,
+    BULLETS_JSON_SCHEMA,
 )
 
-# Config flags used by pipeline steps â€” imported lazily to avoid circular deps.
-# These are resolved at runtime via the enclosing ContentExtractor's module scope.
+# Các cờ cấu hình được sử dụng bởi các bước xử lý — được import trễ để tránh lỗi vòng lặp phụ thuộc.
+# Các cấu hình này được giải quyết lúc chạy chương trình thông qua phạm vi mô-đun ContentExtractor.
 try:
     from config import (
         LLM_REFINE_EXTRA_IF_TRUNCATED,
@@ -40,19 +46,31 @@ class SlidePipelineMixin:
     # FINAL SPEC: Expand + Grouping
     # -----------------------------
 
+    def _user_instruction_block(self) -> str:
+        """Trả về khối hướng dẫn của người dùng để inject vào system prompt nếu có."""
+        instruction = getattr(self, "_user_instruction", None)
+        if not instruction or not str(instruction).strip():
+            return ""
+        return (
+            f"USER REQUIREMENT (Apply this to guide the slide structure and focus. "
+            f"Do NOT create a slide about this requirement itself):\n"
+            f"{str(instruction).strip()}\n\n"
+        )
+
     def _build_expand_messages(self, content: str, enable_deep: bool) -> List[Dict[str, str]]:
-        """Expansion step: MUST expand (not summarize). Output: {"expanded_text": "..."}"""
+        """Bước mở rộng (Expansion step): BẮT BUỘC phải mở rộng (không tóm tắt). Đầu ra: {"expanded_text": "..."}"""
         normalized = self._normalize_for_llm(content or "")
         preview = normalized[:7000] if len(normalized) > 7000 else normalized
         deep_rule = (
-            "- Target slide count is high: expand deeplyâ€”split into sub-ideas, add why/how, impact, and examples.\n"
+            "- Target slide count is high: expand deeply—split into sub-ideas, add why/how, impact, and examples.\n"
             if enable_deep
             else "- Expand enough: add why/how, impact, and examples where appropriate.\n"
         )
         system_msg = self._llm_system_prefix() + (
             "You are an expert educator.\n\n"
             "TASK: EXPAND the source material into a richer, more detailed version.\n\n"
-            "REQUIREMENTS:\n"
+            + self._user_instruction_block()
+            + "REQUIREMENTS:\n"
             "- Explain and clarify concepts.\n"
             "- Add reasoning, consequences, and significance.\n"
             "- Add examples when possible.\n"
@@ -60,7 +78,7 @@ class SlidePipelineMixin:
             "CRITICAL:\n"
             "- DO NOT summarize. Do not compress.\n"
             "- DO NOT shorten. The expanded_text must be LONGER and richer than the input.\n"
-            "- Expand every idea into deeper explanationâ€”not a light touch.\n"
+            "- Expand every idea into deeper explanation—not a light touch.\n"
             "- If an idea is short, elaborate with causes, effects, mechanisms, and examples.\n"
             "- The expanded_text MUST be significantly longer than the input (substance, not padding).\n"
             + deep_rule
@@ -77,6 +95,9 @@ class SlidePipelineMixin:
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
     async def _expand_content_final(self, content: str, target_slides: int) -> str:
+        if getattr(self, "_is_document_mode", False):
+            print("[pipeline] document mode: skip LLM expand step to preserve original terminology")
+            return content or ""
         enable_deep = bool(target_slides and int(target_slides) >= 15)
         msgs = self._build_expand_messages(content, enable_deep=enable_deep)
         try:
@@ -95,7 +116,7 @@ class SlidePipelineMixin:
         return expanded if expanded else (content or "")
 
     def _build_group_messages(self, expanded_text: str) -> List[Dict[str, str]]:
-        """Grouping step: Output JSON {"sections":[{"title":"...","content":"..."}]}"""
+        """Bước nhóm nội dung (Grouping step): Đầu ra JSON {"sections":[{"title":"...","content":"..."}]}"""
         normalized = self._normalize_for_llm(expanded_text or "")
         preview = normalized[:7000] if len(normalized) > 7000 else normalized
         system_msg = self._llm_system_prefix() + (
@@ -146,7 +167,7 @@ class SlidePipelineMixin:
     # -----------------------------
 
     def _build_generate_section_messages(self, section: Dict[str, str], target_slides: int) -> List[Dict[str, str]]:
-        title = str(section.get("title") or "Ná»™i dung").strip()
+        title = str(section.get("title") or "Nội dung").strip()
         content = str(section.get("content") or "").strip()
         normalized = self._normalize_for_llm(content)
         preview = normalized[:7000] if len(normalized) > 7000 else normalized
@@ -160,23 +181,29 @@ class SlidePipelineMixin:
             self._llm_system_prefix()
             + "You are an expert presentation designer.\n\n"
             + f"TASK: Generate EXACTLY {n_slides} slides from the section content.\n\n"
+            + self._user_instruction_block()
             + self._presentation_style_block(n_slides)
             + "RULES:\n"
             "1) CONTENT EXPANSION:\n"
-            "- Go beyond the source: add explanation, reasoning, and supporting detailâ€”not paraphrase only.\n"
+            "- Go beyond the source: add explanation, reasoning, and supporting detail—not paraphrase only.\n"
             "- Do not summarize away substance.\n\n"
             "2) SLIDE DENSITY:\n"
-            "- Each slide MUST have 3â€“4 bullets.\n"
+            "- Each slide MUST have 3–4 bullets.\n"
             "- Never fewer than 3 bullets.\n"
             "- If the section is thin, invent substantive expansion (still faithful to the topic).\n\n"
             "3) BULLET QUALITY:\n"
-            "- Each bullet MUST be a detailed, rich, complete sentence of 15 to 25 words (Vietnamese/English).\n"
+            f"- Each bullet MUST be a detailed, rich, complete sentence of {BULLET_WORD_RANGE} words (Vietnamese/English).\n"
             "- Do NOT write short, fragmented bullet points or labels (e.g. write a full sentence, not just a keyword phrase).\n"
-            "- No fake endings like \"...\", \"vÃ .\", \"bao gá»“m.\" before the idea is finished.\n"
-            "- Each bullet MUST explain the context, the core action/event, and its outcome, result, or significance.\n\n"
+            "- No fake endings like \"...\", \"và.\", \"bao gồm.\" before the idea is finished.\n"
+            "- Each bullet MUST explain the context, the core action/event, and its outcome, result, or significance.\n"
+            "- SPECIFICITY (CRITICAL): Preserve technical terms, function names, algorithm names, numbers, measurements, and domain-specific vocabulary from the source. Every bullet must contain at least one concrete detail—never write generic filler sentences.\n\n"
+            "3b) DECK TITLE:\n"
+            "- The top-level 'title' in your JSON must describe the WHOLE section topic comprehensively.\n"
+            "- NEVER use chapter/section headings like 'Mở đầu', 'Giới thiệu', 'Introduction', or 'Chapter 1' as the title.\n"
+            "- If the section is introductory, name the topic it introduces (e.g. 'Phân mảnh Dữ liệu PostgreSQL' not 'Mở đầu').\n\n"
             "CRITICAL:\n"
-            "- Explain the idea fully and academicallyâ€”do not write shallow or overly brief points.\n"
-            "- Avoid generic statements. Use concrete information to fill the slide space professionally.\n\n"
+            "- Explain the idea fully and academically—do not write shallow or overly brief points.\n"
+            "- Avoid generic statements. Use concrete technical information to fill the slide space professionally.\n\n"
             "ANTI-TRUNCATION:\n"
             "- NEVER end a sentence unfinished.\n"
             "- NEVER output incomplete phrases.\n"
@@ -190,16 +217,26 @@ class SlidePipelineMixin:
             "- Do not repeat bullets verbatim; explain how the presenter should talk through the slide.\n\n"
             "5) STRUCTURE:\n"
             "- Group related points on the same slide.\n"
-            "- No \"(continued)\" / \"(tiáº¿p)\" slides.\n\n"
+            "- No \"(continued)\" / \"(tiếp)\" slides.\n\n"
             "5b) SLIDE TITLES:\n"
             "- Each slide title must be specific, descriptive, and meaningful (3-8 words).\n"
-            "- NEVER use generic placeholder titles like 'Ná»™i dung', 'Ná»™i dung X', 'Slide X', 'Tiáº¿p theo', or similar.\n\n"
+            "- NEVER use generic placeholder titles like 'Nội dung', 'Nội dung X', 'Slide X', 'Tiếp theo', or similar.\n\n"
+            "5c) SLIDE LAYOUT SELECTION:\n"
+            "- Assign a layout for each slide based on its content pattern:\n"
+            "  * 'intro': Use ONLY for title slide, cover page, or team/member introduction slide.\n"
+            "  * 'timeline': Use when slide content describes sequential steps, stages, roadmap, history, or a chronological workflow.\n"
+            "  * 'split_columns': Use when comparing options, pros/cons, before/after, or listing parallel components.\n"
+            "  * 'big_quote': Use when presenting a singular key quote, vision statement, or main focal slogan.\n"
+            "  * 'text_image': Use when the slide explains visual concepts, physical items, design mockups, or needs a supporting illustration.\n"
+            "  * 'text_chart': Use when the slide has numeric data, performance metrics, growth rates, or comparisons suitable for charts.\n"
+            "  * 'text_table': Use when the slide lists attributes, feature grids, option matrices, or distinct categories suitable for a table.\n"
+            "  * 'normal': Standard text layout for typical bullet points.\n\n"
             "6) NO REPETITION:\n"
             "- Different slides must add different information.\n\n"
             + high_slide_block
             + self._output_language_instruction()
             + "OUTPUT: JSON only. Schema:\n"
-            "{\"title\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\",\"...\",\"...\"],\"notes\":\"speaker script\"}]}\n"
+            "{\"title\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\",\"...\",\"...\"],\"notes\":\"speaker script\",\"layout\":\"timeline|split_columns|text_image|normal\"}]}\n"
         )
         user_msg = (
             f"SECTION TOPIC: {title}\n\n"
@@ -210,10 +247,10 @@ class SlidePipelineMixin:
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
     async def _generate_slides_for_sections(self, sections: List[Dict[str, str]], target_slides: int) -> Dict[str, Any]:
-        """Generate slides by section, then merge."""
+        """Tạo slide theo từng phần (section), sau đó gộp lại."""
         if not sections:
-            # Fallback: treat whole content as one section.
-            sections = [{"title": "Ná»™i dung", "content": ""}]
+            # Dự phòng: coi toàn bộ nội dung như là một phần duy nhất.
+            sections = [{"title": "Nội dung", "content": ""}]
         target_slides = max(5, int(target_slides or 10))
         if len(sections) > target_slides:
             original_count = len(sections)
@@ -242,29 +279,51 @@ class SlidePipelineMixin:
                 f"{original_count} -> {len(merged_sections)}"
             )
             sections = merged_sections
-        # Allocate slide count per section proportionally by content length.
+        # Phân bổ số lượng slide cho từng phần tỷ lệ thuận theo độ dài nội dung.
         lengths = [max(50, len(s.get("content") or "")) for s in sections]
         total = sum(lengths)
         alloc = [max(1, round(target_slides * l / total)) for l in lengths]
-        # Adjust to exact total.
+        # Hard-cap: section có content gốc ngắn (< 300 chars) → tối đa 1 slide,
+        # tránh expand làm phồng "Lời cảm ơn" hoặc các section lễtản khác.
+        _SHORT_SECTION_CHARS = 300
+        alloc = [
+            min(a, 1 if len(str(s.get("content") or "")) < _SHORT_SECTION_CHARS else 999)
+            for a, s in zip(alloc, sections)
+        ]
+        # Tái điều chỉnh tổng sau hard-cap
         diff = target_slides - sum(alloc)
         idx = 0
         while diff != 0 and alloc:
             if diff < 0 and all(x <= 1 for x in alloc):
                 break
             i = idx % len(alloc)
-            if diff > 0:
+            # Chỉ tăng slide cho section không bị hard-cap
+            content_len = len(str(sections[i].get("content") or ""))
+            if diff > 0 and content_len >= _SHORT_SECTION_CHARS:
                 alloc[i] += 1
                 diff -= 1
-            else:
-                if alloc[i] > 1:
-                    alloc[i] -= 1
-                    diff += 1
+            elif diff < 0 and alloc[i] > 1:
+                alloc[i] -= 1
+                diff += 1
             idx += 1
+            if idx > len(alloc) * 10:
+                break
 
-        deck_title = "BÃ i thuyáº¿t trÃ¬nh"
+        # Tổng hợp tiêu đề bao quát từ các section thay vì lấy tiêu đề section đầu
+        _INTRO_TITLES = {"mở đầu", "giới thiệu", "introduction", "chapter 1", "chương 1", "overview", "tổng quan"}
+        all_section_titles = [str(s.get("title") or "").strip() for s in sections if str(s.get("title") or "").strip()]
+        # Chọn tiêu đề bao quát: ưu tiên section không phải "Mở đầu" + join các chủ đề chính
+        meaningful_titles = [t for t in all_section_titles if t.lower() not in _INTRO_TITLES]
+        if meaningful_titles:
+            # Lấy tối đa 2 tiêu đề chính để ghép thành deck title bao quát
+            deck_title = " — ".join(meaningful_titles[:2]) if len(meaningful_titles) >= 2 else meaningful_titles[0]
+        elif all_section_titles:
+            deck_title = all_section_titles[0]
+        else:
+            deck_title = "Bài thuyết trình"
+
         slides_all: List[Dict[str, Any]] = []
-        # Song song hÃ³a theo section (giá»›i háº¡n 3 request cÃ¹ng lÃºc Ä‘á»ƒ trÃ¡nh quÃ¡ táº£i vLLM 1 GPU).
+        # Song song hóa theo section (giới hạn 3 request cùng lúc để tránh quá tải vLLM 1 GPU).
         sem = asyncio.Semaphore(3)
 
         async def _one_section(sec: Dict[str, str], n: int) -> Optional[Dict[str, Any]]:
@@ -304,10 +363,20 @@ class SlidePipelineMixin:
         results = await asyncio.gather(
             *[_one_section(sec, int(n)) for sec, n in zip(sections, alloc)]
         )
+        seen_keys: set = set()
         for part_norm in results:
             if part_norm and isinstance(part_norm.get("slides"), list):
-                if deck_title == "BÃ i thuyáº¿t trÃ¬nh" and part_norm.get("title"):
-                    deck_title = str(part_norm.get("title") or deck_title)
+                for slide in (part_norm.get("slides") or []):
+                    if not isinstance(slide, dict):
+                        continue
+                    deduped = []
+                    for b in (slide.get("bullets") or []):
+                        # Chuẩn hóa để so khớp tương đồng (bỏ dấu cách, chữ thường)
+                        key = re.sub(r'\W+', ' ', str(b).lower().strip())[:80]
+                        if key not in seen_keys:
+                            deduped.append(b)
+                            seen_keys.add(key)
+                    slide["bullets"] = deduped or slide.get("bullets", [])
                 slides_all.extend(part_norm.get("slides") or [])
 
         if not slides_all:
@@ -334,20 +403,22 @@ class SlidePipelineMixin:
             + "TASK: Improve the existing slide deck JSON.\n\n"
             + self._presentation_style_block(len(structured.get("slides") or []))
             + "REQUIREMENTS:\n"
-            "- For each bullet: if a reader cannot answer what happens next, what the concrete referent is, or what the conclusion isâ€”rewrite until complete. Do not patch with fixed phrases; fix any domain.\n"
-            "- Fix truncated or incomplete sentences (even if they end with a period): no missing complements after prepositions; no fake endings like \"...\", \"vÃ .\", \"bao gá»“m.\".\n"
-            "- Vietnamese: never end a bullet with only a function word + period (invalid: \"cá»§a.\", \"cho.\", \"vá»›i.\", \"tá»«.\", \"nhÆ°.\", \"mÃ .\") or a comma then one short stray word + period; complete the thought.\n"
+            "- For each bullet: if a reader cannot answer what happens next, what the concrete referent is, or what the conclusion is—rewrite until complete. Do not patch with fixed phrases; fix any domain.\n"
+            "- Fix truncated or incomplete sentences (even if they end with a period): no missing complements after prepositions; no fake endings like \"...\", \"và.\", \"bao gồm.\".\n"
+            "- Vietnamese: never end a bullet with only a function word + period (invalid: \"của.\", \"cho.\", \"với.\", \"từ.\", \"như.\", \"mà.\") or a comma then one short stray word + period; complete the thought.\n"
             "- Each bullet MUST be a detailed, rich, complete sentence of 15 to 25 words. Avoid overly short or paragraph-like bullets.\n"
-            "- Valid JSON and fully closed sentences matter more than making every bullet longerâ€”do not \"expand\" length at the expense of truncation or broken JSON.\n"
-            "- Each bullet: context + explanation + impact or significanceâ€”in rich wording.\n"
-            "- Rewrite shallow/short bullets into clear complete statements of 15-25 words; fix vague bullets with concrete detail.\n"
-            "- Ensure each bullet carries meaningful informationâ€”not filler or labels.\n"
+            "- Valid JSON and fully closed sentences matter more than making every bullet longer—do not \"expand\" length at the expense of truncation or broken JSON.\n"
+            "- Each bullet: context + explanation + impact or significance—in rich wording.\n"
+            f"- Rewrite shallow/short bullets into clear complete statements of {BULLET_WORD_RANGE} words; fix vague bullets with concrete detail.\n"
+            "- Ensure each bullet carries meaningful information—not filler or labels.\n"
             "- Fix thin or broken bullets; do not only fix spelling.\n"
             "- Merge slides with fewer than 2 bullets into the previous slide.\n"
-            "- Each slide should have 3â€“4 bullets.\n"
+            "- Each slide should have 3–4 bullets.\n"
             "- Remove duplication.\n"
-            "- No \"(continued)\" / \"(tiáº¿p)\" slides.\n"
-            "- SLIDE TITLES: Rewrite any generic slide title (such as 'Nội dung', 'Nội dung 1', 'Slide 1', 'Tiếp theo', or similar placeholders) into a specific, meaningful, descriptive title derived from the slide's bullet points.\n\n"
+            "- No \"(continued)\" / \"(tiếp)\" slides.\n"
+            "- SLIDE TITLES: Rewrite any generic slide title (such as 'Nội dung', 'Nội dung 1', 'Slide 1', 'Tiếp theo', or similar placeholders) into a specific, meaningful, descriptive title derived from the slide's bullet points.\n"
+            "- DECK TITLE: Rewrite the top-level deck title if it is a generic chapter heading ('Mở đầu', 'Giới thiệu', 'Introduction'). The deck title must describe the WHOLE presentation's core subject (e.g. 'Phân mảnh CSDL Phân tán — Nhóm 17', 'AI in Healthcare Applications').\n"
+            "- SPECIFICITY: Any bullet that contains no concrete fact, number, function name, or technical term is considered generic filler—rewrite it with a specific detail from the slide context.\n\n"
             + ANTI_TRUNCATION_TOKEN_RULE
             + "\n"
             + self._output_language_instruction()
@@ -374,6 +445,282 @@ class SlidePipelineMixin:
         has_slides = isinstance(refined, dict) and isinstance(refined.get("slides"), list) and len(refined.get("slides")) > 0
         return self._normalize_structured_content(refined if has_slides else structured)
 
+    def _build_revision_messages(
+        self,
+        structured: Dict[str, Any],
+        revision_prompt: str,
+    ) -> List[Dict[str, str]]:
+        payload = json.dumps(structured, ensure_ascii=False)
+        system_msg = (
+            self._llm_system_prefix()
+            + "You are an expert presentation editor.\n\n"
+            + "TASK: Revise an existing slide deck JSON according to the user's follow-up request.\n\n"
+            + self._presentation_style_block(len(structured.get("slides") or []))
+            + "REVISION RULES:\n"
+            "- Apply the user's request directly while preserving useful content from the current deck.\n"
+            "- Keep the same topic unless the user explicitly asks to change it.\n"
+            "- Keep the slide count close to the current deck unless the user asks for a different count.\n"
+            "- You may rewrite titles, bullets, notes, and layout fields when needed.\n"
+            "- Each slide should have 3-4 concise, complete, presentation-style bullets.\n"
+            "- Remove duplication and fix vague, broken, or generic bullets.\n"
+            "- Do not mention that this is a revision; output the final deck only.\n\n"
+            + ANTI_TRUNCATION_TOKEN_RULE
+            + "\n"
+            + self._output_language_instruction()
+            + "Return ONLY JSON. Schema:\n"
+            "{\"title\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\"],\"notes\":\"speaker script\",\"layout\":\"text_only\"}]}\n"
+        )
+        user_msg = (
+            "Current deck JSON:\n"
+            f"{payload}\n\n"
+            "User revision request:\n"
+            f"{revision_prompt}\n\n"
+            "Return the revised deck JSON starting with { and ending with }."
+            + self._user_lang_reminder()
+        )
+        return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
+
+    async def revise_slide_deck(
+        self,
+        structured: Dict[str, Any],
+        revision_prompt: str,
+    ) -> Dict[str, Any]:
+        """Revise an existing normalized slide deck using a follow-up user prompt."""
+        base = self._normalize_structured_content(structured)
+        prompt = str(revision_prompt or "").strip()
+        if not prompt:
+            return base
+        self._slide_lang_hint = self._detect_output_language_hint(
+            "\n\n".join(
+                [
+                    str(base.get("title") or ""),
+                    "\n".join(str(s.get("title") or "") for s in base.get("slides") or [] if isinstance(s, dict)),
+                    prompt,
+                ]
+            )
+        )
+        msgs = self._build_revision_messages(base, prompt)
+        target = max(1, min(len(base.get("slides") or []) or 8, 30))
+        revised = await self._request_json_dict(
+            msgs,
+            target_slides=target,
+            fast_mode=False,
+            compose_mode=True,
+            structured_output="slide_deck",
+        )
+        if not (isinstance(revised, dict) and isinstance(revised.get("slides"), list) and revised.get("slides")):
+            return base
+        return self._normalize_structured_content(revised)
+
+    def _build_single_slide_revision_messages(
+        self,
+        deck_title: str,
+        slide_index: int,
+        slide: Dict[str, Any],
+        revision_prompt: str,
+    ) -> List[Dict[str, str]]:
+        payload = json.dumps(slide, ensure_ascii=False)
+        system_msg = (
+            self._llm_system_prefix()
+            + "You are an expert presentation editor.\n\n"
+            + "TASK: Revise exactly ONE slide according to the user's request.\n\n"
+            + "STRICT RULES:\n"
+            "- Revise only the provided slide. Do not create extra slides.\n"
+            "- Apply the user's request literally and narrowly. If the user asks to change a few words, change only those words.\n"
+            "- Preserve the slide's core topic unless the user explicitly asks to change it.\n"
+            "- Keep useful bullets that the user did not ask to change.\n"
+            "- Return one slide as JSON with title, bullets, notes, and layout.\n"
+            "- Do not mention that this is a revision.\n\n"
+            + self._output_language_instruction()
+            + "Return ONLY JSON with this shape:\n"
+            "{\"title\":\"...\",\"bullets\":[\"...\"],\"notes\":\"...\",\"layout\":\"text_only\"}\n"
+        )
+        user_msg = (
+            f"Deck title: {deck_title}\n"
+            f"Slide number: {slide_index + 1}\n\n"
+            "Current slide JSON:\n"
+            f"{payload}\n\n"
+            "User revision request:\n"
+            f"{revision_prompt}\n\n"
+            "Return the revised slide JSON only."
+            + self._user_lang_reminder()
+        )
+        return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
+
+    async def revise_selected_slides(
+        self,
+        structured: Dict[str, Any],
+        revision_prompt: str,
+        target_indices: List[int],
+    ) -> Dict[str, Any]:
+        """Revise only selected slides and keep every other slide unchanged."""
+        base = self._normalize_structured_content(structured)
+        slides = base.get("slides") or []
+        prompt = str(revision_prompt or "").strip()
+        valid_indices = sorted({int(i) for i in (target_indices or []) if 0 <= int(i) < len(slides)})
+        if not prompt or not valid_indices:
+            return base
+
+        self._slide_lang_hint = self._detect_output_language_hint(
+            "\n\n".join(
+                [
+                    str(base.get("title") or ""),
+                    "\n".join(str(slides[i].get("title") or "") for i in valid_indices if isinstance(slides[i], dict)),
+                    prompt,
+                ]
+            )
+        )
+
+        deck_title = str(base.get("title") or "Bài thuyết trình")
+        for idx in valid_indices:
+            current = dict(slides[idx]) if isinstance(slides[idx], dict) else {}
+            msgs = self._build_single_slide_revision_messages(deck_title, idx, current, prompt)
+            try:
+                revised = await self._request_json_dict(
+                    msgs,
+                    target_slides=1,
+                    fast_mode=False,
+                    compose_mode=False,
+                    structured_output=None,
+                )
+            except Exception as e:
+                print(f"[revision] slide {idx + 1} revision failed: {e}")
+                continue
+
+            if not isinstance(revised, dict):
+                continue
+            normalized = self._normalize_structured_content({
+                "title": deck_title,
+                "slides": [revised],
+            })
+            new_slide = (normalized.get("slides") or [None])[0]
+            if not isinstance(new_slide, dict):
+                continue
+
+            for visual_key in ("image_url", "table", "chart"):
+                if current.get(visual_key) and not new_slide.get(visual_key):
+                    new_slide[visual_key] = current.get(visual_key)
+            slides[idx] = new_slide
+
+        base["slides"] = slides
+        return self._normalize_structured_content(base)
+
+    def _build_revision_plan_messages(
+        self,
+        structured: Dict[str, Any],
+        revision_prompt: str,
+    ) -> List[Dict[str, str]]:
+        compact = {
+            "title": structured.get("title") or "",
+            "slides": [
+                {
+                    "number": idx + 1,
+                    "title": str(slide.get("title") or ""),
+                    "layout": str(slide.get("layout") or ""),
+                    "has_image": bool(slide.get("image_url")),
+                    "bullets": [str(x) for x in (slide.get("bullets") or [])[:3]],
+                }
+                for idx, slide in enumerate(structured.get("slides") or [])
+                if isinstance(slide, dict)
+            ],
+        }
+        payload = json.dumps(compact, ensure_ascii=False)
+        system_msg = (
+            self._llm_system_prefix()
+            + "You are a revision planner for an AI slide editor.\n\n"
+            + "TASK: Convert the user's natural-language edit request into a small JSON plan.\n\n"
+            + "Rules:\n"
+            "- Do not edit the deck content here; only plan operations.\n"
+            "- If the user mentions specific slide numbers, put them in target_slide_numbers.\n"
+            "- If the request is about images, visuals, illustrations, photos, or pictures, include regenerate_image.\n"
+            "- If the request is about wording, bullets, titles, notes, tone, length, or content, include rewrite_text.\n"
+            "- If the request asks for table/chart/layout/design, include change_layout.\n"
+            "- If the request asks to add, remove, merge, split, or reorder slides, include restructure_deck.\n"
+            "- If the target is unclear but says whole/all/toan bo/deck, use scope deck.\n"
+            "- Prefer scope slides when a target slide is mentioned; otherwise use deck.\n\n"
+            + "Return ONLY JSON with this shape:\n"
+            "{\"scope\":\"slides|deck\",\"target_slide_numbers\":[1],\"operations\":[{\"type\":\"rewrite_text|regenerate_image|change_layout|restructure_deck\",\"instruction\":\"...\"}],\"preserve_unmentioned\":true}\n"
+        )
+        user_msg = (
+            f"Current deck summary JSON:\n{payload}\n\n"
+            f"User edit request:\n{revision_prompt}\n\n"
+            "Return the plan JSON only."
+        )
+        return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
+
+    async def plan_slide_revision(
+        self,
+        structured: Dict[str, Any],
+        revision_prompt: str,
+    ) -> Dict[str, Any]:
+        """Plan a natural-language revision request before applying it."""
+        base = self._normalize_structured_content(structured)
+        prompt = str(revision_prompt or "").strip()
+        slide_count = len(base.get("slides") or [])
+        if not prompt:
+            return {
+                "scope": "deck",
+                "target_slide_numbers": [],
+                "operations": [],
+                "preserve_unmentioned": True,
+            }
+
+        msgs = self._build_revision_plan_messages(base, prompt)
+        try:
+            plan = await self._request_json_dict(
+                msgs,
+                target_slides=max(1, min(slide_count or 1, 10)),
+                fast_mode=True,
+                compose_mode=False,
+                structured_output=None,
+            )
+        except Exception as e:
+            print(f"[revision_plan] planner failed: {e}")
+            plan = {}
+
+        if not isinstance(plan, dict):
+            plan = {}
+
+        scope = str(plan.get("scope") or "").strip().lower()
+        if scope not in {"slides", "deck"}:
+            scope = "slides" if plan.get("target_slide_numbers") else "deck"
+
+        raw_targets = plan.get("target_slide_numbers") or []
+        if not isinstance(raw_targets, list):
+            raw_targets = [raw_targets]
+        target_numbers: List[int] = []
+        for item in raw_targets:
+            try:
+                n = int(item)
+            except Exception:
+                continue
+            if 1 <= n <= slide_count:
+                target_numbers.append(n)
+
+        raw_ops = plan.get("operations") or []
+        if not isinstance(raw_ops, list):
+            raw_ops = []
+        valid_types = {"rewrite_text", "regenerate_image", "change_layout", "restructure_deck"}
+        operations: List[Dict[str, str]] = []
+        for op in raw_ops:
+            if not isinstance(op, dict):
+                continue
+            op_type = str(op.get("type") or "").strip().lower()
+            if op_type not in valid_types:
+                continue
+            instruction = str(op.get("instruction") or prompt).strip()
+            operations.append({"type": op_type, "instruction": instruction or prompt})
+
+        if not operations:
+            operations = [{"type": "rewrite_text", "instruction": prompt}]
+
+        return {
+            "scope": scope,
+            "target_slide_numbers": sorted(set(target_numbers)),
+            "operations": operations,
+            "preserve_unmentioned": bool(plan.get("preserve_unmentioned", True)),
+        }
+
     def _build_repair_bullet_messages(
         self,
         deck_title: str,
@@ -387,7 +734,7 @@ class SlidePipelineMixin:
             "- Keep original meaning; do not add unrelated facts.\n"
             "- Return one complete sentence only (no fragments, no ellipsis).\n"
             "- Same language as input.\n"
-            "- Keep concise, ideally around 10-18 words, hard max 24 words.\n"
+            f"- Keep concise, ideally around {BULLET_WORD_RANGE} words, hard max {MAX_WORDS_PER_BULLET} words.\n"
             "- No markdown or extra commentary.\n"
             "Return ONLY JSON with schema: {\"bullet\": \"...\"}\n"
         )
@@ -405,7 +752,7 @@ class SlidePipelineMixin:
         structured: Dict[str, Any],
         max_repairs: int = 18,
     ) -> Dict[str, Any]:
-        """Repair only bullets that still look truncated after refine."""
+        """Chỉ sửa các gạch đầu dòng vẫn trông có vẻ bị cụt sau bước tinh chỉnh (refine)."""
         if not isinstance(structured, dict):
             return structured
         structured = self._canonicalize_continued_titles(structured)
@@ -413,14 +760,14 @@ class SlidePipelineMixin:
         if not isinstance(slides, list) or not slides:
             return structured
 
-        deck_title = str(structured.get("title") or "BÃ i thuyáº¿t trÃ¬nh")
+        deck_title = str(structured.get("title") or "Bài thuyết trình")
         repaired = 0
         for slide in slides:
             if repaired >= max_repairs:
                 break
             if not isinstance(slide, dict):
                 continue
-            slide_title = str(slide.get("title") or "Ná»™i dung")
+            slide_title = str(slide.get("title") or "Nội dung")
             bullets = slide.get("bullets") or []
             if not isinstance(bullets, list):
                 continue
@@ -430,7 +777,7 @@ class SlidePipelineMixin:
                 bt = str(b or "").strip()
                 if not bt:
                     continue
-                # Always run tail repair first (cheap/local).
+                # Luôn luôn chạy sửa phần đuôi trước (nhẹ/nội bộ).
                 bt = self._repair_incomplete_tail(bt)
                 if self._is_truncated_bullet(bt) and repaired < max_repairs:
                     try:
@@ -445,7 +792,7 @@ class SlidePipelineMixin:
                         cand = str((fixed or {}).get("bullet") or "").strip()
                         if cand:
                             cand = self._repair_incomplete_tail(cand)
-                        # Accept repaired bullet if it resolves truncation, else keep local repaired text.
+                        # Chấp nhận gạch đầu dòng đã sửa nếu nó giải quyết được lỗi cụt câu, nếu không thì giữ nguyên văn bản sửa dự phòng.
                         if cand and not self._is_truncated_bullet(cand):
                             bt = cand
                         repaired += 1
@@ -462,7 +809,7 @@ class SlidePipelineMixin:
         slide_title: str,
         bullets: List[str],
     ) -> List[Dict[str, str]]:
-        """Polish all bullets in one slide for completeness/clarity."""
+        """Đánh bóng (polish) tất cả các gạch đầu dòng trong một slide để đảm bảo tính hoàn chỉnh/rõ ràng."""
         bullets_payload = json.dumps(bullets, ensure_ascii=False)
         system_msg = (
             self._llm_system_prefix()
@@ -473,7 +820,7 @@ class SlidePipelineMixin:
             "- Keep original meaning and facts. Do not invent new facts.\n"
             "- Every bullet must be a complete sentence (no dangling tails).\n"
             "- Fix vague/truncated endings (e.g., ending after conjunction/preposition).\n"
-            "- Keep concise: roughly 10-18 words, hard max 24 words each bullet.\n"
+            f"- Keep concise: roughly {BULLET_WORD_RANGE} words, hard max {MAX_WORDS_PER_BULLET} words each bullet.\n"
             "- Keep exactly the same number of bullets as input.\n"
             "- Same language as input.\n"
             "- Return ONLY JSON with schema: {\"bullets\": [\"...\", \"...\"]}\n"
@@ -487,26 +834,111 @@ class SlidePipelineMixin:
         )
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
+    def _build_expand_no_image_messages(
+        self,
+        deck_title: str,
+        slide_title: str,
+        bullets: List[str],
+    ) -> List[Dict[str, str]]:
+        """Nhận slide không có ảnh và viết lại chữ chi tiết hơn để slide không bị trống."""
+        bullets_payload = json.dumps(bullets, ensure_ascii=False)
+        system_msg = (
+            self._llm_system_prefix()
+            + "You are an expert presentation copywriter.\n\n"
+            + f"TASK: The slide titled '{slide_title}' will not contain any visual images. "
+            + "Therefore, you must rewrite the bullet points to be longer, more informative, and detailed so that the slide does not look empty.\n\n"
+            + "RULES:\n"
+            "- Keep original facts. Do not invent completely fake concepts.\n"
+            "- Make each bullet point a rich, complete sentence of 18-28 words.\n"
+            "- If the input has less than 4 bullets, generate 1 additional highly relevant detailed bullet point to fill the space (total 4 bullets maximum).\n"
+            "- Keep the same language as input.\n"
+            "- Return ONLY JSON with schema: {\"bullets\": [\"...\", \"...\"]}\n"
+        )
+        user_msg = (
+            f"Deck title: {deck_title}\n"
+            f"Slide title: {slide_title}\n"
+            f"Input bullets JSON: {bullets_payload}\n\n"
+            "Expand all bullets following the rules."
+            + self._user_lang_reminder()
+        )
+        return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
+
+    async def _expand_slide_bullets_for_no_image(
+        self,
+        structured: Dict[str, Any],
+        missing_indices: List[int],
+    ) -> Dict[str, Any]:
+        """Bước tối ưu hóa visual: viết thêm/dài chữ cho các slide ban đầu có ý định sinh ảnh nhưng thất bại."""
+        if not isinstance(structured, dict) or not missing_indices:
+            return structured
+        slides = structured.get("slides") or []
+        if not isinstance(slides, list) or not slides:
+            return structured
+
+        deck_title = str(structured.get("title") or "Bài thuyết trình")
+        
+        tasks = []
+        indices_map = []
+        
+        for idx in missing_indices:
+            if idx < 0 or idx >= len(slides):
+                continue
+            slide = slides[idx]
+            if not isinstance(slide, dict):
+                continue
+            slide_title = str(slide.get("title") or "Nội dung")
+            bullets = slide.get("bullets") or []
+            in_bullets = [str(b or "").strip() for b in bullets if str(b or "").strip()]
+            if not in_bullets:
+                continue
+                
+            msgs = self._build_expand_no_image_messages(deck_title, slide_title, in_bullets)
+            tasks.append(self._request_json_dict(
+                msgs,
+                target_slides=1,
+                fast_mode=False,
+                compose_mode=False,
+                structured_output="bullets",
+            ))
+            indices_map.append(idx)
+            
+        if not tasks:
+            return structured
+            
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, res in enumerate(results):
+            if isinstance(res, Exception):
+                print(f"[slide_pipeline] Expand bullets failed for slide {indices_map[i]}: {res}")
+                continue
+            out = res.get("bullets") if isinstance(res, dict) else None
+            if isinstance(out, list) and out:
+                cleaned = [str(x or "").strip() for x in out if str(x or "").strip()]
+                if cleaned:
+                    slides[indices_map[i]]["bullets"] = cleaned[:5]
+                    print(f"[slide_images_postprocess] Expanded bullets for slide {indices_map[i]} due to missing image")
+                    
+        return structured
+
     async def _polish_slide_bullets_quality(
         self,
         structured: Dict[str, Any],
         max_slides: int = 24,
     ) -> Dict[str, Any]:
-        """Quality-first pass: rewrite bullets slide-by-slide to reduce semantic truncation."""
+        """Lượt xử lý ưu tiên chất lượng: viết lại các gạch đầu dòng theo từng slide để giảm thiểu lỗi cụt nghĩa (semantic truncation)."""
         if not isinstance(structured, dict):
             return structured
         slides = structured.get("slides") or []
         if not isinstance(slides, list) or not slides:
             return structured
 
-        deck_title = str(structured.get("title") or "BÃ i thuyáº¿t trÃ¬nh")
+        deck_title = str(structured.get("title") or "Bài thuyết trình")
         processed = 0
         for slide in slides:
             if processed >= max_slides:
                 break
             if not isinstance(slide, dict):
                 continue
-            slide_title = str(slide.get("title") or "Ná»™i dung")
+            slide_title = str(slide.get("title") or "Nội dung")
             bullets = slide.get("bullets") or []
             if not isinstance(bullets, list) or not bullets:
                 continue
@@ -526,7 +958,7 @@ class SlidePipelineMixin:
                 out = data.get("bullets") if isinstance(data, dict) else None
                 if isinstance(out, list) and out:
                     polished = [self._repair_incomplete_tail(str(x or "").strip()) for x in out if str(x or "").strip()]
-                    # Keep exact count if model over/under-generates.
+                    # Giữ nguyên số lượng gạch đầu dòng nếu mô hình tạo ra thừa hoặc thiếu.
                     if len(polished) < len(in_bullets):
                         polished.extend(in_bullets[len(polished):])
                     polished = polished[: len(in_bullets)]
@@ -538,24 +970,24 @@ class SlidePipelineMixin:
         return structured
 
     def _bullet_needs_final_fix(self, text: str) -> bool:
-        """Conservative final gate: fix only bullets that are very likely broken."""
+        """Cổng chất lượng cuối cùng (an toàn): chỉ sửa các gạch đầu dòng có khả năng cao bị lỗi."""
         t = re.sub(r"\s+", " ", (text or "").strip())
         if not t:
             return False
         if self._is_truncated_bullet(t):
             return True
-        if re.search(r"[,;:\-â€“â€”/]\s*$", t):
+        if re.search(r"[,;:\-—/]\s*$", t):
             return True
         if not re.search(r"[.!?]$", t):
             return True
-        # Too short and ends abruptly often indicates low-information or broken phrase.
+        # Quá ngắn và kết thúc đột ngột thường biểu thị thông tin kém hoặc đoản khúc bị lỗi.
         words = t.rstrip(".!?").split()
         if len(words) < 4 and len(t) >= 18:
             return True
         return False
 
     async def _run_final_quality_gate(self, structured: Dict[str, Any]) -> Dict[str, Any]:
-        """Last-pass quality gate: targeted bullet fixes, accept only if improved."""
+        """Cổng kiểm soát chất lượng lượt cuối: sửa các gạch đầu dòng mục tiêu, chỉ chấp nhận nếu có cải thiện."""
         if not isinstance(structured, dict):
             return structured
         slides = structured.get("slides") or []
@@ -566,14 +998,14 @@ class SlidePipelineMixin:
         if max_fixes <= 0:
             return structured
 
-        deck_title = str(structured.get("title") or "BÃ i thuyáº¿t trÃ¬nh")
+        deck_title = str(structured.get("title") or "Bài thuyết trình")
         fixed = 0
         for slide in slides:
             if fixed >= max_fixes:
                 break
             if not isinstance(slide, dict):
                 continue
-            slide_title = str(slide.get("title") or "Ná»™i dung")
+            slide_title = str(slide.get("title") or "Nội dung")
             bullets = slide.get("bullets") or []
             if not isinstance(bullets, list):
                 continue
@@ -597,7 +1029,7 @@ class SlidePipelineMixin:
                         cand = str((data or {}).get("bullet") or "").strip()
                         if cand:
                             cand = self._repair_incomplete_tail(cand)
-                        # Accept only if candidate passes stricter final gate.
+                        # Chỉ chấp nhận nếu câu ứng viên vượt qua cổng kiểm soát cuối cùng nghiêm ngặt hơn.
                         if cand and not self._bullet_needs_final_fix(cand):
                             bt = cand
                             fixed += 1
@@ -609,20 +1041,12 @@ class SlidePipelineMixin:
             slide["bullets"] = new_bullets[:MAX_BULLETS_PER_SLIDE]
         return structured
 
-
-    def _strip_continued_suffix(self, title: str) -> str:
-        t = (title or "").strip()
-        if not t:
-            return t
-        t = re.sub(r"\s*\((?:tiáº¿p|tiep|continued)\)\s*$", "", t, flags=re.IGNORECASE).strip()
-        return t or (title or "").strip()
-
     def _strip_continued_suffix(self, title: str) -> str:
         t = (title or "").strip()
         if not t:
             return t
         pattern = re.compile(
-            r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
+            r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?)\s*\d*\)\s*$",
             flags=re.IGNORECASE,
         )
         prev = None
@@ -644,7 +1068,7 @@ class SlidePipelineMixin:
             "RULES:\n"
             "- Keep the same topic and facts; do not invent unrelated claims.\n"
             f"- Return EXACTLY {target_count} bullets.\n"
-            "- Each bullet must be a detailed, complete sentence of 15 to 25 words.\n"
+            f"- Each bullet must be a detailed, complete sentence of {BULLET_WORD_RANGE} words.\n"
             "- Each bullet must explain context, action, and significance/result.\n"
             "- Do not write short keyword-only phrases or fragmented labels.\n"
             "- Same language as input.\n"
@@ -660,7 +1084,7 @@ class SlidePipelineMixin:
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
     async def _run_final_density_gate(self, structured: Dict[str, Any]) -> Dict[str, Any]:
-        """Ensure each slide has at least configured bullet density."""
+        """Đảm bảo mỗi slide có ít nhất mật độ gạch đầu dòng đã cấu hình."""
         if not isinstance(structured, dict):
             return structured
         slides = structured.get("slides") or []
@@ -670,14 +1094,14 @@ class SlidePipelineMixin:
         min_b = max(2, int(LLM_FINAL_DENSITY_MIN_BULLETS))
         max_rw = max(0, int(LLM_FINAL_DENSITY_MAX_REWRITES))
         rewrites = 0
-        deck_title = str(structured.get("title") or "BÃ i thuyáº¿t trÃ¬nh")
+        deck_title = str(structured.get("title") or "Bài thuyết trình")
 
-        # 1) Clean "(tiáº¿p)" suffix from titles first.
+        # 1) Làm sạch hậu tố "(tiếp)" khỏi các tiêu đề trước.
         for s in slides:
             if isinstance(s, dict):
-                s["title"] = self._strip_continued_suffix(str(s.get("title") or "Ná»™i dung"))
+                s["title"] = self._strip_continued_suffix(str(s.get("title") or "Nội dung"))
 
-        # 2) Borrow bullets from neighbor slides before invoking LLM.
+        # 2) Mượn tạm gạch đầu dòng từ các slide lân cận trước khi gọi LLM.
         for i, s in enumerate(slides):
             if not isinstance(s, dict):
                 continue
@@ -700,13 +1124,13 @@ class SlidePipelineMixin:
                     break
             s["bullets"] = bs[:MAX_BULLETS_PER_SLIDE]
 
-        # 3) LLM densify only remaining thin slides.
+        # 3) Sử dụng LLM để tăng mật độ gạch đầu dòng chỉ cho các slide còn quá mỏng.
         for s in slides:
             if rewrites >= max_rw:
                 break
             if not isinstance(s, dict):
                 continue
-            title = str(s.get("title") or "Ná»™i dung")
+            title = str(s.get("title") or "Nội dung")
             bullets = s.get("bullets") or []
             if not isinstance(bullets, list):
                 bullets = []
@@ -726,7 +1150,7 @@ class SlidePipelineMixin:
                 cand = data.get("bullets") if isinstance(data, dict) else None
                 if isinstance(cand, list) and cand:
                     fixed = [self._repair_incomplete_tail(str(x or "").strip()) for x in cand if str(x or "").strip()]
-                    # Accept only if density is improved and bullets are reasonably clean.
+                    # Chỉ chấp nhận nếu mật độ gạch đầu dòng được cải thiện và các câu đều tương đối sạch.
                     if len(fixed) >= min_b and sum(1 for x in fixed if self._bullet_needs_final_fix(x)) <= 1:
                         s["bullets"] = fixed[:MAX_BULLETS_PER_SLIDE]
                         rewrites += 1
@@ -736,7 +1160,7 @@ class SlidePipelineMixin:
         return structured
 
     async def _refine_deck_with_optional_second(self, structured: Dict[str, Any]) -> Dict[str, Any]:
-        """Refine láº§n 1, sau Ä‘Ã³ láº·p thÃªm tá»‘i Ä‘a LLM_REFINE_MAX_EXTRA_PASSES khi váº«n cÃ³ bullet cá»¥t."""
+        """Tinh chỉnh (refine) lần 1, sau đó lặp thêm tối đa LLM_REFINE_MAX_EXTRA_PASSES lượt khi vẫn phát hiện gạch đầu dòng bị cụt."""
         structured = await self._refine_slides_final(structured)
         if not LLM_REFINE_EXTRA_IF_TRUNCATED:
             return structured
@@ -753,7 +1177,7 @@ class SlidePipelineMixin:
     # -----------------------------
 
     def _build_title_repair_messages(self, structured: Dict[str, Any]) -> List[Dict[str, str]]:
-        """Build prompt để LLM review tiêu đề từng slide và sửa nếu generic/không khớp nội dung."""
+        """Tạo prompt để LLM xem xét tiêu đề của từng slide và sửa nếu nó quá chung chung hoặc không khớp với nội dung."""
         slides = structured.get("slides") or []
         compact = []
         for i, s in enumerate(slides):
@@ -855,12 +1279,63 @@ class SlidePipelineMixin:
             print(f"[title_repair] skipped (error): {e}")
             return self._canonicalize_continued_titles(structured)
 
+    def _build_unified_post_process_messages(self, structured: Dict[str, Any]) -> List[Dict[str, str]]:
+        payload = json.dumps(structured, ensure_ascii=False)
+        system_msg = (
+            self._llm_system_prefix()
+            + "You are a premium presentation editor.\n\n"
+            + "TASK: Conduct a comprehensive revision of the generated slide deck JSON to guarantee professional quality.\n\n"
+            + "CRITICAL QUALITY RULES:\n"
+            "1. NO TRUNCATION: Fix any bullet point that is cut off or incomplete. Vietnamese bullets MUST NOT end with a preposition/conjunction/function word followed by a period (e.g., 'của.', 'cho.', 'với.', 'để.', 'gồm.', 'và.', 'hoặc.'). Complete the sentence or rewrite it.\n"
+            f"2. BULLET LENGTH & STRUCTURE: Each bullet must be a single complete sentence, containing roughly {BULLET_WORD_RANGE} words (hard max {MAX_WORDS_PER_BULLET} words). No bullet should be a single phrase/label or a huge paragraph.\n"
+            "3. SLIDE TITLES: Sửa các slide title chung chung hoặc là placeholder ('Nội dung', 'Slide 1', 'Tiếp theo') bằng một tiêu đề cụ thể, mô tả chính xác nội dung các bullet của slide đó. Độ dài tiêu đề slide từ 3-8 từ.\n"
+            "4. NO DUPLICATIONS: Xóa bỏ các slide hoặc bullet bị lặp ý hoàn toàn. Nếu slide quá mỏng (< 2 bullets), hãy mượn hoặc ghép nó vào slide hợp lý trước đó.\n"
+            "5. PRESERVE TECHNICAL DETAILS: Giữ nguyên các thuật ngữ chuyên ngành, tên hàm, số liệu kỹ thuật, tên thuật toán từ slide gốc.\n\n"
+            + ANTI_TRUNCATION_TOKEN_RULE
+            + self._output_language_instruction()
+            + "Return ONLY valid JSON. Schema:\n"
+            "{\"title\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\"],\"notes\":\"...\"}]}\n"
+        )
+        user_msg = (
+            "Review and revise the following slide deck JSON to apply the quality rules:\n\n"
+            f"{payload}\n\n"
+            "Return JSON starting with { and ending with }."
+            + self._user_lang_reminder()
+        )
+        return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
+    async def _unified_post_process(self, structured: Dict[str, Any]) -> Dict[str, Any]:
+        """Unified pass to refine, repair, and polish bullets/titles in a single LLM call."""
+        if not isinstance(structured, dict) or not structured.get("slides"):
+            return structured
+        try:
+            print("[slide_pipeline] unified post-process start")
+            # Tự động dọn dẹp Continued Suffix trước để LLM có đầu vào sạch hơn
+            structured = self._canonicalize_continued_titles(structured)
+            msgs = self._build_unified_post_process_messages(structured)
+            refined = await self._request_json_dict(
+                msgs,
+                target_slides=len(structured.get("slides") or []),
+                fast_mode=False,
+                compose_mode=True,
+                structured_output="slide_deck",
+            )
+            has_slides = isinstance(refined, dict) and isinstance(refined.get("slides"), list) and len(refined.get("slides")) > 0
+            if has_slides:
+                print("[slide_pipeline] unified post-process success")
+                # Sau khi LLM sửa, chạy canonicalize lần nữa để chuẩn hóa tiêu đề
+                return self._canonicalize_continued_titles(self._normalize_structured_content(refined))
+            else:
+                print("[slide_pipeline] unified post-process empty result, using original")
+                return structured
+        except Exception as e:
+            print(f"[slide_pipeline] unified post-process failed: {e}. Falling back to original.")
+            return structured
 
     def _merged_body_from_raw(self, raw_content: str) -> Dict[str, str]:
-        """Chuáº©n hÃ³a ná»™i dung ngáº¯n thÃ nh dáº¡ng merged summary (## + bullet) khÃ´ng qua LLM."""
+        """Chuẩn hóa nội dung ngắn thành dạng merged summary (## + bullet) không cần qua LLM."""
         norm = self._normalize_for_llm(raw_content or "")
-        doc_title = "BÃ i thuyáº¿t trÃ¬nh"
+        doc_title = "Bài thuyết trình"
         for ln in norm.split("\n"):
             s = ln.strip()
             if s.startswith("#"):
@@ -876,9 +1351,9 @@ class SlidePipelineMixin:
         merged_summary: Dict[str, str],
         target_slides: int,
     ) -> Dict[str, Any]:
-        """Luá»“ng slide duy nháº¥t sau khi cÃ³ báº£n merged: expand â†’ group â†’ generate â†’ refine â†’ normalize."""
+        """Luồng slide duy nhất sau khi có bản tóm tắt gộp (merged): mở rộng (expand) → nhóm (group) → tạo slide (generate) → tinh chỉnh (refine) → chuẩn hóa (normalize)."""
         print(
-            f"Slide pipeline: expand â†’ group â†’ generate â†’ refine (target ~{target_slides} slides)"
+            f"Slide pipeline: expand → group → generate → refine (target ~{target_slides} slides)"
         )
         print("[slide_pipeline] expand start")
         expanded = await self._expand_content_final(
@@ -896,24 +1371,14 @@ class SlidePipelineMixin:
             f"[slide_pipeline] generate sections done slides={len((structured or {}).get('slides') or [])}"
         )
         try:
-            print("[slide_pipeline] refine start")
-            structured = await self._refine_deck_with_optional_second(structured)
-            print("[slide_pipeline] targeted repair start")
-            structured = await self._repair_truncated_bullets_targeted(structured)
-            if LLM_BULLET_POLISH_PASS:
-                print("[slide_pipeline] bullet polish start")
-                structured = await self._polish_slide_bullets_quality(structured)
-                print("[slide_pipeline] bullet polish done")
-            if LLM_FINAL_QUALITY_GATE:
-                print("[slide_pipeline] final quality gate start")
-                structured = await self._run_final_quality_gate(structured)
-                print("[slide_pipeline] final quality gate done")
+            print("[slide_pipeline] unified post-process starting")
+            structured = await self._unified_post_process(structured)
             if LLM_FINAL_DENSITY_GATE:
                 print("[slide_pipeline] final density gate start")
                 structured = await self._run_final_density_gate(structured)
                 print("[slide_pipeline] final density gate done")
-        except Exception:
-            print("[slide_pipeline] refine path failed; fallback refine start")
+        except Exception as e:
+            print(f"[slide_pipeline] unified post-process failed: {e}; fallback refine start")
             structured = await self._refine_slides_final(structured)
             structured = await self._repair_truncated_bullets_targeted(structured)
             if LLM_BULLET_POLISH_PASS:
