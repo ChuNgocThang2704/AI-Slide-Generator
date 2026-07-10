@@ -34,6 +34,10 @@ _NUMERIC_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_END_RE = re.compile(r"[.!?。]\s*$")
+_NEXT_SLIDE_REQUEST_PATTERN = (
+    r"\b(?:slide|trang)\s*(?:(?:so|thu)\s*)?(?:#\s*)?\d+\b"
+    r"|\b(?:slide|trang)\s+(?:tiep\s+theo|ke\s+tiep)\b"
+)
 
 
 def _split_criteria_text(text: str) -> List[str]:
@@ -46,7 +50,7 @@ def _split_criteria_text(text: str) -> List[str]:
 
 def _cut_table_request_tail(text: str) -> str:
     return re.split(
-        r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b",
+        _NEXT_SLIDE_REQUEST_PATTERN,
         str(text or ""),
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -264,8 +268,8 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
     else:
         header_match = re.search(
             r"\b(?:cot|columns?|headers?)\s*(?:gom|la|:|：)?\s*(.+?)"
-            r"(?=\s*;\s*|\.\s*|\b(?:hang|rows?|cac\s+hang)\b|"
-            r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b|$)",
+            r"(?=\s*;\s*|\.\s*|\b(?:hang|dong|rows?|cac\s+(?:hang|dong))\b|"
+            rf"{_NEXT_SLIDE_REQUEST_PATTERN}|$)",
             folded,
             flags=re.IGNORECASE,
         )
@@ -276,8 +280,9 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
                 option_b = explicit_headers[2]
 
         row_match = re.search(
-            r"\b(?:hang|rows?|cac\s+hang)\s*(?:gom|la|:|：)?\s*(.+?)"
-            r"(?=\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b|$)",
+            r"\b(?:hang|dong|rows?|cac\s+(?:hang|dong))\s*(?:du\s+lieu\s*)?"
+            r"(?:gom|la|:|：)?\s*(.+?)"
+            rf"(?={_NEXT_SLIDE_REQUEST_PATTERN}|$)",
             folded,
             flags=re.IGNORECASE,
         )
