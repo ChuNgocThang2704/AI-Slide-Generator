@@ -734,6 +734,162 @@ def _fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]
     return {"title": "Bang so sanh", "headers": headers, "rows": table_rows}
 
 
+def _internal_slide_to_spec_row(idx: int, slide: Dict[str, Any]) -> Dict[str, Any]:
+    row: Dict[str, Any] = {
+        "index": idx,
+        "title": _plain_slide_text(slide.get("title") or f"Slide {idx + 1}"),
+        "bullets": [
+            _plain_slide_text(x)
+            for x in (slide.get("bullets") or [])
+            if _plain_slide_text(x)
+        ],
+        "notes": _plain_slide_text(slide.get("notes") or ""),
+        "chart": slide.get("chart") if isinstance(slide.get("chart"), dict) else None,
+        "table": slide.get("table") if isinstance(slide.get("table"), dict) else None,
+        "image": None,
+        "layout": str(slide.get("layout") or "text_only"),
+        "primary_visual": None,
+        "likely_multi_pptx_slides": bool(slide.get("likely_multi_pptx_slides")),
+    }
+    if slide.get("image_url"):
+        row["image"] = {
+            "url": str(slide.get("image_url")),
+            "path": str(slide.get("image_url")),
+            "mime": "image/jpeg",
+        }
+    if row["table"]:
+        row["layout"] = "text_table"
+        row["primary_visual"] = "table"
+    elif row["chart"]:
+        row["layout"] = "text_chart"
+        row["primary_visual"] = "chart"
+    elif row["image"]:
+        row["layout"] = "text_image"
+        row["primary_visual"] = "image"
+    return row
+
+
+def _review_revised_spec_payload(
+    spec_payload: Dict[str, Any],
+    *,
+    previous_structured_content: Dict[str, Any],
+    revision_prompt: str,
+    plan_targets: List[int],
+    wants_deck_restructure: bool,
+    forced_table_targets: set[int],
+    fallback_table: Optional[Dict[str, Any]],
+    chart_type_targets: Dict[int, str],
+    wants_image_revision: bool,
+    image_instruction_targets: List[int],
+) -> Dict[str, Any]:
+    """Final deterministic QA gate for revise output before BE/FE receive it."""
+    deck = spec_payload.get("deck") if isinstance(spec_payload, dict) else None
+    slides = deck.get("slides") if isinstance(deck, dict) else None
+    if not isinstance(slides, list):
+        return spec_payload
+
+    old_slides = [
+        s for s in (previous_structured_content.get("slides") or [])
+        if isinstance(s, dict)
+    ]
+    issues: List[Dict[str, Any]] = []
+    fixes: List[Dict[str, Any]] = []
+    target_set = set(plan_targets or [])
+
+    if not wants_deck_restructure and old_slides:
+        if len(slides) != len(old_slides):
+            issues.append({
+                "type": "slide_count_changed",
+                "expected": len(old_slides),
+                "actual": len(slides),
+            })
+            normalized: List[Dict[str, Any]] = []
+            for idx, old_slide in enumerate(old_slides):
+                if idx < len(slides) and idx in target_set and isinstance(slides[idx], dict):
+                    normalized.append(slides[idx])
+                else:
+                    normalized.append(_internal_slide_to_spec_row(idx, old_slide))
+            slides[:] = normalized
+            fixes.append({"type": "restored_slide_count", "count": len(slides)})
+
+        for idx, old_slide in enumerate(old_slides):
+            if idx in target_set or idx >= len(slides):
+                continue
+            if not isinstance(slides[idx], dict):
+                slides[idx] = _internal_slide_to_spec_row(idx, old_slide)
+                fixes.append({"type": "restored_non_target_slide", "slide": idx + 1})
+                continue
+            old_row = _internal_slide_to_spec_row(idx, old_slide)
+            comparable_keys = ("title", "bullets", "notes", "layout", "table", "chart", "image")
+            if any(slides[idx].get(k) != old_row.get(k) for k in comparable_keys):
+                slides[idx] = old_row
+                fixes.append({"type": "restored_non_target_slide", "slide": idx + 1})
+
+    for idx in sorted(forced_table_targets or set()):
+        if not (0 <= idx < len(slides)) or not isinstance(slides[idx], dict):
+            continue
+        table = slides[idx].get("table")
+        if fallback_table:
+            slides[idx]["table"] = fallback_table
+            table = fallback_table
+            fixes.append({"type": "enforced_table_from_prompt", "slide": idx + 1})
+        if not isinstance(table, dict) or not table.get("headers") or not table.get("rows"):
+            issues.append({"type": "missing_or_invalid_table", "slide": idx + 1})
+        slides[idx].pop("chart", None)
+        slides[idx].pop("image", None)
+        slides[idx]["layout"] = "text_table"
+        slides[idx]["primary_visual"] = "table"
+
+    for idx, chart_type in (chart_type_targets or {}).items():
+        if not (0 <= idx < len(slides)) or not isinstance(slides[idx], dict):
+            continue
+        chart = slides[idx].get("chart")
+        if isinstance(chart, dict):
+            chart["chart_type"] = chart_type
+            chart["type"] = chart_type
+            slides[idx]["layout"] = "text_chart"
+            slides[idx]["primary_visual"] = "chart"
+            fixes.append({"type": "enforced_chart_type", "slide": idx + 1, "chart_type": chart_type})
+        else:
+            issues.append({"type": "missing_chart_for_requested_chart_type", "slide": idx + 1})
+
+    if wants_image_revision:
+        for idx in image_instruction_targets or []:
+            if not (0 <= idx < len(slides)) or not isinstance(slides[idx], dict):
+                continue
+            slides[idx].pop("table", None)
+            slides[idx].pop("chart", None)
+            slides[idx]["layout"] = "text_image"
+            slides[idx]["primary_visual"] = "image"
+            if not isinstance(slides[idx].get("image"), dict):
+                issues.append({"type": "missing_image_after_image_revision", "slide": idx + 1})
+
+    for idx, slide in enumerate(slides):
+        if not isinstance(slide, dict):
+            continue
+        slide["index"] = idx
+        if slide.get("table"):
+            slide["layout"] = "text_table"
+            slide["primary_visual"] = "table"
+        elif slide.get("chart"):
+            slide["layout"] = "text_chart"
+            slide["primary_visual"] = "chart"
+        elif slide.get("image"):
+            slide["layout"] = "text_image"
+            slide["primary_visual"] = "image"
+        else:
+            slide["primary_visual"] = None
+
+    spec_payload["post_review"] = {
+        "kind": "revise_contract_qa",
+        "prompt_excerpt": str(revision_prompt or "")[:300],
+        "issues": issues,
+        "fixes": fixes,
+        "ok": not issues or bool(fixes),
+    }
+    return spec_payload
+
+
 async def _build_revised_slide_spec_payload(
     *,
     task_id: str,
@@ -962,12 +1118,13 @@ async def _build_revised_slide_spec_payload(
         raw_content=revision_prompt or "",
         visual_plan=visual_plan,
     )
+    explicit_chart_type_targets = _explicit_chart_type_targets_from_prompt(
+        revision_prompt,
+        len(revised.get("slides") or []),
+    )
     _apply_explicit_chart_type_targets(
         chart_specs,
-        _explicit_chart_type_targets_from_prompt(
-            revision_prompt,
-            len(revised.get("slides") or []),
-        ),
+        explicit_chart_type_targets,
     )
 
     image_paths = None
@@ -998,6 +1155,18 @@ async def _build_revised_slide_spec_payload(
         table_specs=table_specs,
         image_paths=image_paths,
         slide_theme=slide_theme,
+    )
+    spec_payload = _review_revised_spec_payload(
+        spec_payload,
+        previous_structured_content=previous_structured_content,
+        revision_prompt=revision_prompt,
+        plan_targets=plan_targets,
+        wants_deck_restructure=wants_deck_restructure,
+        forced_table_targets=forced_table_targets,
+        fallback_table=fallback_table,
+        chart_type_targets=explicit_chart_type_targets,
+        wants_image_revision=wants_image_revision,
+        image_instruction_targets=image_instruction_targets if wants_image_revision else [],
     )
     spec_payload["revision_plan"] = revision_plan
     spec_payload["revision_scope"] = "deck" if wants_deck_restructure else ("slide" if plan_targets else str(revision_plan.get("scope") or "deck"))
@@ -1440,6 +1609,9 @@ async def revise_slide_spec(
             target_slide_indices=target_slide_indices,
             target_slide_numbers=target_slide_numbers,
         )
+        preserve_indices = set(_revision_prompt_preserve_slide_indices(prompt, source_slide_count))
+        if preserve_indices:
+            target_indices = [idx for idx in target_indices if idx not in preserve_indices]
         scope_norm = (revision_scope or "auto").strip().lower()
         if scope_norm in {"deck", "full", "all"}:
             target_indices = []
