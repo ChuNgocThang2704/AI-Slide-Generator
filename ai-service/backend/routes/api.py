@@ -626,6 +626,26 @@ def _revision_prompt_delete_slide_indices(text: str, slide_count: int) -> List[i
     return sorted(targets)
 
 
+def _revision_prompt_preserve_slide_indices(text: str, slide_count: int) -> List[int]:
+    folded = _fold_revision_text(text)
+    if slide_count <= 0 or not re.search(r"\b(?:giu|khong\s+doi|keep|unchanged|nhu\s+cu)\b", folded):
+        return []
+    targets: set[int] = set()
+    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
+        before = folded[max(0, match.start() - 80): match.start()]
+        after = folded[match.end(): min(len(folded), match.end() + 80)]
+        context = f"{before} {after}"
+        if not re.search(r"\b(?:giu|khong\s+doi|keep|unchanged|nhu\s+cu)\b", context):
+            continue
+        try:
+            idx = int(match.group(1)) - 1
+        except Exception:
+            continue
+        if 0 <= idx < slide_count:
+            targets.add(idx)
+    return sorted(targets)
+
+
 def _revision_prompt_title_overrides(text: str, slide_count: int) -> Dict[int, str]:
     raw = str(text or "")
     folded = _fold_revision_text(raw)
@@ -649,7 +669,7 @@ def _revision_prompt_title_overrides(text: str, slide_count: int) -> Dict[int, s
 
 
 def _split_revision_list(value: str) -> List[str]:
-    parts = re.split(r"[,;|/]+|\s+-\s+", str(value or ""))
+    parts = re.split(r"[,;|/]+|\s+-\s+|\s+\bva\b\s+|\s+\band\b\s+", str(value or ""), flags=re.IGNORECASE)
     return [p.strip(" .:-") for p in parts if p and p.strip(" .:-")]
 
 
@@ -670,7 +690,7 @@ def _fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]
         headers = _split_revision_list(header_match.group(1))
 
     row_match = re.search(
-        r"(?i)(?:rows?|hang|cac\s+hang)\s*(?:gom|la|:)?\s*([^.;\n]+)",
+        r"(?i)(?:rows?|hang|cac\s+hang|them\s+hang)\s*(?:gom|la|:)?\s*([^.;\n]+)",
         text,
     )
     if row_match:
@@ -732,6 +752,10 @@ async def _build_revised_slide_spec_payload(
         revision_prompt,
         len(old_slides),
     )
+    explicit_preserve_targets = set(_revision_prompt_preserve_slide_indices(
+        revision_prompt,
+        len(old_slides),
+    ))
     explicit_title_overrides = _revision_prompt_title_overrides(
         revision_prompt,
         len(old_slides),
@@ -750,6 +774,8 @@ async def _build_revised_slide_spec_payload(
         for idx in plan_targets
         if 0 <= idx < len(previous_structured_content.get("slides") or [])
     ]
+    if explicit_preserve_targets:
+        plan_targets = [idx for idx in plan_targets if idx not in explicit_preserve_targets]
     if not plan_targets and target_slide_indices:
         plan_targets = list(target_slide_indices)
     if not plan_targets and explicit_title_overrides:
@@ -926,8 +952,7 @@ async def _build_revised_slide_spec_payload(
     fallback_table = _fallback_table_from_revision_prompt(revision_prompt)
     if fallback_table:
         for idx in forced_table_targets:
-            if idx not in table_specs:
-                table_specs[idx] = fallback_table
+            table_specs[idx] = fallback_table
     chart_specs = await build_chart_specs_for_slides(
         content_extractor,
         revised,
