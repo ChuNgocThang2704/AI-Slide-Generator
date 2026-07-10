@@ -44,6 +44,32 @@ def _split_criteria_text(text: str) -> List[str]:
     ][:8]
 
 
+def _cut_table_request_tail(text: str) -> str:
+    return re.split(
+        r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b",
+        str(text or ""),
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" ,;:-.")
+
+
+def _pretty_comparison_label(value: str) -> str:
+    folded = _fold_text(value).strip(" ,;:-.")
+    labels = {
+        "tieu chi": "Tiêu chí",
+        "quan ly thu cong": "Quản lý thủ công",
+        "he thong thong minh": "Hệ thống thông minh",
+        "nhan xet": "Nhận xét",
+        "toc do xu ly": "Tốc độ xử lý",
+        "do chinh xac": "Độ chính xác",
+        "chi phi van hanh": "Chi phí vận hành",
+        "trai nghiem sinh vien": "Trải nghiệm sinh viên",
+        "bao mat du lieu": "Bảo mật dữ liệu",
+        "kha nang mo rong": "Khả năng mở rộng",
+    }
+    return labels.get(folded, str(value or "").strip(" ,;:-.").capitalize())
+
+
 def _slide_lines(slide: Dict[str, Any]) -> List[str]:
     bullets = slide.get("bullets") or slide.get("content") or []
     if isinstance(bullets, str):
@@ -225,6 +251,7 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
 
     option_a = "Phương án 1"
     option_b = "Phương án 2"
+    explicit_headers: List[str] = []
     between_match = re.search(
         r"giua\s+(.+?)\s+va\s+(.+?)\s+theo\s+cac\s+tieu\s+chi\s*[:：]\s*(.+)",
         folded,
@@ -233,13 +260,42 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
     if between_match:
         option_a = between_match.group(1).strip(" ,;:-")
         option_b = between_match.group(2).strip(" ,;:-")
-        criteria_text = between_match.group(3)
+        criteria_text = _cut_table_request_tail(between_match.group(3))
     else:
-        marker = "tieu chi"
-        criteria_text = folded.split(marker, 1)[-1].lstrip(" :：")
+        header_match = re.search(
+            r"\b(?:cot|columns?|headers?)\s*(?:gom|la|:|：)?\s*(.+?)"
+            r"(?=\s*;\s*|\.\s*|\b(?:hang|rows?|cac\s+hang)\b|"
+            r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b|$)",
+            folded,
+            flags=re.IGNORECASE,
+        )
+        if header_match:
+            explicit_headers = _split_criteria_text(header_match.group(1))
+            if len(explicit_headers) >= 3:
+                option_a = explicit_headers[1]
+                option_b = explicit_headers[2]
+
+        row_match = re.search(
+            r"\b(?:hang|rows?|cac\s+hang)\s*(?:gom|la|:|：)?\s*(.+?)"
+            r"(?=\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b|$)",
+            folded,
+            flags=re.IGNORECASE,
+        )
+        if row_match:
+            criteria_text = _cut_table_request_tail(row_match.group(1))
+        else:
+            marker = "tieu chi"
+            criteria_text = _cut_table_request_tail(folded.split(marker, 1)[-1].lstrip(" :："))
 
     criteria = _split_criteria_text(criteria_text)
-    criteria = [c for c in criteria if len(c) >= 2 and not c.startswith(("q1", "q2", "q3", "q4"))]
+    criteria = [
+        _pretty_comparison_label(c)
+        for c in criteria
+        if len(c) >= 2
+        and not c.startswith(("q1", "q2", "q3", "q4"))
+        and "bieu do" not in c
+        and "slide " not in c
+    ]
     if len(criteria) < 2:
         return None
 
@@ -253,6 +309,7 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
 
     option_a_pretty = pretty_option(option_a)
     option_b_pretty = pretty_option(option_b)
+    note_header = _pretty_comparison_label(explicit_headers[3])[:60] if len(explicit_headers) >= 4 else ""
 
     def cell_for(option: str, criterion: str) -> str:
         of = _fold_text(option)
@@ -279,14 +336,26 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
                 return "Hiển thị chỗ trống, chỉ dẫn nhanh và thanh toán tiện lợi."
         return ""
 
+    headers = ["Tiêu chí", option_a_pretty, option_b_pretty]
+    if note_header:
+        headers.append(note_header)
+
+    rows: List[List[str]] = []
+    for criterion in criteria[:8]:
+        row = [
+            criterion,
+            cell_for(option_a_pretty, criterion),
+            cell_for(option_b_pretty, criterion),
+        ]
+        if note_header:
+            row.append("Hệ thống thông minh có lợi thế hơn.")
+        rows.append(row)
+
     spec = normalize_table_spec(
         {
             "title": "So sánh phương án quản lý",
-            "headers": ["Tiêu chí", option_a_pretty, option_b_pretty],
-            "rows": [
-                [criterion, cell_for(option_a_pretty, criterion), cell_for(option_b_pretty, criterion)]
-                for criterion in criteria[:8]
-            ],
+            "headers": headers,
+            "rows": rows,
         }
     )
     if not spec:
