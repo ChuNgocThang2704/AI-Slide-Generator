@@ -45,10 +45,76 @@ function SlidePreview({ deck }) {
                 <li key={i}>{b}</li>
               ))}
             </ul>
+            {slide.table && <SlideTable table={slide.table} />}
+            {slide.chart && <SlideChart chart={slide.chart} />}
             {slide.image?.url && <SlideImage image={slide.image} />}
             {slide.notes && <p className="notes">{slide.notes}</p>}
           </article>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function SlideTable({ table }) {
+  const headers = Array.isArray(table?.headers) ? table.headers : []
+  const rows = Array.isArray(table?.rows) ? table.rows : []
+  if (!headers.length && !rows.length) return null
+
+  return (
+    <div className="data-box">
+      {table.title && <strong>{table.title}</strong>}
+      <div className="table-wrap">
+        <table>
+          {!!headers.length && (
+            <thead>
+              <tr>
+                {headers.map((header, idx) => (
+                  <th key={idx}>{header}</th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {rows.map((row, rowIdx) => (
+              <tr key={rowIdx}>
+                {(Array.isArray(row) ? row : [row]).map((cell, cellIdx) => (
+                  <td key={cellIdx}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function SlideChart({ chart }) {
+  const type = chart?.chart_type || chart?.type || 'chart'
+  const labels = chart?.labels || chart?.categories || []
+  const values = chart?.values || chart?.series?.[0]?.values || []
+  const maxValue = Math.max(...values.map((v) => Number(v) || 0), 1)
+
+  return (
+    <div className="data-box">
+      <div className="chart-head">
+        <strong>{chart?.title || 'Chart'}</strong>
+        <span>{type}</span>
+      </div>
+      <div className="chart-bars">
+        {labels.map((label, idx) => {
+          const value = Number(values[idx]) || 0
+          return (
+            <div className="chart-row" key={`${label}-${idx}`}>
+              <small>{label}</small>
+              <div>
+                <span style={{ width: `${Math.max(8, (value / maxValue) * 100)}%` }} />
+              </div>
+              <em>{values[idx]}</em>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -229,7 +295,6 @@ export default function App() {
   const buildBaseForm = () => {
     const fd = new FormData()
     fd.append('plan', DEFAULT_PLAN)
-    fd.append('generate_images', 'true')
     return fd
   }
 
@@ -258,7 +323,6 @@ export default function App() {
     fd.append('revision_prompt', revisionPrompt)
     fd.append('revision_scope', 'auto')
     fd.append('plan', DEFAULT_PLAN)
-    fd.append('generate_images', 'true')
     reviseSpec(fd)
   }
 
