@@ -155,6 +155,29 @@ _VN_DIACRITIC_SAFE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_VN_ASCII_LANGUAGE_PATTERNS = (
+    r"\btao\b",
+    r"\btrinh\s+bay\b",
+    r"\bhe\s+thong\b",
+    r"\bquan\s+ly\b",
+    r"\bbat\s+buoc\b",
+    r"\bbang\s+so\s+sanh\b",
+    r"\btieu\s+chi\b",
+    r"\bnhan\s+xet\b",
+    r"\btoc\s+do\b",
+    r"\bxu\s+ly\b",
+    r"\bchi\s+phi\b",
+    r"\bvan\s+hanh\b",
+    r"\btrai\s+nghiem\b",
+    r"\bsinh\s+vien\b",
+    r"\bbieu\s+do\b",
+    r"\bket\s+luan\b",
+    r"\bhinh\s+anh\b",
+    r"\bnoi\s+dung\b",
+    r"\bchinh\s+sua\b",
+    r"\bgiu\s+nguyen\b",
+)
+
 AUTO_MIN_SLIDES = 5
 
 
@@ -250,6 +273,12 @@ class ContentExtractor(
             return explicit
         if len(t) < 24:
             return "auto"
+        folded = self._fold_language_text(t)
+        ascii_vn_hits = sum(
+            1 for pattern in _VN_ASCII_LANGUAGE_PATTERNS if re.search(pattern, folded, flags=re.IGNORECASE)
+        )
+        if ascii_vn_hits >= 3:
+            return "vi"
         vn_hits = len(_VN_DIACRITIC_SAFE_RE.findall(t))
         letters = sum(1 for c in t if c.isalpha())
         if letters < 15:

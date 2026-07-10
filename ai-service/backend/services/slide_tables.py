@@ -435,6 +435,53 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _merge_table_with_comparison_request(
+    existing: Dict[str, Any],
+    requested: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Keep useful LLM cells while enforcing explicitly requested headers and rows."""
+    current = normalize_table_spec(existing) or {}
+    required = normalize_table_spec(requested) or {}
+    if not required:
+        return current
+    if not current:
+        return required
+
+    current_headers = current.get("headers") or []
+    required_headers = required.get("headers") or []
+    current_header_positions = {
+        _fold_text(header): idx for idx, header in enumerate(current_headers) if _fold_text(header)
+    }
+    current_rows = {
+        _fold_text(row[0]): row
+        for row in (current.get("rows") or [])
+        if isinstance(row, list) and row and _fold_text(row[0])
+    }
+
+    merged_rows: List[List[str]] = []
+    for required_row in required.get("rows") or []:
+        key = _fold_text(required_row[0]) if required_row else ""
+        current_row = current_rows.get(key)
+        merged_row: List[str] = []
+        for col_idx, header in enumerate(required_headers):
+            value = str(required_row[col_idx] or "").strip() if col_idx == 0 and col_idx < len(required_row) else ""
+            existing_idx = current_header_positions.get(_fold_text(header))
+            if not value and current_row is not None and existing_idx is not None and existing_idx < len(current_row):
+                value = str(current_row[existing_idx] or "").strip()
+            if not value and col_idx < len(required_row):
+                value = str(required_row[col_idx] or "").strip()
+            merged_row.append(value)
+        merged_rows.append(merged_row)
+
+    return normalize_table_spec(
+        {
+            "title": current.get("title") or required.get("title") or "",
+            "headers": required_headers,
+            "rows": merged_rows,
+        }
+    ) or required
+
+
 def _table_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
     """Cổng chặn bảng chung: các tiêu đề/neo hàng phải được hỗ trợ bởi văn bản gốc."""
     if not isinstance(spec, dict):
@@ -811,6 +858,43 @@ async def build_table_specs_for_slides(
                     }
                 )
                 print(f"[slide_tables] slide {best_idx} table: raw comparison request after review {len(spec['rows'])} row(s)")
+
+    comparison_constraint = _raw_comparison_request(raw_content)
+    required_spec = (comparison_constraint or {}).get("spec")
+    if isinstance(required_spec, dict) and out:
+        best_idx = max(
+            out,
+            key=lambda idx: (
+                _slide_match_score(slides[idx], comparison_constraint)
+                + (
+                    3
+                    if str(
+                        (visual_plan or {}).get(idx)
+                        or (visual_plan or {}).get(str(idx))
+                        or ""
+                    ).strip().lower()
+                    == "table"
+                    else 0
+                )
+            ),
+        )
+        previous_spec = out[best_idx]
+        merged_spec = _merge_table_with_comparison_request(previous_spec, required_spec)
+        if merged_spec != previous_spec:
+            out[best_idx] = merged_spec
+            debug_records.append(
+                {
+                    "slide_index": best_idx,
+                    "title": str((slides[best_idx] or {}).get("title") or ""),
+                    "source": "comparison_request_constraint",
+                    "spec": merged_spec,
+                    "status": "completed_requested_rows",
+                }
+            )
+            print(
+                f"[slide_tables] slide {best_idx} table: enforced "
+                f"{len(merged_spec['headers'])} header(s), {len(merged_spec['rows'])} row(s)"
+            )
 
     if task_id:
         _write_debug_json(task_id, debug_records)
