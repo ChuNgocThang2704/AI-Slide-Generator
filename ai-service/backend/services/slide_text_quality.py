@@ -15,6 +15,7 @@ from services.content.json_utils import parse_json_response
 _DEBUG_DIR = Path("outputs") / "debug"
 _GEMINI_REVIEW_ENABLE = os.getenv("TEXT_GEMINI_REVIEW_ENABLE", "true").lower() in ("1", "true", "yes")
 _GEMINI_REVIEW_MAX_SLIDES = int(os.getenv("TEXT_GEMINI_REVIEW_MAX_SLIDES", "8"))
+_SPEAKER_NOTES_REVIEW_MAX_SLIDES = int(os.getenv("SPEAKER_NOTES_REVIEW_MAX_SLIDES", "12"))
 _WEAK_TAIL_WORDS = {
     "và", "hoặc", "của", "cho", "với", "từ", "đến", "trong", "nhằm",
     "and", "or", "of", "for", "with", "to", "from", "in", "by",
@@ -325,6 +326,11 @@ def _score_slide_text(slide: Dict[str, Any], source_language: str = "auto") -> T
         score -= 0.28
         issues.extend(language_issues)
 
+    note_issues = _speaker_note_issues(slide)
+    if note_issues:
+        score -= min(0.24, 0.08 * len(note_issues))
+        issues.extend(note_issues)
+
     seen = set()
     for idx, bullet in enumerate(bullets):
         wc = len(_words(bullet))
@@ -439,6 +445,9 @@ def _slide_subset_for_review(structured: Dict[str, Any], records: List[Dict[str,
             continue
         issues = set(rec.get("issues") or [])
         score = float(rec.get("score") or 0.0)
+        non_note_issues = {issue for issue in issues if not str(issue).startswith("speaker_notes_")}
+        if issues and not non_note_issues:
+            continue
         if score >= 0.88 and not (issues & {"suspicious_title", "duplicate_slide_title", "language_mismatch_vi", "language_mismatch_en"}):
             continue
         slide = slides[idx]
@@ -463,6 +472,142 @@ def _slide_bullets_preview(slide: Dict[str, Any], limit: int = 4) -> List[str]:
     if isinstance(bullets, list):
         return [str(x) for x in bullets[:limit] if str(x).strip()]
     return []
+
+
+_NOTE_META_RE = re.compile(
+    r"\b(?:slide|trang)\s+(?:này|nay)\s+(?:giới\s+thiệu|gioi\s+thieu|trình\s+bày|trinh\s+bay|mô\s+tả|mo\s+ta|tóm\s+tắt|tom\s+tat|nhấn\s+mạnh|nhan\s+manh)\b"
+    r"|\bthis\s+slide\s+(?:introduces|presents|describes|summarizes|highlights)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _speaker_note_issues(slide: Dict[str, Any]) -> List[str]:
+    notes = str(slide.get("notes") or slide.get("script") or "").strip()
+    bullets = _slide_bullets_preview(slide, limit=6)
+    source = " ".join([str(slide.get("title") or "")] + bullets)
+    issues: List[str] = []
+    word_count = len(_words(notes))
+    if word_count < 55:
+        issues.append("speaker_notes_too_short")
+    elif word_count > 160:
+        issues.append("speaker_notes_too_long")
+    if _NOTE_META_RE.search(notes):
+        issues.append("speaker_notes_meta_description")
+    folded_notes = re.sub(r"\W+", " ", notes.lower()).strip()
+    for bullet in bullets:
+        folded_bullet = re.sub(r"\W+", " ", bullet.lower()).strip()
+        if len(_words(folded_bullet)) >= 8 and folded_bullet in folded_notes:
+            issues.append("speaker_notes_copy_bullets")
+            break
+    source_terms = set(_key_terms(source, limit=12))
+    note_terms = set(_key_terms(notes, limit=20))
+    if source_terms and len(source_terms & note_terms) < min(2, len(source_terms)):
+        issues.append("speaker_notes_weak_grounding")
+    return issues
+
+
+async def _gemini_review_speaker_notes(
+    content_extractor,
+    structured: Dict[str, Any],
+    *,
+    source_language: str = "auto",
+) -> Tuple[Dict[str, Any], List[int]]:
+    if not _GEMINI_REVIEW_ENABLE or not getattr(content_extractor, "gemini_available", False):
+        return structured, []
+    if not hasattr(content_extractor, "_gemini_completion_plain_text"):
+        return structured, []
+
+    slides = structured.get("slides") or []
+    review_items: List[Dict[str, Any]] = []
+    for idx, slide in enumerate(slides):
+        if not isinstance(slide, dict):
+            continue
+        issues = _speaker_note_issues(slide)
+        if not issues:
+            continue
+        review_items.append(
+            {
+                "index": idx,
+                "title": str(slide.get("title") or ""),
+                "bullets": _slide_bullets_preview(slide, limit=6),
+                "table": slide.get("table"),
+                "chart": slide.get("chart"),
+                "current_notes": str(slide.get("notes") or slide.get("script") or ""),
+                "next_slide_title": (
+                    str((slides[idx + 1] or {}).get("title") or "")
+                    if idx + 1 < len(slides) and isinstance(slides[idx + 1], dict)
+                    else ""
+                ),
+                "issues": issues,
+            }
+        )
+        if len(review_items) >= max(1, _SPEAKER_NOTES_REVIEW_MAX_SLIDES):
+            break
+    if not review_items:
+        return structured, []
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an expert presentation speechwriter. Rewrite only the speaker notes.\n"
+                f"{_language_instruction(source_language)}\n"
+                "For each slide, write 70-120 words of natural narration that a presenter can speak directly. "
+                "Use only facts, numbers, names, and claims supported by that slide's title, bullets, table, or chart. "
+                "Do not invent examples, statistics, causes, or conclusions. Explain the meaning and relationship of the provided points instead of reading bullets verbatim. "
+                "Never say 'Slide này giới thiệu/trình bày/mô tả' or 'This slide presents/introduces'. "
+                "When next_slide_title is provided, finish with one short natural bridge to that idea without mentioning slide numbers. "
+                "For the final slide, end with a concise closing thought. Plain text only, no Markdown.\n"
+                "Return strict JSON only: {\"slides\":[{\"index\":number,\"notes\":string}]}"
+            ),
+        },
+        {"role": "user", "content": json.dumps({"slides": review_items}, ensure_ascii=False)},
+    ]
+    try:
+        raw = await content_extractor._gemini_completion_plain_text(
+            messages,
+            max_tokens=min(6000, 700 + 450 * len(review_items)),
+            temperature=0.2,
+            json_mode=True,
+        )
+        parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
+    except Exception as e:
+        print(f"[slide_text_quality] speaker notes review failed: {e}")
+        return structured, []
+
+    out_items = (parsed or {}).get("slides") if isinstance(parsed, dict) else None
+    if not isinstance(out_items, list):
+        return structured, []
+    improved = copy.deepcopy(structured)
+    improved_slides = improved.get("slides") or []
+    changed: List[int] = []
+    for item in out_items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("index"))
+        except Exception:
+            continue
+        if not (0 <= idx < len(improved_slides)) or not isinstance(improved_slides[idx], dict):
+            continue
+        notes = _sanitize_inline_markup(item.get("notes") or "")
+        if len(_words(notes)) < 50 or len(_words(notes)) > 160 or _NOTE_META_RE.search(notes):
+            continue
+        source = " ".join(
+            [str(improved_slides[idx].get("title") or "")]
+            + _slide_bullets_preview(improved_slides[idx], limit=6)
+            + [
+                json.dumps(improved_slides[idx].get("table") or {}, ensure_ascii=False),
+                json.dumps(improved_slides[idx].get("chart") or {}, ensure_ascii=False),
+            ]
+        )
+        source_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", source))
+        note_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", notes))
+        if note_numbers - source_numbers:
+            continue
+        improved_slides[idx]["notes"] = notes
+        changed.append(idx)
+    return improved, changed
 
 
 def _valid_review_slide(item: Any) -> Optional[Dict[str, Any]]:
@@ -748,12 +893,23 @@ async def improve_slide_text_quality(
         improved,
         source_language=source_language,
     )
+    note_refined: List[int] = []
+    try:
+        improved, note_refined = await _gemini_review_speaker_notes(
+            content_extractor,
+            improved,
+            source_language=source_language,
+        )
+    except Exception as e:
+        print(f"[slide_text_quality] speaker notes pass failed: {e}")
     improved = _sanitize_structured_text(improved)
     after = _evaluate_deck(improved, source_language=source_language)
-    all_refined = sorted(set(refined + gemini_refined + title_refined))
+    all_refined = sorted(set(refined + gemini_refined + title_refined + note_refined))
     _write_text_quality_report(task_id, after, all_refined, source_language=source_language)
     if gemini_refined:
         print(f"[slide_text_quality] Gemini reviewed/refined slides: {gemini_refined}")
     if title_refined:
         print(f"[slide_text_quality] title post-check refined slides: {title_refined}")
+    if note_refined:
+        print(f"[slide_text_quality] speaker notes refined slides: {note_refined}")
     return improved

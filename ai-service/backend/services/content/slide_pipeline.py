@@ -213,8 +213,11 @@ class SlidePipelineMixin:
             "4) ANTI-LAZY:\n"
             "- No keyword-only bullets; write full explanatory sentences.\n\n"
             "4b) SPEAKER NOTES:\n"
-            "- Fill notes with a natural presenter script for each slide, 45-90 words, same language as the slide.\n"
-            "- Do not repeat bullets verbatim; explain how the presenter should talk through the slide.\n\n"
+            "- Write 70-120 words of ready-to-speak presenter narration for every slide, in the slide's language.\n"
+            "- Ground every statement in that slide's title, bullets, numbers, table, or chart; never invent facts.\n"
+            "- Explain meaning, significance, and relationships instead of reading bullets verbatim.\n"
+            "- Do not use meta narration such as 'Slide này giới thiệu/trình bày...' or 'This slide presents...'.\n"
+            "- End with a short, natural bridge to the next idea when appropriate; do not mention slide numbers.\n\n"
             "5) STRUCTURE:\n"
             "- Group related points on the same slide.\n"
             "- No \"(continued)\" / \"(tiếp)\" slides.\n\n"
@@ -419,6 +422,7 @@ class SlidePipelineMixin:
             "- SLIDE TITLES: Rewrite any generic slide title (such as 'Nội dung', 'Nội dung 1', 'Slide 1', 'Tiếp theo', or similar placeholders) into a specific, meaningful, descriptive title derived from the slide's bullet points.\n"
             "- DECK TITLE: Rewrite the top-level deck title if it is a generic chapter heading ('Mở đầu', 'Giới thiệu', 'Introduction'). The deck title must describe the WHOLE presentation's core subject (e.g. 'Phân mảnh CSDL Phân tán — Nhóm 17', 'AI in Healthcare Applications').\n"
             "- SPECIFICITY: Any bullet that contains no concrete fact, number, function name, or technical term is considered generic filler—rewrite it with a specific detail from the slide context.\n\n"
+            "- SPEAKER NOTES: Write 70-120 words per slide as natural ready-to-speak narration. Keep notes strictly grounded in that slide's title and bullets, explain rather than repeat them, avoid meta phrases such as 'Slide này trình bày'/'This slide presents', and add a brief transition when appropriate.\n"
             + ANTI_TRUNCATION_TOKEN_RULE
             + "\n"
             + self._output_language_instruction()
@@ -530,6 +534,7 @@ class SlidePipelineMixin:
             "- Preserve the slide's core topic unless the user explicitly asks to change it.\n"
             "- Keep useful bullets that the user did not ask to change.\n"
             "- Return one slide as JSON with title, bullets, notes, and layout.\n"
+            "- Notes must remain a natural 70-120 word presenter script grounded in the revised title and bullets; never describe the slide as an object or invent facts.\n"
             "- Do not mention that this is a revision.\n\n"
             + self._output_language_instruction()
             + "Return ONLY JSON with this shape:\n"

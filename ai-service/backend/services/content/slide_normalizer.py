@@ -317,6 +317,26 @@ class SlideNormalizerMixin:
         text = " ".join([str(title or "")] + [str(b or "") for b in (bullets or [])])
         if len(self._VN_DIACRITIC_SAFE_RE.findall(text)) >= 2:
             return "vi"
+        folded = unicodedata.normalize("NFKD", text).replace("đ", "d").replace("Đ", "D")
+        folded = "".join(ch for ch in folded if not unicodedata.combining(ch)).lower()
+        vn_ascii_hits = sum(
+            1
+            for pattern in (
+                r"\bhe\s+thong\b",
+                r"\bquan\s+ly\b",
+                r"\bdu\s+lieu\b",
+                r"\bnguoi\s+dung\b",
+                r"\bvan\s+hanh\b",
+                r"\btrinh\s+bay\b",
+                r"\btoc\s+do\b",
+                r"\bchi\s+phi\b",
+                r"\bsinh\s+vien\b",
+                r"\btruong\s+dai\s+hoc\b",
+            )
+            if re.search(pattern, folded)
+        )
+        if vn_ascii_hits >= 2:
+            return "vi"
         if len(self._EN_FUNCTION_SAFE_RE.findall(text)) >= 3:
             return "en"
         if len(re.findall(r"[A-Za-z]{3,}", text)) >= 5:
@@ -329,30 +349,28 @@ class SlideNormalizerMixin:
         if not clean_bullets:
             return ""
         if self._detect_slide_language(clean_title, clean_bullets) == "en":
-            opener = f"On this slide, I will present {clean_title}." if clean_title else "On this slide, I will present the main points."
-            body_parts = []
-            for idx, bullet in enumerate(clean_bullets[:4]):
-                if idx == 0:
-                    body_parts.append(f"The first point to note is that {bullet}.")
-                elif idx == 1:
-                    body_parts.append(f"Next, {bullet}.")
-                elif idx == 2:
-                    body_parts.append(f"In addition, {bullet}.")
-                else:
-                    body_parts.append(f"Finally, {bullet}.")
-            return " ".join([opener] + body_parts).strip()
-        opener = f"Ở slide này, em sẽ trình bày về {clean_title}." if clean_title else "Ở slide này, em sẽ trình bày nội dung chính."
-        body_parts = []
-        for idx, bullet in enumerate(clean_bullets[:4]):
-            if idx == 0:
-                body_parts.append(f"Điểm đầu tiên cần chú ý là {bullet}.")
-            elif idx == 1:
-                body_parts.append(f"Tiếp theo, {bullet}.")
-            elif idx == 2:
-                body_parts.append(f"Ngoài ra, {bullet}.")
-            else:
-                body_parts.append(f"Cuối cùng, {bullet}.")
-        return " ".join([opener] + body_parts).strip()
+            transitions = ("To begin,", "A second point is", "This also means", "Taken together,")
+            body = [f"{transitions[idx]} {bullet}." for idx, bullet in enumerate(clean_bullets[:4])]
+            body.append("These points provide the context needed for the next part of the presentation.")
+            return " ".join(body).strip()
+        transitions = ("Trước hết,", "Điểm tiếp theo là", "Điều này cũng cho thấy", "Nhìn tổng thể,")
+        body = [f"{transitions[idx]} {bullet}." for idx, bullet in enumerate(clean_bullets[:4])]
+        body.append("Các ý trên là cơ sở để chuyển sang nội dung tiếp theo của bài trình bày.")
+        return " ".join(body).strip()
+
+    @staticmethod
+    def _speaker_notes_need_fallback(notes: str) -> bool:
+        text = re.sub(r"\s+", " ", str(notes or "")).strip()
+        if len(text.split()) < 35:
+            return True
+        return bool(
+            re.search(
+                r"\b(?:slide|trang)\s+(?:này|nay)\s+(?:giới\s+thiệu|gioi\s+thieu|trình\s+bày|trinh\s+bay|mô\s+tả|mo\s+ta|tóm\s+tắt|tom\s+tat|nhấn\s+mạnh|nhan\s+manh)\b"
+                r"|\bthis\s+slide\s+(?:introduces|presents|describes|summarizes|highlights)\b",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
 
     def _normalize_structured_content(self, structured_content: Dict[str, Any]) -> Dict[str, Any]:
         """Chuẩn hóa cấu trúc nội dung về định dạng JSON slide chuẩn.
@@ -400,7 +418,7 @@ class SlideNormalizerMixin:
                 notes = self._sanitize_inline_markup(
                     str(slide.get("script") or slide.get("speaker_notes") or slide.get("notes") or "").strip()
                 )
-                if not notes:
+                if not notes or self._speaker_notes_need_fallback(notes):
                     notes = self._build_default_speaker_notes(title_clean, bullets_clean)
                 out_slide: Dict[str, Any] = {
                     "title": title_clean,
@@ -595,7 +613,7 @@ class SlideNormalizerMixin:
             if not isinstance(notes, str):
                 notes = str(notes)
             notes = self._sanitize_inline_markup(notes.strip())
-            if not notes:
+            if not notes or self._speaker_notes_need_fallback(notes):
                 notes = self._build_default_speaker_notes(slide_title, bullets_list)
 
             out_slide = {
@@ -636,7 +654,7 @@ class SlideNormalizerMixin:
                 continue
             slide_notes = str(s.get("speaker_notes") or s.get("notes") or "").strip()
             slide_notes = self._sanitize_inline_markup(slide_notes)
-            if not slide_notes:
+            if not slide_notes or self._speaker_notes_need_fallback(slide_notes):
                 slide_notes = self._build_default_speaker_notes(str(s.get("title") or ""), s.get("bullets") or [])
             s["notes"] = slide_notes
         title_counts: Dict[str, int] = {}
