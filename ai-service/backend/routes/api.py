@@ -1148,6 +1148,20 @@ async def _build_revised_slide_spec_payload(
         explicit_chart_type_targets,
     )
 
+    from services.slide_text_quality import improve_speaker_notes_quality
+    note_slides = revised.get("slides") or []
+    for idx, spec in table_specs.items():
+        if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+            note_slides[idx]["table"] = spec
+    for idx, spec in chart_specs.items():
+        if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+            note_slides[idx]["chart"] = spec
+    revised = await improve_speaker_notes_quality(
+        content_extractor,
+        revised,
+        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+    )
+
     image_paths = None
     if want_images and wants_image_revision:
         try:

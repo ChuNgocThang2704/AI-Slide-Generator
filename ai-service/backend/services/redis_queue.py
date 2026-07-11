@@ -503,6 +503,19 @@ class RedisQueue:
                     len(structured_content.get("slides") or []),
                 ),
             )
+            from services.slide_text_quality import improve_speaker_notes_quality
+            note_slides = structured_content.get("slides") or []
+            for idx, spec in table_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["table"] = spec
+            for idx, spec in chart_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["chart"] = spec
+            structured_content = await improve_speaker_notes_quality(
+                content_extractor,
+                structured_content,
+                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            )
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
@@ -876,6 +889,20 @@ class RedisQueue:
                     slides[idx].pop("table", None)
                     slides[idx].pop("chart", None)
                     slides[idx]["layout"] = "text_image"
+
+            from services.slide_text_quality import improve_speaker_notes_quality
+            note_slides = structured_content.get("slides") or []
+            for idx, spec in table_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["table"] = spec
+            for idx, spec in chart_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["chart"] = spec
+            structured_content = await improve_speaker_notes_quality(
+                content_extractor,
+                structured_content,
+                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            )
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)

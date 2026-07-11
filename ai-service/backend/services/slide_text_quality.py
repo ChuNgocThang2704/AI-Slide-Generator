@@ -487,9 +487,9 @@ def _speaker_note_issues(slide: Dict[str, Any]) -> List[str]:
     source = " ".join([str(slide.get("title") or "")] + bullets)
     issues: List[str] = []
     word_count = len(_words(notes))
-    if word_count < 55:
+    if word_count < 65:
         issues.append("speaker_notes_too_short")
-    elif word_count > 160:
+    elif word_count > 130:
         issues.append("speaker_notes_too_long")
     if _NOTE_META_RE.search(notes):
         issues.append("speaker_notes_meta_description")
@@ -504,6 +504,40 @@ def _speaker_note_issues(slide: Dict[str, Any]) -> List[str]:
     if source_terms and len(source_terms & note_terms) < min(2, len(source_terms)):
         issues.append("speaker_notes_weak_grounding")
     return issues
+
+
+def _ground_and_trim_speaker_notes(notes: str, source: str, max_words: int = 125) -> str:
+    source_folded = unicodedata.normalize("NFKD", str(source or ""))
+    source_folded = "".join(ch for ch in source_folded if not unicodedata.combining(ch)).lower()
+    speculative_patterns = (
+        r"\bchung toi tin\b",
+        r"\btrong tuong lai\b",
+        r"\bse tiep tuc mang lai\b",
+        r"\bhua hen\b",
+        r"\bben vung\b",
+        r"\bwe believe\b",
+        r"\bin the future\b",
+        r"\bwill continue to deliver\b",
+        r"\bpromises to\b",
+        r"\bsustainable\b",
+    )
+    sentences = re.split(r"(?<=[.!?])\s+", _sanitize_inline_markup(notes))
+    kept: List[str] = []
+    word_count = 0
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        folded = unicodedata.normalize("NFKD", sentence)
+        folded = "".join(ch for ch in folded if not unicodedata.combining(ch)).lower()
+        if any(re.search(pattern, folded) and not re.search(pattern, source_folded) for pattern in speculative_patterns):
+            continue
+        sentence_words = len(_words(sentence))
+        if kept and word_count + sentence_words > max_words:
+            break
+        kept.append(sentence)
+        word_count += sentence_words
+    return " ".join(kept).strip()
 
 
 async def _gemini_review_speaker_notes(
@@ -590,9 +624,6 @@ async def _gemini_review_speaker_notes(
             continue
         if not (0 <= idx < len(improved_slides)) or not isinstance(improved_slides[idx], dict):
             continue
-        notes = _sanitize_inline_markup(item.get("notes") or "")
-        if len(_words(notes)) < 50 or len(_words(notes)) > 160 or _NOTE_META_RE.search(notes):
-            continue
         source = " ".join(
             [str(improved_slides[idx].get("title") or "")]
             + _slide_bullets_preview(improved_slides[idx], limit=6)
@@ -601,6 +632,9 @@ async def _gemini_review_speaker_notes(
                 json.dumps(improved_slides[idx].get("chart") or {}, ensure_ascii=False),
             ]
         )
+        notes = _ground_and_trim_speaker_notes(item.get("notes") or "", source)
+        if len(_words(notes)) < 50 or len(_words(notes)) > 130 or _NOTE_META_RE.search(notes):
+            continue
         source_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", source))
         note_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", notes))
         if note_numbers - source_numbers:
@@ -608,6 +642,23 @@ async def _gemini_review_speaker_notes(
         improved_slides[idx]["notes"] = notes
         changed.append(idx)
     return improved, changed
+
+
+async def improve_speaker_notes_quality(
+    content_extractor,
+    structured: Dict[str, Any],
+    *,
+    source_language: str = "auto",
+) -> Dict[str, Any]:
+    """Re-run the notes-only QA after any downstream step that may rewrite slide text."""
+    improved, changed = await _gemini_review_speaker_notes(
+        content_extractor,
+        structured,
+        source_language=source_language,
+    )
+    if changed:
+        print(f"[slide_text_quality] downstream speaker notes refined slides: {changed}")
+    return _sanitize_structured_text(improved)
 
 
 def _valid_review_slide(item: Any) -> Optional[Dict[str, Any]]:
