@@ -44,7 +44,7 @@ class SlideGenerator:
         # Fonts - dùng fonts phổ biến trên Windows
         self.font_title = "Segoe UI"
         self.font_body = "Segoe UI"
-        
+
         # Màu sắc chủ đề - Các chủ đề chuyên nghiệp
         self.themes = {
             "default": {
@@ -154,8 +154,20 @@ class SlideGenerator:
             candidate = self._clean_title(candidate).strip(".,;:!-“”‘’\"' ")
             candidate_norm = re.sub(r"\W+", " ", candidate.lower()).strip()
             if len(candidate.split()) >= 3 and candidate_norm and candidate_norm != fallback_norm:
-                return candidate[:90]
-        return fallback_clean[:90]
+                # Cắt chuỗi an toàn theo ranh giới từ (word-boundary slicing)
+                c_str = candidate.strip()
+                if len(c_str) <= 90:
+                    return c_str
+                trimmed = c_str[:90]
+                last_space = trimmed.rfind(" ")
+                return trimmed[:last_space].strip(".,;:!-“”‘’\"' ") if last_space > 0 else trimmed
+
+        fb_str = fallback_clean.strip()
+        if len(fb_str) <= 90:
+            return fb_str
+        trimmed_fb = fb_str[:90]
+        last_space_fb = trimmed_fb.rfind(" ")
+        return trimmed_fb[:last_space_fb].strip(".,;:!-“”‘’\"' ") if last_space_fb > 0 else trimmed_fb
 
     @staticmethod
     def _to_inches_f(length) -> float:

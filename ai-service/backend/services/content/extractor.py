@@ -415,6 +415,8 @@ class ContentExtractor(
             "- Divide the content into logical sections using '##' followed by the section title (e.g., '## 1. Giới thiệu').\n"
             "- For each section, write detailed paragraphs explaining the concepts, why/how, impacts, and examples. Do not write short placeholders.\n"
             "- If the user's prompt includes an outline or list of slides (e.g., Slide 1: ..., Slide 2: ...), you MUST follow this structure. For each slide in the outline, create a corresponding section '## Slide Title' and write a detailed paragraph of content (at least 80-150 words of rich information) explaining that slide's topic, so that the slide generator has actual content to extract bullets from.\n"
+            "- For a numbered slide outline, preserve the exact slide order and count. Never merge, split, reorder, or replace a requested slide.\n"
+            "- Preserve every requested visual type and its data verbatim: table headers/rows, chart labels/values/units, and image subject. Put them only in their corresponding numbered section.\n"
             f"- Generate enough sections and detail to cover roughly {target_slides} slides.\n"
             "- Write in a formal, informative, and engaging tone.\n"
             "- DO NOT output slide JSON or code blocks. Output ONLY raw text/markdown content."

@@ -382,6 +382,8 @@ def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Di
                 continue
             number = numbers[-1]
             label = chunk[:number.start()].strip(" :.-")
+            if ":" in label:
+                label = label.rsplit(":", 1)[-1].strip(" :.-")
             if not label:
                 continue
             value = _parse_float_cell(number.group(0))
@@ -457,7 +459,18 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     labels_raw = raw.get("labels") or []
     if not isinstance(labels_raw, list):
         return None
-    labels = [str(x).strip()[:38] for x in labels_raw if str(x).strip()]
+    def trim_text(value: Any, limit: int) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(text) <= limit:
+            return text
+        cut = text[:limit].rstrip()
+        if limit < len(text) and not text[limit].isspace():
+            boundary = cut.rfind(" ")
+            if boundary > max(8, limit // 2):
+                cut = cut[:boundary]
+        return cut.rstrip(" ,;:-")
+
+    labels = [trim_text(x, 38) for x in labels_raw if str(x).strip()]
     if len(labels) < 2:
         return None
     labels = labels[:_MAX_CATEGORIES]
@@ -470,7 +483,7 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         for item in series_raw[:_MAX_SERIES]:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name") or "Series").strip()[:40]
+            name = trim_text(item.get("name") or "Series", 40)
             vals_raw = item.get("values") or []
             if not isinstance(vals_raw, list):
                 continue
@@ -503,7 +516,7 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         values = values[:n]
         if is_percent:
             values = [v / 100.0 if v > 1 else v for v in values]
-        sname = str(raw.get("series_name") or raw.get("title") or "Data").strip()[:40] or "Data"
+        sname = trim_text(raw.get("series_name") or raw.get("title") or "Data", 40) or "Data"
         series_out.append({"name": sname, "values": values})
 
     if not series_out:
@@ -525,7 +538,7 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if chart_type in {"pie", "doughnut"} and len(series_out) > 1:
         series_out = [series_out[0]]
 
-    title = str(raw.get("title") or "Tổng quan số liệu").strip()[:80]
+    title = trim_text(raw.get("title") or "Tổng quan số liệu", 80)
     primary_values = series_out[0]["values"]
     return {
         "title": title,
@@ -873,15 +886,6 @@ async def build_chart_specs_for_slides(
         if planned_visual and planned_visual != "chart":
             out.pop(idx, None)
 
-    forced_chart_specs = {
-        idx: spec
-        for idx, spec in out.items()
-        if str(
-            (visual_plan or {}).get(idx)
-            or (visual_plan or {}).get(str(idx))
-            or ""
-        ).strip().lower() == "chart"
-    }
     out, debug_records = await review_visual_data_specs(
         content_extractor,
         structured,
@@ -890,10 +894,6 @@ async def build_chart_specs_for_slides(
         kind="chart",
         raw_content=raw_content,
     )
-    for idx, spec in forced_chart_specs.items():
-        if idx not in out:
-            out[idx] = spec
-
     if task_id:
         _write_debug_json(task_id, debug_records)
         _write_quality_report(task_id, debug_records)

@@ -17,6 +17,15 @@ from config import (
 )
 
 
+def _has_explicit_slide_outline(text: str) -> bool:
+    """Detect orchestration intent without interpreting domain content."""
+    numbers = {
+        int(value)
+        for value in re.findall(r"\b(?:slide|trang)\s*(?:so|thu|số|thứ)?\s*(\d+)\b", str(text or ""), re.IGNORECASE)
+    }
+    return len(numbers) >= 2
+
+
 def _resolve_plan_image_limit(
     plan: Optional[str],
     slide_count: Optional[int],
@@ -432,6 +441,17 @@ class RedisQueue:
                 user_instruction=task_data.get("user_instruction"),
                 doc_title_hint=doc_title_hint,
             )
+            user_instruction = str(task_data.get("user_instruction") or "").strip()
+            if user_instruction and _has_explicit_slide_outline(user_instruction):
+                structured_content = await content_extractor.revise_slide_deck(
+                    structured_content,
+                    "Follow this numbered slide outline exactly. Preserve the requested slide order, count, visual type, labels, values, columns, and rows. "
+                    "Do not split, merge, reorder, or omit any requested slide.\n\n" + user_instruction,
+                )
+                if force_exact_slide_count and target_slides_override:
+                    structured_content = await content_extractor._force_slide_count_exact(
+                        structured_content, int(target_slides_override)
+                    )
 
             # ── Text quality pass ─────────────────────────────────────
             from services.slide_text_quality import improve_slide_text_quality
@@ -503,7 +523,7 @@ class RedisQueue:
                     len(structured_content.get("slides") or []),
                 ),
             )
-            from services.slide_text_quality import improve_speaker_notes_quality
+            from services.slide_text_quality import improve_final_slide_quality
             note_slides = structured_content.get("slides") or []
             for idx, spec in table_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
@@ -511,9 +531,10 @@ class RedisQueue:
             for idx, spec in chart_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["chart"] = spec
-            structured_content = await improve_speaker_notes_quality(
+            structured_content = await improve_final_slide_quality(
                 content_extractor,
                 structured_content,
+                task_id=task_id,
                 source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
             )
 
@@ -890,7 +911,7 @@ class RedisQueue:
                     slides[idx].pop("chart", None)
                     slides[idx]["layout"] = "text_image"
 
-            from services.slide_text_quality import improve_speaker_notes_quality
+            from services.slide_text_quality import improve_final_slide_quality
             note_slides = structured_content.get("slides") or []
             for idx, spec in table_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
@@ -898,9 +919,10 @@ class RedisQueue:
             for idx, spec in chart_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["chart"] = spec
-            structured_content = await improve_speaker_notes_quality(
+            structured_content = await improve_final_slide_quality(
                 content_extractor,
                 structured_content,
+                task_id=task_id,
                 source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
             )
 

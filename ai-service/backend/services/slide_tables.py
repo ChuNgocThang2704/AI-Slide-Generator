@@ -418,7 +418,18 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
     rows_raw = raw.get("rows")
     if not isinstance(headers_raw, list) or not isinstance(rows_raw, list):
         return None
-    headers = [str(h).strip()[:60] for h in headers_raw if str(h).strip()]
+    def trim_text(value: Any, limit: int) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(text) <= limit:
+            return text
+        cut = text[:limit].rstrip()
+        if limit < len(text) and not text[limit].isspace():
+            boundary = cut.rfind(" ")
+            if boundary > max(8, limit // 2):
+                cut = cut[:boundary]
+        return cut.rstrip(" ,;:-")
+
+    headers = [trim_text(h, 60) for h in headers_raw if str(h).strip()]
     if len(headers) < 2:
         return None
     headers = headers[:_MAX_COLS]
@@ -427,7 +438,7 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
     for row in rows_raw:
         if not isinstance(row, (list, tuple)):
             continue
-        cells = [str(c).strip()[:_MAX_CELL_CHARS] for c in row[:ncols]]
+        cells = [trim_text(c, _MAX_CELL_CHARS) for c in row[:ncols]]
         while len(cells) < ncols:
             cells.append("")
         rows.append(cells[:ncols])
@@ -435,7 +446,7 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
             break
     if len(rows) < 1:
         return None
-    title = str(raw.get("title") or "").strip()[:100]
+    title = trim_text(raw.get("title"), 100)
     return {
         "title": title,
         "headers": headers,
@@ -726,7 +737,10 @@ async def build_table_specs_for_slides(
             continue
 
         deterministic = deterministic_table_spec_from_slide(slide)
-        if deterministic and _table_spec_has_text_evidence(deterministic, " ".join(_slide_lines(slide) + [raw_content[:2500]])):
+        # An explicitly requested table should be reconstructed by the table LLM
+        # from the requested columns and slide evidence. The generic two-column
+        # deterministic fallback loses the user's schema.
+        if planned_visual != "table" and deterministic and _table_spec_has_text_evidence(deterministic, " ".join(_slide_lines(slide) + [raw_content[:2500]])):
             out[idx] = deterministic
             debug_records.append(
                 {
@@ -819,6 +833,33 @@ async def build_table_specs_for_slides(
                 )
                 print(f"[slide_tables] slide {best_idx} table: raw comparison request {len(spec['rows'])} row(s)")
 
+    comparison_constraint = _raw_comparison_request(raw_content)
+    required_spec = (comparison_constraint or {}).get("spec")
+    if isinstance(required_spec, dict) and out:
+        required_rows = required_spec.get("rows") or []
+        constraint_is_complete = bool(required_rows) and all(
+            isinstance(row, list)
+            and len(row) == len(required_spec.get("headers") or [])
+            and all(str(cell or "").strip() for cell in row)
+            for row in required_rows
+        )
+        if constraint_is_complete:
+            eligible = [idx for idx in out if 0 <= idx < len(slides)]
+            if eligible:
+                best_idx = max(eligible, key=lambda idx: _slide_match_score(slides[idx], comparison_constraint))
+                merged = _merge_table_with_comparison_request(out[best_idx], required_spec)
+                if merged:
+                    out[best_idx] = merged
+                    debug_records.append(
+                        {
+                            "slide_index": best_idx,
+                            "title": str((slides[best_idx] or {}).get("title") or ""),
+                            "source": "explicit_table_constraint",
+                            "spec": merged,
+                            "status": "completed_before_review",
+                        }
+                    )
+
     out, debug_records = await review_visual_data_specs(
         content_extractor,
         structured,
@@ -827,94 +868,6 @@ async def build_table_specs_for_slides(
         kind="table",
         raw_content=raw_content,
     )
-
-    if not out:
-        comparison_candidate = _raw_comparison_request(raw_content)
-        spec = (comparison_candidate or {}).get("spec")
-        if isinstance(spec, dict):
-            best_idx = -1
-            best_score = -1
-            for idx, slide in enumerate(slides):
-                if not isinstance(slide, dict) or chart_intent_from_slide(slide):
-                    continue
-                planned_visual = str(
-                    (visual_plan or {}).get(idx)
-                    or (visual_plan or {}).get(str(idx))
-                    or ""
-                ).strip().lower()
-                if planned_visual and planned_visual != "table":
-                    continue
-                score = _slide_match_score(slide, comparison_candidate)
-                folded_slide = _fold_text(" ".join([str(slide.get("title") or "")] + _slide_lines(slide)))
-                if any(k in folded_slide for k in ("thu cong", "thong minh", "so sanh", "phuong an", "toc do", "chinh xac", "chi phi")):
-                    score += 4
-                if planned_visual == "table":
-                    score += 3
-                if score > best_score:
-                    best_score = score
-                    best_idx = idx
-            if best_idx >= 0:
-                out[best_idx] = spec
-                debug_records.append(
-                    {
-                        "slide_index": best_idx,
-                        "title": str((slides[best_idx] or {}).get("title") or ""),
-                        "source": "raw_comparison_request",
-                        "spec": spec,
-                        "status": "created_after_review",
-                        "match_score": best_score,
-                    }
-                )
-                print(f"[slide_tables] slide {best_idx} table: raw comparison request after review {len(spec['rows'])} row(s)")
-
-    comparison_constraint = _raw_comparison_request(raw_content)
-    required_spec = (comparison_constraint or {}).get("spec")
-    if isinstance(required_spec, dict):
-        planned_table_indices = [
-            idx
-            for idx in range(len(slides))
-            if str(
-                (visual_plan or {}).get(idx)
-                or (visual_plan or {}).get(str(idx))
-                or ""
-            ).strip().lower()
-            == "table"
-        ]
-        eligible_indices = planned_table_indices or list(out)
-        best_idx = max(
-            eligible_indices,
-            key=lambda idx: (
-                _slide_match_score(slides[idx], comparison_constraint)
-                + (
-                    3
-                    if str(
-                        (visual_plan or {}).get(idx)
-                        or (visual_plan or {}).get(str(idx))
-                        or ""
-                    ).strip().lower()
-                    == "table"
-                    else 0
-                )
-            ),
-        ) if eligible_indices else -1
-        if best_idx >= 0:
-            previous_spec = out.get(best_idx) or {}
-            merged_spec = _merge_table_with_comparison_request(previous_spec, required_spec)
-            out[best_idx] = merged_spec
-            if merged_spec != previous_spec:
-                debug_records.append(
-                    {
-                        "slide_index": best_idx,
-                        "title": str((slides[best_idx] or {}).get("title") or ""),
-                        "source": "comparison_request_constraint",
-                        "spec": merged_spec,
-                        "status": "completed_requested_rows",
-                    }
-                )
-                print(
-                    f"[slide_tables] slide {best_idx} table: enforced "
-                    f"{len(merged_spec['headers'])} header(s), {len(merged_spec['rows'])} row(s)"
-                )
 
     for idx in list(out):
         planned_visual = str(

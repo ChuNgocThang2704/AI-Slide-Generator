@@ -620,7 +620,8 @@ def _revision_prompt_add_slide_count(text: str) -> int:
 
 def _revision_prompt_delete_slide_indices(text: str, slide_count: int) -> List[int]:
     folded = _fold_revision_text(text)
-    if slide_count <= 0 or not re.search(r"\b(?:xoa|delete|remove|bo)\b", folded):
+    delete_signal = r"(?:\b(?:xoa|delete|remove)\b|\bbo\s+(?:slide|trang)\b)"
+    if slide_count <= 0 or not re.search(delete_signal, folded):
         return []
     targets: set[int] = set()
     for match in re.finditer(r"\b(?:xoa|delete|remove|bo)\s*(?:slide|trang)?\s*(?:so|thu)?\s*(\d+)\b", folded):
@@ -632,7 +633,7 @@ def _revision_prompt_delete_slide_indices(text: str, slide_count: int) -> List[i
             targets.add(idx)
     for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
         before = folded[max(0, match.start() - 60): match.start()]
-        if not re.search(r"\b(?:xoa|delete|remove|bo)\b", before):
+        if not re.search(delete_signal, before):
             continue
         try:
             idx = int(match.group(1)) - 1
@@ -674,6 +675,8 @@ def _revision_prompt_title_overrides(text: str, slide_count: int) -> Dict[int, s
         return {}
     overrides: Dict[int, str] = {}
     patterns = [
+        r"(?is)(?:slide|trang)\s*(?:s[ốo]|th[ứu])?\s*(\d+).*?(?:tiêu\s*đề|title).*?(?:thành|là|to)\s*[\"']?([^\"'.\n]+)",
+        r"(?is)(?:đổi|sửa|change|set).*?(?:tiêu\s*đề|title).*?(?:slide|trang)\s*(?:s[ốo]|th[ứu])?\s*(\d+).*?(?:thành|là|to)\s*[\"']?([^\"'.\n]+)",
         r"(?is)(?:slide|trang)\s*(?:so|thu)?\s*(\d+).*?(?:tieu\s*de|title).*?(?:thanh|la|to)\s*[\"'“”]?([^\"'“”.\n]+)",
         r"(?is)(?:doi|sua|change|set).*?(?:tieu\s*de|title).*?(?:slide|trang)\s*(?:so|thu)?\s*(\d+).*?(?:thanh|la|to)\s*[\"'“”]?([^\"'“”.\n]+)",
     ]
@@ -850,11 +853,23 @@ def _review_revised_spec_payload(
         if not (0 <= idx < len(slides)) or not isinstance(slides[idx], dict):
             continue
         table = slides[idx].get("table")
-        if fallback_table:
+        if fallback_table and not (
+            isinstance(table, dict) and table.get("headers") and table.get("rows")
+        ):
             slides[idx]["table"] = fallback_table
             table = fallback_table
             fixes.append({"type": "enforced_table_from_prompt", "slide": idx + 1})
-        if not isinstance(table, dict) or not table.get("headers") or not table.get("rows"):
+        if (
+            not isinstance(table, dict)
+            or not table.get("headers")
+            or not table.get("rows")
+            or any(
+                not isinstance(row, list)
+                or len(row) != len(table.get("headers") or [])
+                or any(not str(cell or "").strip() for cell in row)
+                for row in (table.get("rows") or [])
+            )
+        ):
             issues.append({"type": "missing_or_invalid_table", "slide": idx + 1})
         slides[idx].pop("chart", None)
         slides[idx].pop("image", None)
@@ -906,7 +921,7 @@ def _review_revised_spec_payload(
         "prompt_excerpt": str(revision_prompt or "")[:300],
         "issues": issues,
         "fixes": fixes,
-        "ok": not issues or bool(fixes),
+        "ok": not issues,
     }
     return spec_payload
 
@@ -937,6 +952,7 @@ async def _build_revised_slide_spec_payload(
         revision_prompt,
         len(old_slides),
     )
+    explicit_preserve_targets.difference_update(explicit_title_overrides.keys())
     revision_plan = await content_extractor.plan_slide_revision(
         previous_structured_content,
         revision_prompt,
@@ -951,8 +967,9 @@ async def _build_revised_slide_spec_payload(
         for idx in plan_targets
         if 0 <= idx < len(previous_structured_content.get("slides") or [])
     ]
-    if explicit_preserve_targets:
-        plan_targets = [idx for idx in plan_targets if idx not in explicit_preserve_targets]
+    # The semantic revision plan owns the edit scope. Preserve hints are applied
+    # later by restoring every slide outside plan_targets; a heuristic parser must
+    # never erase a target that the planner identified explicitly.
     if not plan_targets and target_slide_indices:
         plan_targets = list(target_slide_indices)
     if not plan_targets and explicit_title_overrides:
@@ -1006,17 +1023,23 @@ async def _build_revised_slide_spec_payload(
         revised_slides = [
             slide for slide in (revised.get("slides") or []) if isinstance(slide, dict)
         ]
-        if explicit_delete_targets and len(revised_slides) >= len(old_slides):
+        if explicit_delete_targets:
             revised_slides = [
                 dict(slide)
                 for idx, slide in enumerate(old_slides)
                 if idx not in set(explicit_delete_targets) and isinstance(slide, dict)
             ]
-        if explicit_add_count and len(revised_slides) <= len(old_slides):
+        if explicit_add_count:
+            generated_additions = (
+                revised_slides[-explicit_add_count:]
+                if len(revised_slides) > len(old_slides)
+                else []
+            )
             revised_slides = [dict(slide) for slide in old_slides if isinstance(slide, dict)]
             for add_idx in range(explicit_add_count):
+                generated = generated_additions[add_idx] if add_idx < len(generated_additions) else None
                 revised_slides.append(
-                    {
+                    dict(generated) if isinstance(generated, dict) else {
                         "title": "Loi ich trien khai" if explicit_add_count == 1 else f"Loi ich trien khai {add_idx + 1}",
                         "bullets": [
                             "Tang hieu qua van hanh va giam thoi gian xu ly.",
@@ -1057,6 +1080,8 @@ async def _build_revised_slide_spec_payload(
         for idx, title in explicit_title_overrides.items():
             slides = revised.get("slides") or []
             if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+                if idx < len(old_slides) and isinstance(old_slides[idx], dict):
+                    slides[idx] = dict(old_slides[idx])
                 slides[idx]["title"] = title
 
     for idx, slide in enumerate(revised.get("slides") or []):
@@ -1095,6 +1120,30 @@ async def _build_revised_slide_spec_payload(
         revision_prompt,
         len(revised.get("slides") or []),
     )
+    for idx in explicit_title_overrides:
+        if idx in explicit_visual_targets or idx >= len(old_slides):
+            continue
+        old_slide = old_slides[idx] if isinstance(old_slides[idx], dict) else {}
+        if isinstance(old_slide.get("table"), dict):
+            visual_plan[idx] = "table"
+        elif isinstance(old_slide.get("chart"), dict):
+            visual_plan[idx] = "chart"
+        elif old_slide.get("image_url") or "image" in str(old_slide.get("layout") or "").lower():
+            visual_plan[idx] = "image"
+        else:
+            visual_plan[idx] = "none"
+    if explicit_add_count:
+        for idx, old_slide in enumerate(old_slides):
+            if not isinstance(old_slide, dict):
+                continue
+            if isinstance(old_slide.get("table"), dict):
+                visual_plan[idx] = "table"
+            elif isinstance(old_slide.get("chart"), dict):
+                visual_plan[idx] = "chart"
+            elif old_slide.get("image_url") or "image" in str(old_slide.get("layout") or "").lower():
+                visual_plan[idx] = "image"
+            else:
+                visual_plan[idx] = "none"
     forced_table_targets: set[int] = set()
     for idx, visual in explicit_visual_targets.items():
         visual_plan[idx] = visual
@@ -1126,10 +1175,49 @@ async def _build_revised_slide_spec_payload(
         raw_content=revision_prompt or "",
         visual_plan=visual_plan,
     )
+    if forced_table_targets:
+        from services.slide_tables import normalize_table_spec
+        for idx in forced_table_targets:
+            if not (0 <= idx < len(revised.get("slides") or [])):
+                continue
+            old_table = (
+                old_slides[idx].get("table")
+                if idx < len(old_slides) and isinstance(old_slides[idx], dict)
+                else None
+            )
+            if not isinstance(old_table, dict):
+                continue
+            repaired_raw = await content_extractor.extract_table_spec(
+                {
+                    "slide": revised["slides"][idx],
+                    "context": (
+                        "Revise the existing table according to the user request. Preserve every existing header and row "
+                        "unless the request explicitly changes or removes it. Return the complete final table, never only the delta.\n\n"
+                        f"Existing table JSON:\n{json.dumps(old_table, ensure_ascii=False)}\n\n"
+                        f"User request:\n{revision_prompt}"
+                    ),
+                }
+            )
+            repaired_spec = normalize_table_spec(repaired_raw)
+            if repaired_spec:
+                headers = repaired_spec.get("headers") or []
+                for row in repaired_spec.get("rows") or []:
+                    criterion = str(row[0] or "tiêu chí này").strip() if row else "tiêu chí này"
+                    for col_idx, cell in enumerate(row):
+                        if str(cell or "").strip():
+                            continue
+                        header = str(headers[col_idx] or "Nội dung").strip() if col_idx < len(headers) else "Nội dung"
+                        row[col_idx] = (
+                            f"So sánh hai phương án theo tiêu chí {criterion}."
+                            if col_idx == len(row) - 1
+                            else f"Chưa có thông tin cho {header} theo tiêu chí {criterion}."
+                        )
+                table_specs[idx] = repaired_spec
     fallback_table = _fallback_table_from_revision_prompt(revision_prompt)
     if fallback_table:
         for idx in forced_table_targets:
-            table_specs[idx] = fallback_table
+            if idx not in table_specs:
+                table_specs[idx] = fallback_table
     chart_specs = await build_chart_specs_for_slides(
         content_extractor,
         revised,
@@ -1148,7 +1236,7 @@ async def _build_revised_slide_spec_payload(
         explicit_chart_type_targets,
     )
 
-    from services.slide_text_quality import improve_speaker_notes_quality
+    from services.slide_text_quality import improve_slide_titles_quality, improve_speaker_notes_quality
     note_slides = revised.get("slides") or []
     for idx, spec in table_specs.items():
         if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
@@ -1156,6 +1244,11 @@ async def _build_revised_slide_spec_payload(
     for idx, spec in chart_specs.items():
         if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
             note_slides[idx]["chart"] = spec
+    revised = await improve_slide_titles_quality(
+        content_extractor,
+        revised,
+        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+    )
     revised = await improve_speaker_notes_quality(
         content_extractor,
         revised,
@@ -1680,9 +1773,16 @@ async def revise_slide_spec(
             target_slide_indices=target_slide_indices,
             target_slide_numbers=target_slide_numbers,
         )
+        has_explicit_target_fields = any(
+            value is not None and str(value).strip()
+            for value in (slide_index, slide_number, target_slide_indices, target_slide_numbers)
+        )
         preserve_indices = set(_revision_prompt_preserve_slide_indices(prompt, source_slide_count))
-        if preserve_indices:
+        if preserve_indices and not has_explicit_target_fields:
             target_indices = [idx for idx in target_indices if idx not in preserve_indices]
+        explicit_title_targets = set(_revision_prompt_title_overrides(prompt, source_slide_count))
+        if explicit_title_targets:
+            target_indices = sorted(set(target_indices) | explicit_title_targets)
         scope_norm = (revision_scope or "auto").strip().lower()
         if scope_norm in {"deck", "full", "all"}:
             target_indices = []
