@@ -241,11 +241,16 @@ Fields:
 | Field | Required | Description |
 |---|---:|---|
 | `revisionPrompt` | Yes | Natural-language edit request. |
-| `revisionScope` | No | `auto`, `slide`, or `deck`. Default/recommended: `auto`. |
-| `slideNumber` | No | 1-based slide number. Useful when FE selected a slide. |
-| `slideIndex` | No | 0-based slide index. |
+| `revisionScope` | No | `auto`, `slide`, or `deck`. Use `slide` for a selected slide, `deck` for an explicit full-deck rewrite, otherwise `auto`. |
+| `slideNumber` | No | 1-based selected slide number. Preferred when FE selected a slide. |
+| `slideIndex` | No | 0-based selected slide index. Do not send together with `slideNumber`. |
 | `imageLimit` | No | Optional cap for regenerated images. |
 | `generateImages` | No | Deprecated for FE. AI Service defaults to image generation enabled. |
+
+Structured target fields take precedence over slide numbers inferred from
+`revisionPrompt`. The current BE DTO supports one structured target. For a
+multi-slide edit, put all target slide numbers in `revisionPrompt` and use
+`revisionScope="auto"`.
 
 Response:
 
@@ -268,6 +273,10 @@ After submit:
 2. When completed, call GET /api/document/projects/{id}/pages
 3. Replace FE slide state with the new pages
 ```
+
+BE persists the complete revised deck. FE must reload `/pages`; it must not
+merge a revision delta locally. Slides outside a single-slide target are
+preserved, including text, table, chart, image, and layout.
 
 Supported behavior:
 

@@ -835,3 +835,16 @@ Nếu muốn reset sạch database Docker local, lệnh sau sẽ xóa cả volum
 docker compose down -v
 docker compose up -d --build
 ```
+
+## Documentation Source Of Truth
+
+This file describes the overall architecture, databases, and local operations.
+It is not the request/response contract used by FE.
+
+- FE quick start: `README_FE_API.md`
+- FE -> Java BE contract: `fe_api_spec.md`
+- Java BE -> Python AI contract: `ai-service/api_specification.md`
+- AI Service setup and operation: `ai-service/README.md`
+
+If an architectural example differs from an API contract, the corresponding
+contract file above is authoritative.

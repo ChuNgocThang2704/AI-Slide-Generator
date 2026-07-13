@@ -7,6 +7,9 @@ Detailed API contract:
 - [fe_api_spec.md](./fe_api_spec.md)
 - [back-end/document-service/document_api_spec.md](./back-end/document-service/document_api_spec.md)
 
+`fe_api_spec.md` is the source of truth for FE request/response fields. This
+README is only the quick-start checklist.
+
 ## Base URL
 
 Local gateway:
@@ -34,6 +37,11 @@ POST /api/document/projects/{projectId}/revise
 GET  /api/document/projects/{projectId}/progress
 GET  /api/document/projects/{projectId}/pages
 ```
+
+When FE has one selected slide, send `revisionScope="slide"` and the 1-based
+`slideNumber`. For multi-slide natural-language edits, send the slide numbers in
+`revisionPrompt` with `revisionScope="auto"`. For a full-deck rewrite, send
+`revisionScope="deck"` without a slide target.
 
 ## FE Responsibilities
 
@@ -113,3 +121,7 @@ Xoa slide 3 vi noi dung chua can thiet, giu cac slide con lai.
 - Add slide.
 - Delete slide.
 - Apply small literal title edit.
+- Preserve text and visual fields outside the requested scope.
+- Revise multiple slides named in the prompt.
+- Revise a full deck while preserving requested chart data.
+- Return complete non-empty table/chart specs after revise.
