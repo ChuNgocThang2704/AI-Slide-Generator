@@ -274,11 +274,18 @@ Field notes:
 | Field | Required | Description |
 |---|---:|---|
 | `revisionPrompt` | Yes | Natural-language edit request. |
-| `revisionScope` | No | `auto`, `slide`, or `deck`. FE should usually omit it or send `auto`. |
-| `slideNumber` | No | 1-based slide number. Useful when FE has a selected slide. |
-| `slideIndex` | No | 0-based slide index. |
+| `revisionScope` | No | `auto`, `slide`, or `deck`. Send `slide` when the editor has one selected slide; use `deck` only for an explicit full-deck rewrite. |
+| `slideNumber` | No | 1-based selected slide number. Prefer this field when FE has a selected slide. |
+| `slideIndex` | No | 0-based selected slide index. Do not send both `slideIndex` and `slideNumber`. |
 | `imageLimit` | No | Optional image-generation cap. |
 | `generateImages` | No | Deprecated for FE. Do not send unless intentionally disabling image generation. |
+
+Target precedence:
+
+- A structured `slideNumber`/`slideIndex` from FE takes precedence over slide numbers inferred from text.
+- For one selected slide, send `revisionScope="slide"` and `slideNumber`.
+- For edits mentioning multiple slides, current Java BE has no multi-target array field. Send the slide numbers in `revisionPrompt` with `revisionScope="auto"`.
+- For a full-deck rewrite, send `revisionScope="deck"` and omit slide target fields.
 
 Response when submitted:
 
@@ -324,9 +331,14 @@ Xoa slide 3 vi noi dung chua can thiet, giu cac slide con lai.
 
 Behavior:
 
-- If user asks to edit one slide, AI Service preserves the other slides.
-- If user asks to add/delete/split/merge/reorder slides, slide count may change.
-- If user asks for a small literal edit, for example title replacement, AI Service should apply it exactly.
+- If user asks to edit one slide, AI Service preserves every other slide, including text, table, chart, image, and layout.
+- A title-only request changes only the title field unless the prompt explicitly requests another change.
+- Table revisions return the complete final table, not a row/cell delta; FE renders the returned headers and rows as-is.
+- Chart revisions return the complete final chart, including type, labels, values/series, and unit.
+- Image revisions keep slide text unchanged unless the prompt also asks to edit text.
+- If user asks to add a slide, old slides are preserved and the new slide is appended.
+- If user asks to delete a slide, remaining slides are preserved and their indexes are normalized.
+- Split/merge/reorder/full-deck requests may change multiple slides or the slide count.
 - After revise, BE replaces `slide_pages` with the new AI result. FE should reload pages.
 
 ## 5. Table Schema
@@ -571,6 +583,8 @@ Delete body:
 - FE should reload `/pages` after every successful revise.
 - FE should not expose controls for slide count, image count, table/chart/image mode unless product requires it later.
 - User-facing revise UI can be a single text box plus an optional selected slide context.
-- For a selected slide, FE may send `slideNumber`; AI Service can also infer slide number from prompt.
+- For a selected slide, FE should send `revisionScope="slide"` and `slideNumber`; AI Service can infer scope only when no structured target is available.
+- Do not merge a revise delta in FE. After completion, replace local slide state with the latest `/pages` response.
+- Use the same project for subsequent revisions; BE tracks the newest completed AI task internally.
 - FE should handle `table`, `chart`, and `imageUrl` as optional nullable fields.
 - FE should not infer table/chart from bullet text. Use the structured fields only.
