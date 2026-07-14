@@ -137,6 +137,20 @@ async def improve_deck_source_grounding(
             print(f"[slide_quality] source grounding skipped: invalid deck for task {task_id}")
             return structured
         normalized = content_extractor._normalize_structured_content(reviewed)
+        from services.slide_text_quality import (
+            improve_slide_titles_quality,
+            improve_speaker_notes_quality,
+        )
+        normalized = await improve_slide_titles_quality(
+            content_extractor,
+            normalized,
+            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        )
+        normalized = await improve_speaker_notes_quality(
+            content_extractor,
+            normalized,
+            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        )
         print(f"[slide_quality] source grounding applied for task {task_id}")
         return normalized
     except Exception as e:

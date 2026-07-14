@@ -155,6 +155,29 @@ _VN_DIACRITIC_SAFE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_VN_ASCII_LANGUAGE_PATTERNS = (
+    r"\btao\b",
+    r"\btrinh\s+bay\b",
+    r"\bhe\s+thong\b",
+    r"\bquan\s+ly\b",
+    r"\bbat\s+buoc\b",
+    r"\bbang\s+so\s+sanh\b",
+    r"\btieu\s+chi\b",
+    r"\bnhan\s+xet\b",
+    r"\btoc\s+do\b",
+    r"\bxu\s+ly\b",
+    r"\bchi\s+phi\b",
+    r"\bvan\s+hanh\b",
+    r"\btrai\s+nghiem\b",
+    r"\bsinh\s+vien\b",
+    r"\bbieu\s+do\b",
+    r"\bket\s+luan\b",
+    r"\bhinh\s+anh\b",
+    r"\bnoi\s+dung\b",
+    r"\bchinh\s+sua\b",
+    r"\bgiu\s+nguyen\b",
+)
+
 AUTO_MIN_SLIDES = 5
 
 
@@ -250,6 +273,12 @@ class ContentExtractor(
             return explicit
         if len(t) < 24:
             return "auto"
+        folded = self._fold_language_text(t)
+        ascii_vn_hits = sum(
+            1 for pattern in _VN_ASCII_LANGUAGE_PATTERNS if re.search(pattern, folded, flags=re.IGNORECASE)
+        )
+        if ascii_vn_hits >= 3:
+            return "vi"
         vn_hits = len(_VN_DIACRITIC_SAFE_RE.findall(t))
         letters = sum(1 for c in t if c.isalpha())
         if letters < 15:
@@ -386,6 +415,8 @@ class ContentExtractor(
             "- Divide the content into logical sections using '##' followed by the section title (e.g., '## 1. Giới thiệu').\n"
             "- For each section, write detailed paragraphs explaining the concepts, why/how, impacts, and examples. Do not write short placeholders.\n"
             "- If the user's prompt includes an outline or list of slides (e.g., Slide 1: ..., Slide 2: ...), you MUST follow this structure. For each slide in the outline, create a corresponding section '## Slide Title' and write a detailed paragraph of content (at least 80-150 words of rich information) explaining that slide's topic, so that the slide generator has actual content to extract bullets from.\n"
+            "- For a numbered slide outline, preserve the exact slide order and count. Never merge, split, reorder, or replace a requested slide.\n"
+            "- Preserve every requested visual type and its data verbatim: table headers/rows, chart labels/values/units, and image subject. Put them only in their corresponding numbered section.\n"
             f"- Generate enough sections and detail to cover roughly {target_slides} slides.\n"
             "- Write in a formal, informative, and engaging tone.\n"
             "- DO NOT output slide JSON or code blocks. Output ONLY raw text/markdown content."
@@ -1033,7 +1064,7 @@ class ContentExtractor(
             "1. Return ONLY valid JSON—no text before or after the JSON object.\n"
             "2. No markdown code fences.\n"
             "3. Schema:\n"
-            "{\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"\"}]}\n\n"
+            "{\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"70-120 word presenter narration\"}]}\n\n"
             "DECK TITLE (top-level \"title\" field):\n"
             "- Must be a comprehensive title that describes the WHOLE presentation (e.g. \"Phân mảnh Dữ liệu trong CSDL Phân tán\", \"AI Applications in Healthcare\").\n"
             "- NEVER use a chapter heading (\"Mở đầu\", \"Giới thiệu\", \"Introduction\", \"Chapter 1\") as the deck title.\n"
@@ -1054,6 +1085,12 @@ class ContentExtractor(
             "- If token budget is tight, finish the JSON structure; never truncate mid-sentence inside a bullet.\n"
             "- Each slide = one clear subtopic.\n"
             "- SLIDE TITLES: Never use generic placeholders ('Nội dung', 'Nội dung 1', 'Slide 1', 'Tiếp theo'). Each slide title must be specific and descriptive of its content.\n\n"
+            "SPEAKER NOTES:\n"
+            "- Every slide must include 70-120 words of natural, ready-to-speak narration in the slide's language.\n"
+            "- Notes must be grounded only in that slide's title, bullets, numbers, table, or chart; do not invent facts.\n"
+            "- Explain context, meaning, and significance without reading bullets verbatim.\n"
+            "- Never write meta descriptions such as 'Slide này trình bày...' or 'This slide presents...'.\n"
+            "- Add a brief transition to the next idea when appropriate, without mentioning slide numbers.\n\n"
             + ANTI_TRUNCATION_TOKEN_RULE
             + "\n"
             "GOOD bullet examples (illustrative style—use the source language in actual output):\n"
@@ -1130,7 +1167,7 @@ class ContentExtractor(
             + self._output_language_instruction()
             + "HARD RULES:\n"
             "1. Return ONLY JSON—no text outside the JSON object.\n"
-            "2. Schema: {\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"\"}]}\n"
+            "2. Schema: {\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"70-120 word presenter narration\"}]}\n"
             f"3. Each bullet: complete sentence, min ~10 words and ~45 chars, target ~10–18 words, hard max {MAX_WORDS_PER_BULLET} words, ends with a period; keep names, numbers, technical terms, function names exactly as in source; if an idea is long, use two bullets.\n"
             f"4. Each slide: 3–{MAX_BULLETS_PER_SLIDE} bullets (prefer 3–4 when tight on length); use {MAX_BULLETS_PER_SLIDE} only when every bullet stays short and complete.\n"
             f"5. The source has about {section_count} major sections.\n"
@@ -1139,9 +1176,10 @@ class ContentExtractor(
             "8. SLIDE TITLES: Never use generic placeholders ('Nội dung', 'Nội dung 1', 'Slide 1', 'Tiếp theo'). Every slide title must be specific and meaningful.\n"
             "9. DECK TITLE (top-level \"title\"): Must describe the WHOLE presentation topic—NEVER use a chapter/section heading (\"Mở đầu\", \"Giới thiệu\", \"Introduction\"). Include the core subject or group name if available (e.g. \"Phân mảnh CSDL Phân tán — Nhóm 17\").\n"
             "10. SPECIFICITY (CRITICAL): Every bullet must contain at least one concrete detail—a function name, algorithm name, number, measurement, or specific result. Generic filler sentences with no technical content are NOT allowed.\n"
+            "11. SPEAKER NOTES: For every slide, write 70-120 words of natural ready-to-speak narration grounded only in its title and bullets. Explain meaning and significance, do not copy bullets, do not invent facts, avoid 'Slide này trình bày'/'This slide presents', and add a short transition when appropriate.\n"
             + ANTI_TRUNCATION_TOKEN_RULE
             + "\n"
-            + (f"11. {outline_rule}" if outline_rule else "")
+            + (f"12. {outline_rule}" if outline_rule else "")
         )
         user_msg = (
             "Below is a summary by major sections (##). Compose the final deck.\n"

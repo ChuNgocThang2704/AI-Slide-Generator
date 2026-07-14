@@ -5,12 +5,10 @@ const API =
     ? 'http://localhost:8000'
     : window.location.origin
 
-const DEFAULT_PLAN = 'pro'
-
 const PLAN_CONFIG = {
-  free: { label: 'Free', maxSlides: 10, maxImages: 5, maxChars: 10000 },
-  pro: { label: 'Pro', maxSlides: 30, maxImages: 15, maxChars: 50000 },
-  ultra: { label: 'Ultra', maxSlides: 50, maxImages: 35, maxChars: 100000 },
+  free: { label: 'Free', maxSlides: 10, maxImages: 5, maxChars: 10000, maxRevisions: 2 },
+  pro: { label: 'Pro', maxSlides: 30, maxImages: 15, maxChars: 50000, maxRevisions: 10 },
+  ultra: { label: 'Ultra', maxSlides: 50, maxImages: 35, maxChars: 100000, maxRevisions: 30 },
 }
 
 function SlidePreview({ deck }) {
@@ -45,10 +43,76 @@ function SlidePreview({ deck }) {
                 <li key={i}>{b}</li>
               ))}
             </ul>
+            {slide.table && <SlideTable table={slide.table} />}
+            {slide.chart && <SlideChart chart={slide.chart} />}
             {slide.image?.url && <SlideImage image={slide.image} />}
             {slide.notes && <p className="notes">{slide.notes}</p>}
           </article>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function SlideTable({ table }) {
+  const headers = Array.isArray(table?.headers) ? table.headers : []
+  const rows = Array.isArray(table?.rows) ? table.rows : []
+  if (!headers.length && !rows.length) return null
+
+  return (
+    <div className="data-box">
+      {table.title && <strong>{table.title}</strong>}
+      <div className="table-wrap">
+        <table>
+          {!!headers.length && (
+            <thead>
+              <tr>
+                {headers.map((header, idx) => (
+                  <th key={idx}>{header}</th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {rows.map((row, rowIdx) => (
+              <tr key={rowIdx}>
+                {(Array.isArray(row) ? row : [row]).map((cell, cellIdx) => (
+                  <td key={cellIdx}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function SlideChart({ chart }) {
+  const type = chart?.chart_type || chart?.type || 'chart'
+  const labels = chart?.labels || chart?.categories || []
+  const values = chart?.values || chart?.series?.[0]?.values || []
+  const maxValue = Math.max(...values.map((v) => Number(v) || 0), 1)
+
+  return (
+    <div className="data-box">
+      <div className="chart-head">
+        <strong>{chart?.title || 'Chart'}</strong>
+        <span>{type}</span>
+      </div>
+      <div className="chart-bars">
+        {labels.map((label, idx) => {
+          const value = Number(values[idx]) || 0
+          return (
+            <div className="chart-row" key={`${label}-${idx}`}>
+              <small>{label}</small>
+              <div>
+                <span style={{ width: `${Math.max(8, (value / maxValue) * 100)}%` }} />
+              </div>
+              <em>{values[idx]}</em>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -205,6 +269,7 @@ function useSpecTasks() {
 }
 
 export default function App() {
+  const [plan, setPlan] = useState('pro')
   const [tab, setTab] = useState('text')
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
@@ -212,7 +277,7 @@ export default function App() {
   const [revisionPrompt, setRevisionPrompt] = useState('')
   const { activeTaskId, busy, cancel, progress, reviseSpec, spec, status, submitSpec } = useSpecTasks()
 
-  const cfg = PLAN_CONFIG[DEFAULT_PLAN]
+  const cfg = PLAN_CONFIG[plan]
   const deck = spec?.deck
   const sourceTaskId = spec?.task_id
   const charCount = text.trim().length
@@ -228,8 +293,7 @@ export default function App() {
 
   const buildBaseForm = () => {
     const fd = new FormData()
-    fd.append('plan', DEFAULT_PLAN)
-    fd.append('generate_images', 'true')
+    fd.append('plan', plan)
     return fd
   }
 
@@ -257,8 +321,7 @@ export default function App() {
     fd.append('source_task_id', sourceTaskId)
     fd.append('revision_prompt', revisionPrompt)
     fd.append('revision_scope', 'auto')
-    fd.append('plan', DEFAULT_PLAN)
-    fd.append('generate_images', 'true')
+    fd.append('plan', plan)
     reviseSpec(fd)
   }
 
@@ -290,6 +353,30 @@ export default function App() {
               Check ket noi
             </button>
             <span>{checkMsg || 'Backend chua check | vLLM chua check'}</span>
+          </div>
+
+          <div className="field">
+            <label>Goi kiem thu</label>
+            <div className="segmented" role="group" aria-label="Goi kiem thu">
+              {Object.entries(PLAN_CONFIG).map(([key, item]) => (
+                <button
+                  className={plan === key ? 'active' : ''}
+                  disabled={busy}
+                  key={key}
+                  onClick={() => setPlan(key)}
+                  type="button"
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="plan-badge">
+              <strong>{cfg.label}</strong>
+              <span>
+                Toi da {cfg.maxSlides} slide, {cfg.maxImages} anh, {cfg.maxChars.toLocaleString()} ky tu;
+                {` ${cfg.maxRevisions} luot sua/ngay qua BE.`}
+              </span>
+            </div>
           </div>
 
           <div className="tabs">

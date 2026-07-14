@@ -119,8 +119,9 @@ async def review_visual_data_specs(
     else:
         review_rule = (
             "PASS only if the table spec is supported by an explicit markdown/grid table or repeated structured "
-            "key-value/comparison data. Reject prose summaries converted into a two-column table, especially "
-            "history/theory paragraphs with no table intent."
+            "key-value/comparison data. An explicit user request for a table with named columns or rows counts as table intent; "
+            "PASS when the returned schema follows that request and every cell is supported by the request or slide text. "
+            "Reject generic two-column prose conversions, empty cells, and history/theory paragraphs with no table intent."
         )
 
     payload = {
@@ -165,6 +166,23 @@ async def review_visual_data_specs(
         if not isinstance(idx, int) or idx not in decisions:
             continue
         decision = decisions[idx]
+        if kind_norm == "table" and decision.get("pass"):
+            spec = specs.get(idx) or {}
+            rows = spec.get("rows") or []
+            headers = spec.get("headers") or []
+            if (
+                len(headers) < 2
+                or not rows
+                or any(
+                    not isinstance(row, list)
+                    or len(row) != len(headers)
+                    or any(not str(cell or "").strip() for cell in row)
+                    for row in rows
+                )
+            ):
+                decision = dict(decision)
+                decision["pass"] = False
+                decision["reason"] = "Table contains an incomplete row or empty cell"
         rec[f"{kind_norm}_review"] = decision
         if not decision.get("pass"):
             filtered.pop(idx, None)

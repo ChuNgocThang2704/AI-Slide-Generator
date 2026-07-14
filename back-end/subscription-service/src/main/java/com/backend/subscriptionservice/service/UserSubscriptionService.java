@@ -404,6 +404,9 @@ public class UserSubscriptionService {
         } else if (Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE.equals(featureKey)) {
             return "Số ảnh tối đa mỗi slide";
         }
+        if (Constants.FEATURE_KEY.MAX_REVISIONS_PER_DAY.equals(featureKey)) {
+            return "Số lần sửa slide trong ngày";
+        }
         return featureKey;
     }
 }

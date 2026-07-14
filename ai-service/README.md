@@ -372,6 +372,31 @@ vllm serve Qwen/Qwen3-8B \
   --enable-prefix-caching
 ```
 
+## JSON Spec API For BE/FE
+
+Create a deck:
+
+```text
+POST /api/generate-slide-spec
+multipart/form-data: text or file, plan, slide_count, generate_images, image_limit
+```
+
+Revise a completed deck:
+
+```text
+POST /api/revise-slide-spec
+multipart/form-data: source_task_id, revision_prompt, revision_scope,
+slide_number or target_slide_numbers, generate_images, image_limit
+```
+
+Poll `GET /api/status/{task_id}` until `status=completed`, then replace the FE
+deck with `result.deck`. Do not merge a client-side delta. When the target slide
+is known, send `revision_scope=slide` with `slide_number` (1-based) or
+`target_slide_numbers`. Slides outside the target are preserved. Use the newest
+completed `task_id` as the next `source_task_id`.
+
+See `api_specification.md` for request fields and JSON schemas.
+
 ## License
 
 MIT

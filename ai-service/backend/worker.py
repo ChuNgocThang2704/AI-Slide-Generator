@@ -50,6 +50,10 @@ class TaskWorker:
 
     def __init__(self):
         self.redis_queue = RedisQueue()
+        # Queue tasks reuse the generation/revision pipelines defined by the API
+        # module, so initialize their stateful collaborators in this process too.
+        from routes.api import initialize_api_services
+        initialize_api_services(self.redis_queue)
         self._stop_event = asyncio.Event()
 
     async def start(self):

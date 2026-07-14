@@ -1,6 +1,7 @@
 """Kiểm tra chất lượng và tinh chỉnh giới hạn cho văn bản slide đã được tạo."""
 from __future__ import annotations
 
+import asyncio
 import copy
 import html
 import json
@@ -15,14 +16,69 @@ from services.content.json_utils import parse_json_response
 _DEBUG_DIR = Path("outputs") / "debug"
 _GEMINI_REVIEW_ENABLE = os.getenv("TEXT_GEMINI_REVIEW_ENABLE", "true").lower() in ("1", "true", "yes")
 _GEMINI_REVIEW_MAX_SLIDES = int(os.getenv("TEXT_GEMINI_REVIEW_MAX_SLIDES", "8"))
-_WEAK_TAIL_WORDS = {
-    "và", "hoặc", "của", "cho", "với", "từ", "đến", "trong", "nhằm",
-    "and", "or", "of", "for", "with", "to", "from", "in", "by",
-}
-_STOP_TERMS = {
-    "và", "hoặc", "của", "cho", "với", "trong", "những", "các", "một",
-    "and", "or", "of", "for", "with", "from", "into", "this", "that",
-}
+_SPEAKER_NOTES_REVIEW_MAX_SLIDES = int(os.getenv("SPEAKER_NOTES_REVIEW_MAX_SLIDES", "12"))
+
+
+def _normalize_for_match(text: str) -> str:
+    """Strip diacritics → lowercase để so sánh content-aware không phân biệt dấu."""
+    nfd = unicodedata.normalize("NFD", str(text or ""))
+    return "".join(ch for ch in nfd if unicodedata.category(ch) != "Mn").replace("đ", "d").replace("Đ", "D").lower()
+
+
+def _title_is_truncated_bullet(title: str, bullets: List[str]) -> bool:
+    """True nếu title là tiền tố bị cắt cụt (hoặc cắt dở từ) của một bullet.
+
+    Giải quyết 2 kịch bản hoàn toàn sạch bóng từ cứng:
+      1. Cắt dở từ cuối: "critic" vs "critical" (so khớp prefix của từ cuối).
+      2. Cắt trọn từ nhưng là mảnh câu dài của bullet (độ dài >= 5 từ và là proper prefix).
+    """
+    title_words = re.findall(r"[\w\u00C0-\u1EF9]+", _normalize_for_match(title))
+    if len(title_words) < 3:
+        return False
+
+    for bullet in (bullets or []):
+        b_words = re.findall(r"[\w\u00C0-\u1EF9]+", _normalize_for_match(str(bullet or "")))
+        if len(b_words) < len(title_words):
+            continue
+
+        # Kiểm tra xem tất cả các từ trước từ cuối cùng có khớp hoàn toàn không
+        slice_len = len(title_words)
+        match_all_except_last = True
+        for i in range(slice_len - 1):
+            if title_words[i] != b_words[i]:
+                match_all_except_last = False
+                break
+
+        if match_all_except_last:
+            last_title_word = title_words[-1]
+            last_bullet_word = b_words[slice_len - 1]
+
+            # Kịch bản 1: Trùng khít hoàn toàn tiền tố
+            if last_title_word == last_bullet_word:
+                # Nếu nó là proper prefix (bullet còn các từ tiếp theo phía sau)
+                # và độ dài của phần trùng khớp này >= 5 từ -> chắc chắn là mảnh câu bị copy cụt
+                if len(b_words) > slice_len and slice_len >= 5:
+                    normalized_title = re.sub(r"\s+", " ", _normalize_for_match(title)).strip()
+                    normalized_bullet = re.sub(r"\s+", " ", _normalize_for_match(str(bullet or ""))).strip()
+                    if normalized_bullet.startswith(normalized_title):
+                        remainder = normalized_bullet[len(normalized_title):].lstrip()
+                        # Một mệnh đề kết thúc ngay trước dấu ngắt có thể là title hoàn chỉnh.
+                        if remainder.startswith((",", ";", ":", "-", "–", "—")):
+                            continue
+                        semantic_extensions = (
+                            "trong ", "voi ", "nham ", "de ", "thong qua ", "tu do ",
+                            "in ", "with ", "through ", "to ", "for ",
+                        )
+                        dangling_tail = {"doi", "thuoc", "giua", "between", "according"}
+                        if remainder.startswith(semantic_extensions) and last_title_word not in dangling_tail:
+                            continue
+                    return True
+            # Kịch bản 2: Từ cuối của tiêu đề bị cắt dở (ví dụ: critic là tiền tố của critical)
+            elif last_bullet_word.startswith(last_title_word) and len(last_title_word) >= 2:
+                return True
+    return False
+
+
 _VN_DIACRITIC_RE = re.compile(
     r"[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđĐ]"
 )
@@ -52,11 +108,6 @@ _VN_DIACRITIC_SAFE_RE = re.compile(
 
 def _words(text: str) -> List[str]:
     return re.findall(r"[\wÀ-ỹ-]+", text or "", flags=re.UNICODE)
-
-
-def _is_weak_tail(text: str) -> bool:
-    tokens = _words(text.lower())
-    return bool(tokens and tokens[-1] in _WEAK_TAIL_WORDS)
 
 
 def _clean_json_text(text: str) -> str:
@@ -143,7 +194,16 @@ def _sanitize_structured_text(structured: Dict[str, Any]) -> Dict[str, Any]:
     return structured
 
 
-def _is_suspicious_title(title: str) -> bool:
+def _is_suspicious_title(title: str, bullets: Optional[List[str]] = None) -> bool:
+    """True nếu title có dấu hiệu bị cắt cụt hoặc không hoàn chỉnh.
+
+    Chỉ dùng 2 loại kiểm tra, cả 2 đều không hardcode từ nào:
+      1. Quy tắc cấu trúc: rỗng, quá ngắn (<3 từ), quá dài (>14 từ),
+         kết thúc bằng dấu câu gây gián đoạn.
+      2. Content-aware: title là tiền tố chính xác của một bullet
+         → chắc chắn bị cắt, khữi quan tâm từ cuối là gì.
+    Gemini review là final gate cho mọi trường hợp còn lại.
+    """
     t = re.sub(r"\s+", " ", str(title or "").strip())
     if not t:
         return True
@@ -152,9 +212,9 @@ def _is_suspicious_title(title: str) -> bool:
         return True
     if len(tokens) > 14:
         return True
-    if _is_weak_tail(t):
+    if re.search(r"[,;:/\\\-\u2013\u2014]\s*$", t):
         return True
-    if re.search(r"[,;:/\\\-–—]\s*$", t):
+    if bullets and _title_is_truncated_bullet(t, bullets):
         return True
     return False
 
@@ -198,10 +258,16 @@ def _derive_title_from_bullets(
 ) -> str:
     seen = seen or set()
     fallback_clean = str(fallback or "").strip()
-    for raw in bullets or []:
+    bullet_texts = [str(raw or "") for raw in (bullets or [])]
+    for raw in bullet_texts:
         cand = _candidate_title_from_text(str(raw or ""))
         key = _norm_title_key(cand)
-        if len(_words(cand)) >= 3 and key and key not in seen and not _is_suspicious_title(cand):
+        if (
+            len(_words(cand)) >= 3
+            and key
+            and key not in seen
+            and not _is_suspicious_title(cand, bullets=bullet_texts)
+        ):
             return cand
     return fallback_clean[:120]
 
@@ -217,7 +283,8 @@ def _repair_titles_after_review(structured: Dict[str, Any]) -> List[int]:
             continue
         title = str(slide.get("title") or "").strip()
         key = _norm_title_key(title)
-        needs_fix = not key or key in seen or _is_suspicious_title(title)
+        bullets_list = slide.get("bullets") or slide.get("content") or []
+        needs_fix = not key or key in seen or _is_suspicious_title(title, bullets=bullets_list)
         if needs_fix:
             new_title = _derive_title_from_bullets(
                 slide.get("bullets") or slide.get("content") or [],
@@ -239,7 +306,8 @@ def _key_terms(text: str, limit: int = 8) -> List[str]:
     out: List[str] = []
     for token in _words((text or "").lower()):
         t = token.strip("-_")
-        if len(t) < 3 or t in _STOP_TERMS or t.isdigit():
+        # Lọc các từ quá ngắn (len < 4) tự động loại bỏ hầu hết các từ nối/từ dừng (và, của, cho, and, the, for...)
+        if len(t) < 4 or t.isdigit():
             continue
         if t not in out:
             out.append(t)
@@ -310,7 +378,7 @@ def _score_slide_text(slide: Dict[str, Any], source_language: str = "auto") -> T
     if len(_words(title)) < 2:
         score -= 0.15
         issues.append("weak_title")
-    if _is_suspicious_title(title):
+    if _is_suspicious_title(title, bullets=bullets):
         score -= 0.16
         issues.append("suspicious_title")
     if len(bullets) < 3:
@@ -325,17 +393,23 @@ def _score_slide_text(slide: Dict[str, Any], source_language: str = "auto") -> T
         score -= 0.28
         issues.extend(language_issues)
 
+    note_issues = _speaker_note_issues(slide)
+    if note_issues:
+        score -= min(0.24, 0.08 * len(note_issues))
+        issues.extend(note_issues)
+
     seen = set()
+    has_structured_visual = isinstance(slide.get("table"), dict) or isinstance(slide.get("chart"), dict)
     for idx, bullet in enumerate(bullets):
         wc = len(_words(bullet))
         key = re.sub(r"\W+", " ", bullet.lower()).strip()
-        if wc < 6:
+        if wc < 6 and not has_structured_visual:
             score -= 0.08
             issues.append(f"short_bullet_{idx}")
         if wc > 32:
             score -= 0.08
             issues.append(f"long_bullet_{idx}")
-        if _is_weak_tail(bullet) or bullet.endswith(("...", "…")):
+        if bullet.endswith(("...", "…", ",", ";", ":", "-", "–", "—")):
             score -= 0.12
             issues.append(f"incomplete_bullet_{idx}")
         if key and key in seen:
@@ -430,6 +504,18 @@ def _write_text_quality_report(
         print(f"[slide_text_quality] quality report error: {e}")
 
 
+def write_final_text_quality_report(
+    structured: Dict[str, Any],
+    *,
+    task_id: str,
+    source_language: str = "auto",
+) -> List[Dict[str, Any]]:
+    """Evaluate the exact final JSON and overwrite any earlier interim report."""
+    records = _evaluate_deck(structured, source_language=source_language)
+    _write_text_quality_report(task_id, records, [], source_language=source_language)
+    return records
+
+
 def _slide_subset_for_review(structured: Dict[str, Any], records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     slides = structured.get("slides") or []
     selected: List[Dict[str, Any]] = []
@@ -439,6 +525,9 @@ def _slide_subset_for_review(structured: Dict[str, Any], records: List[Dict[str,
             continue
         issues = set(rec.get("issues") or [])
         score = float(rec.get("score") or 0.0)
+        non_note_issues = {issue for issue in issues if not str(issue).startswith("speaker_notes_")}
+        if issues and not non_note_issues:
+            continue
         if score >= 0.88 and not (issues & {"suspicious_title", "duplicate_slide_title", "language_mismatch_vi", "language_mismatch_en"}):
             continue
         slide = slides[idx]
@@ -463,6 +552,252 @@ def _slide_bullets_preview(slide: Dict[str, Any], limit: int = 4) -> List[str]:
     if isinstance(bullets, list):
         return [str(x) for x in bullets[:limit] if str(x).strip()]
     return []
+
+
+_NOTE_META_RE = re.compile(
+    r"\b(?:slide|trang)\s+(?:này|nay)\s+(?:giới\s+thiệu|gioi\s+thieu|trình\s+bày|trinh\s+bay|mô\s+tả|mo\s+ta|tóm\s+tắt|tom\s+tat|nhấn\s+mạnh|nhan\s+manh)\b"
+    r"|\bthis\s+slide\s+(?:introduces|presents|describes|summarizes|highlights)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _speaker_note_issues(slide: Dict[str, Any]) -> List[str]:
+    notes = str(slide.get("notes") or slide.get("script") or "").strip()
+    bullets = _slide_bullets_preview(slide, limit=6)
+    source = " ".join([str(slide.get("title") or "")] + bullets)
+    issues: List[str] = []
+    word_count = len(_words(notes))
+    if word_count < 65:
+        issues.append("speaker_notes_too_short")
+    elif word_count > 130:
+        issues.append("speaker_notes_too_long")
+    if _NOTE_META_RE.search(notes):
+        issues.append("speaker_notes_meta_description")
+    folded_notes = re.sub(r"\W+", " ", notes.lower()).strip()
+    for bullet in bullets:
+        folded_bullet = re.sub(r"\W+", " ", bullet.lower()).strip()
+        if len(_words(folded_bullet)) >= 8 and folded_bullet in folded_notes:
+            issues.append("speaker_notes_copy_bullets")
+            break
+    source_terms = set(_key_terms(source, limit=12))
+    note_terms = set(_key_terms(notes, limit=20))
+    if source_terms and len(source_terms & note_terms) < min(2, len(source_terms)):
+        issues.append("speaker_notes_weak_grounding")
+    return issues
+
+
+def _ground_and_trim_speaker_notes(notes: str, source: str, max_words: int = 125) -> str:
+    source_folded = unicodedata.normalize("NFKD", str(source or ""))
+    source_folded = "".join(ch for ch in source_folded if not unicodedata.combining(ch)).lower()
+    speculative_patterns = (
+        r"\bchung toi tin\b",
+        r"\btrong tuong lai\b",
+        r"\bse tiep tuc mang lai\b",
+        r"\bhua hen\b",
+        r"\bben vung\b",
+        r"\bwe believe\b",
+        r"\bin the future\b",
+        r"\bwill continue to deliver\b",
+        r"\bpromises to\b",
+        r"\bsustainable\b",
+    )
+    sentences = re.split(r"(?<=[.!?])\s+", _sanitize_inline_markup(notes))
+    kept: List[str] = []
+    word_count = 0
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        folded = unicodedata.normalize("NFKD", sentence)
+        folded = "".join(ch for ch in folded if not unicodedata.combining(ch)).lower()
+        if any(re.search(pattern, folded) and not re.search(pattern, source_folded) for pattern in speculative_patterns):
+            continue
+        sentence_words = len(_words(sentence))
+        if kept and word_count + sentence_words > max_words:
+            break
+        kept.append(sentence)
+        word_count += sentence_words
+    return " ".join(kept).strip()
+
+
+async def _gemini_review_speaker_notes(
+    content_extractor,
+    structured: Dict[str, Any],
+    *,
+    source_language: str = "auto",
+) -> Tuple[Dict[str, Any], List[int]]:
+    if not _GEMINI_REVIEW_ENABLE or not getattr(content_extractor, "gemini_available", False):
+        return structured, []
+    if not hasattr(content_extractor, "_gemini_completion_plain_text"):
+        return structured, []
+
+    slides = structured.get("slides") or []
+    review_items: List[Dict[str, Any]] = []
+    for idx, slide in enumerate(slides):
+        if not isinstance(slide, dict):
+            continue
+        issues = _speaker_note_issues(slide)
+        if not issues:
+            continue
+        review_items.append(
+            {
+                "index": idx,
+                "title": str(slide.get("title") or ""),
+                "bullets": _slide_bullets_preview(slide, limit=6),
+                "table": slide.get("table"),
+                "chart": slide.get("chart"),
+                "current_notes": str(slide.get("notes") or slide.get("script") or ""),
+                "next_slide_title": (
+                    str((slides[idx + 1] or {}).get("title") or "")
+                    if idx + 1 < len(slides) and isinstance(slides[idx + 1], dict)
+                    else ""
+                ),
+                "issues": issues,
+            }
+        )
+        if len(review_items) >= max(1, _SPEAKER_NOTES_REVIEW_MAX_SLIDES):
+            break
+    if not review_items:
+        return structured, []
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an expert presentation speechwriter. Rewrite only the speaker notes.\n"
+                f"{_language_instruction(source_language)}\n"
+                "For each slide, write 70-120 words of natural narration that a presenter can speak directly. "
+                "Use only facts, numbers, names, and claims supported by that slide's title, bullets, table, or chart. "
+                "Do not invent examples, statistics, causes, or conclusions. Explain the meaning and relationship of the provided points instead of reading bullets verbatim. "
+                "Never say 'Slide này giới thiệu/trình bày/mô tả' or 'This slide presents/introduces'. "
+                "When next_slide_title is provided, finish with one short natural bridge to that idea without mentioning slide numbers. "
+                "For the final slide, end with a concise closing thought. Plain text only, no Markdown.\n"
+                "Return strict JSON only: {\"slides\":[{\"index\":number,\"notes\":string}]}"
+            ),
+        },
+        {"role": "user", "content": json.dumps({"slides": review_items}, ensure_ascii=False)},
+    ]
+    try:
+        raw = await content_extractor._gemini_completion_plain_text(
+            messages,
+            max_tokens=min(6000, 700 + 450 * len(review_items)),
+            temperature=0.2,
+            json_mode=True,
+        )
+        parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
+    except Exception as e:
+        print(f"[slide_text_quality] speaker notes review failed: {e}")
+        return structured, []
+
+    out_items = (parsed or {}).get("slides") if isinstance(parsed, dict) else None
+    if not isinstance(out_items, list):
+        return structured, []
+    improved = copy.deepcopy(structured)
+    improved_slides = improved.get("slides") or []
+    changed: List[int] = []
+    for item in out_items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("index"))
+        except Exception:
+            continue
+        if not (0 <= idx < len(improved_slides)) or not isinstance(improved_slides[idx], dict):
+            continue
+        source = " ".join(
+            [str(improved_slides[idx].get("title") or "")]
+            + _slide_bullets_preview(improved_slides[idx], limit=6)
+            + [
+                json.dumps(improved_slides[idx].get("table") or {}, ensure_ascii=False),
+                json.dumps(improved_slides[idx].get("chart") or {}, ensure_ascii=False),
+            ]
+        )
+        notes = _ground_and_trim_speaker_notes(item.get("notes") or "", source)
+        if len(_words(notes)) < 50 or len(_words(notes)) > 130 or _NOTE_META_RE.search(notes):
+            continue
+        source_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", source))
+        note_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", notes))
+        if note_numbers - source_numbers:
+            continue
+        improved_slides[idx]["notes"] = notes
+        changed.append(idx)
+    return improved, changed
+
+
+async def improve_speaker_notes_quality(
+    content_extractor,
+    structured: Dict[str, Any],
+    *,
+    source_language: str = "auto",
+) -> Dict[str, Any]:
+    """Re-run the notes-only QA after any downstream step that may rewrite slide text."""
+    improved, changed = await _gemini_review_speaker_notes(
+        content_extractor,
+        structured,
+        source_language=source_language,
+    )
+    if changed:
+        print(f"[slide_text_quality] downstream speaker notes refined slides: {changed}")
+    return _sanitize_structured_text(improved)
+
+
+async def improve_final_slide_quality(
+    content_extractor,
+    structured: Dict[str, Any],
+    *,
+    task_id: str = "",
+    source_language: str = "auto",
+) -> Dict[str, Any]:
+    """Run semantic QA against the exact deck that will be returned to clients."""
+    if not isinstance(structured, dict):
+        return structured
+
+    improved = copy.deepcopy(structured)
+    slides = improved.get("slides") or []
+    # Force every final slide through semantic QA. Mechanical scoring alone cannot
+    # reliably identify a grammatically incomplete sentence ending in a period.
+    records = [
+        {
+            "slide_index": idx,
+            "score": 0.0,
+            "issues": ["final_semantic_review"],
+        }
+        for idx, slide in enumerate(slides)
+        if isinstance(slide, dict)
+    ]
+    batch_size = max(1, _GEMINI_REVIEW_MAX_SLIDES)
+    for start in range(0, len(records), batch_size):
+        try:
+            improved, _ = await _gemini_review_slide_text(
+                content_extractor,
+                improved,
+                records[start : start + batch_size],
+                source_language=source_language,
+            )
+        except Exception as e:
+            print(f"[slide_text_quality] final semantic review failed: {e}")
+
+    improved, _ = await _gemini_repair_titles_after_review(
+        content_extractor,
+        improved,
+        source_language=source_language,
+    )
+    try:
+        improved, _ = await _gemini_review_speaker_notes(
+            content_extractor,
+            improved,
+            source_language=source_language,
+        )
+    except Exception as e:
+        print(f"[slide_text_quality] final notes review failed: {e}")
+
+    improved = _sanitize_structured_text(improved)
+    write_final_text_quality_report(
+        improved,
+        task_id=task_id,
+        source_language=source_language,
+    )
+    return improved
 
 
 def _valid_review_slide(item: Any) -> Optional[Dict[str, Any]]:
@@ -610,53 +945,72 @@ async def _gemini_repair_titles_after_review(
     if not isinstance(slides, list) or not slides:
         return structured, []
 
-    payload = {
-        "deck_title": str(structured.get("title") or ""),
-        "source_language": source_language,
-        "slides": [
-            {
-                "index": idx,
-                "title": str(slide.get("title") or ""),
-                "bullets": _slide_bullets_preview(slide),
-            }
-            for idx, slide in enumerate(slides)
-            if isinstance(slide, dict)
-        ],
-    }
-    messages = [
+    slide_records = [
         {
-            "role": "system",
-            "content": (
-                "You are a strict slide-title QA reviewer.\n"
-                "Review every title for semantic completeness, uniqueness, and fit to its bullets.\n"
-                "A title must be a complete phrase, not a cut-off fragment, not a dangling prepositional phrase, "
-                "not the first half of a proper noun or technical term, and not duplicated from another slide unless the content is truly identical.\n"
-                "If a title is already complete and unique, keep it exactly.\n"
-                "If it is incomplete, duplicated, too vague, or mismatched, rewrite only the title using the slide bullets.\n"
-                f"{_language_instruction(source_language)}\n"
-                "Return plain text titles only: no Markdown, no bold/italic markers, no list markers.\n"
-                "Do not add new facts. Prefer concise titles of 4-12 words.\n"
-                "Return strict JSON only: {\"titles\":[{\"index\":number,\"pass\":boolean,\"fixed_title\":string,\"reason\":string}]}."
-            ),
-        },
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            "index": idx,
+            "title": str(slide.get("title") or "").strip(),
+            "bullets": _slide_bullets_preview(slide),
+            "table": slide.get("table"),
+            "chart": slide.get("chart"),
+        }
+        for idx, slide in enumerate(slides)
+        if isinstance(slide, dict)
     ]
 
-    try:
-        raw = await content_extractor._gemini_completion_plain_text(
-            messages,
-            max_tokens=1600,
-            temperature=0.05,
-            json_mode=True,
-        )
-        parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
-    except Exception as e:
-        print(f"[slide_text_quality] Gemini title review failed: {e}")
-        fallback = copy.deepcopy(structured)
-        return fallback, _repair_titles_after_review(fallback)
+    # Chia nhỏ slide thành từng cụm (tối đa 5 slide/cụm) để đảm bảo độ tập trung của LLM
+    # và không bao giờ lo bị tràn giới hạn đầu ra (max_tokens).
+    chunk_size = 5
+    chunks = [slide_records[i : i + chunk_size] for i in range(0, len(slide_records), chunk_size)]
 
-    decisions = (parsed or {}).get("titles") if isinstance(parsed, dict) else None
-    if not isinstance(decisions, list):
+    async def _review_chunk(chunk_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        payload = {
+            "deck_title": str(structured.get("title") or ""),
+            "source_language": source_language,
+            "slides": chunk_items,
+        }
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict slide-title QA reviewer.\n"
+                    "Review every title for semantic completeness, uniqueness, and fit to its bullets, table, or chart.\n"
+                    "A title must be a complete phrase, not a cut-off fragment, not a dangling prepositional phrase, "
+                    "not the first half of a proper noun or technical term, and not duplicated from another slide unless the content is truly identical.\n"
+                    "If a title is already complete and unique, keep it exactly.\n"
+                    "If it is incomplete, duplicated, too vague, too narrow for the full table/chart, or mismatched, rewrite only the title using the provided slide content.\n"
+                    f"{_language_instruction(source_language)}\n"
+                    "Return plain text titles only: no Markdown, no bold/italic markers, no list markers.\n"
+                    "Do not add new facts. Prefer concise titles of 4-12 words.\n"
+                    "Return strict JSON only: {\"titles\":[{\"index\":number,\"pass\":boolean,\"fixed_title\":string,\"reason\":string}]}."
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ]
+        try:
+            raw = await content_extractor._gemini_completion_plain_text(
+                messages,
+                max_tokens=800,  # 800 tokens là quá đủ cho 5 slide titles
+                temperature=0.05,
+                json_mode=True,
+            )
+            parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
+            decisions = (parsed or {}).get("titles") if isinstance(parsed, dict) else None
+            if isinstance(decisions, list):
+                return decisions
+        except Exception as e:
+            print(f"[slide_text_quality] Gemini title review chunk failed: {e}")
+        return []
+
+    # Gọi song song tất cả các cụm bằng asyncio.gather
+    tasks = [_review_chunk(chunk) for chunk in chunks]
+    chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    decisions: List[Dict[str, Any]] = []
+    for res in chunk_results:
+        if isinstance(res, list):
+            decisions.extend(res)
+
+    if not decisions:
         fallback = copy.deepcopy(structured)
         return fallback, _repair_titles_after_review(fallback)
 
@@ -674,7 +1028,8 @@ async def _gemini_repair_titles_after_review(
         current = str(out_slides[idx].get("title") or "").strip()
         fixed = item["fixed_title"]
         key = _norm_title_key(fixed)
-        if not key or key in seen or _is_suspicious_title(fixed):
+        slide_bullets = out_slides[idx].get("bullets") or out_slides[idx].get("content") or []
+        if not key or key in seen or _is_suspicious_title(fixed, bullets=slide_bullets):
             fixed = _derive_title_from_bullets(
                 out_slides[idx].get("bullets") or out_slides[idx].get("content") or [],
                 fallback=current or fixed,
@@ -690,6 +1045,23 @@ async def _gemini_repair_titles_after_review(
     # Bắt bất kỳ slide nào bị Gemini bỏ sót hoặc tiêu đề trùng lặp do mô hình tạo ra.
     changed.extend(i for i in _repair_titles_after_review(improved) if i not in changed)
     return _sanitize_structured_text(improved), sorted(set(changed))
+
+
+async def improve_slide_titles_quality(
+    content_extractor,
+    structured: Dict[str, Any],
+    *,
+    source_language: str = "auto",
+) -> Dict[str, Any]:
+    """Re-run title-only QA after downstream stages that may rewrite slide text."""
+    improved, changed = await _gemini_repair_titles_after_review(
+        content_extractor,
+        structured,
+        source_language=source_language,
+    )
+    if changed:
+        print(f"[slide_text_quality] downstream titles refined slides: {changed}")
+    return _sanitize_structured_text(improved)
 
 
 async def improve_slide_text_quality(
@@ -748,12 +1120,23 @@ async def improve_slide_text_quality(
         improved,
         source_language=source_language,
     )
+    note_refined: List[int] = []
+    try:
+        improved, note_refined = await _gemini_review_speaker_notes(
+            content_extractor,
+            improved,
+            source_language=source_language,
+        )
+    except Exception as e:
+        print(f"[slide_text_quality] speaker notes pass failed: {e}")
     improved = _sanitize_structured_text(improved)
     after = _evaluate_deck(improved, source_language=source_language)
-    all_refined = sorted(set(refined + gemini_refined + title_refined))
+    all_refined = sorted(set(refined + gemini_refined + title_refined + note_refined))
     _write_text_quality_report(task_id, after, all_refined, source_language=source_language)
     if gemini_refined:
         print(f"[slide_text_quality] Gemini reviewed/refined slides: {gemini_refined}")
     if title_refined:
         print(f"[slide_text_quality] title post-check refined slides: {title_refined}")
+    if note_refined:
+        print(f"[slide_text_quality] speaker notes refined slides: {note_refined}")
     return improved

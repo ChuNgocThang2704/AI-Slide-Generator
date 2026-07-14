@@ -34,6 +34,10 @@ _NUMERIC_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE_END_RE = re.compile(r"[.!?。]\s*$")
+_NEXT_SLIDE_REQUEST_PATTERN = (
+    r"\b(?:slide|trang)\s*(?:(?:so|thu)\s*)?(?:#\s*)?\d+\b"
+    r"|\b(?:slide|trang)\s+(?:tiep\s+theo|ke\s+tiep)\b"
+)
 
 
 def _split_criteria_text(text: str) -> List[str]:
@@ -42,6 +46,32 @@ def _split_criteria_text(text: str) -> List[str]:
         for part in re.split(r",|;|\s+và\s+|\s+va\s+|\s+and\s+", str(text or ""), flags=re.IGNORECASE)
         if part.strip(" ,;:-")
     ][:8]
+
+
+def _cut_table_request_tail(text: str) -> str:
+    return re.split(
+        _NEXT_SLIDE_REQUEST_PATTERN,
+        str(text or ""),
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" ,;:-.")
+
+
+def _pretty_comparison_label(value: str) -> str:
+    folded = _fold_text(value).strip(" ,;:-.")
+    labels = {
+        "tieu chi": "Tiêu chí",
+        "quan ly thu cong": "Quản lý thủ công",
+        "he thong thong minh": "Hệ thống thông minh",
+        "nhan xet": "Nhận xét",
+        "toc do xu ly": "Tốc độ xử lý",
+        "do chinh xac": "Độ chính xác",
+        "chi phi van hanh": "Chi phí vận hành",
+        "trai nghiem sinh vien": "Trải nghiệm sinh viên",
+        "bao mat du lieu": "Bảo mật dữ liệu",
+        "kha nang mo rong": "Khả năng mở rộng",
+    }
+    return labels.get(folded, str(value or "").strip(" ,;:-.").capitalize())
 
 
 def _slide_lines(slide: Dict[str, Any]) -> List[str]:
@@ -225,6 +255,7 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
 
     option_a = "Phương án 1"
     option_b = "Phương án 2"
+    explicit_headers: List[str] = []
     between_match = re.search(
         r"giua\s+(.+?)\s+va\s+(.+?)\s+theo\s+cac\s+tieu\s+chi\s*[:：]\s*(.+)",
         folded,
@@ -233,13 +264,43 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
     if between_match:
         option_a = between_match.group(1).strip(" ,;:-")
         option_b = between_match.group(2).strip(" ,;:-")
-        criteria_text = between_match.group(3)
+        criteria_text = _cut_table_request_tail(between_match.group(3))
     else:
-        marker = "tieu chi"
-        criteria_text = folded.split(marker, 1)[-1].lstrip(" :：")
+        header_match = re.search(
+            r"\b(?:cot|columns?|headers?)\s*(?:gom|la|:|：)?\s*(.+?)"
+            r"(?=\s*;\s*|\.\s*|\b(?:hang|dong|rows?|cac\s+(?:hang|dong))\b|"
+            rf"{_NEXT_SLIDE_REQUEST_PATTERN}|$)",
+            folded,
+            flags=re.IGNORECASE,
+        )
+        if header_match:
+            explicit_headers = _split_criteria_text(header_match.group(1))
+            if len(explicit_headers) >= 3:
+                option_a = explicit_headers[1]
+                option_b = explicit_headers[2]
+
+        row_match = re.search(
+            r"\b(?:hang|dong|rows?|cac\s+(?:hang|dong))\s*(?:du\s+lieu\s*)?"
+            r"(?:gom|la|:|：)?\s*(.+?)"
+            rf"(?={_NEXT_SLIDE_REQUEST_PATTERN}|$)",
+            folded,
+            flags=re.IGNORECASE,
+        )
+        if row_match:
+            criteria_text = _cut_table_request_tail(row_match.group(1))
+        else:
+            marker = "tieu chi"
+            criteria_text = _cut_table_request_tail(folded.split(marker, 1)[-1].lstrip(" :："))
 
     criteria = _split_criteria_text(criteria_text)
-    criteria = [c for c in criteria if len(c) >= 2 and not c.startswith(("q1", "q2", "q3", "q4"))]
+    criteria = [
+        _pretty_comparison_label(c)
+        for c in criteria
+        if len(c) >= 2
+        and not c.startswith(("q1", "q2", "q3", "q4"))
+        and "bieu do" not in c
+        and "slide " not in c
+    ]
     if len(criteria) < 2:
         return None
 
@@ -253,6 +314,7 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
 
     option_a_pretty = pretty_option(option_a)
     option_b_pretty = pretty_option(option_b)
+    note_header = _pretty_comparison_label(explicit_headers[3])[:60] if len(explicit_headers) >= 4 else ""
 
     def cell_for(option: str, criterion: str) -> str:
         of = _fold_text(option)
@@ -268,6 +330,10 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
                 return "Tốn chi phí nhân sự trực ca và giám sát liên tục."
             if "trai nghiem" in cf:
                 return "Người dùng mất thời gian tìm chỗ và chờ xử lý."
+            if "bao mat" in cf:
+                return "Dữ liệu phân tán, dễ thất lạc và khó kiểm soát quyền truy cập."
+            if "mo rong" in cf:
+                return "Khó mở rộng vì phụ thuộc thêm nhân sự và quy trình thủ công."
         if is_smart:
             if "toc do" in cf:
                 return "Nhanh hơn nhờ cảm biến, ANPR và xử lý tự động."
@@ -277,16 +343,32 @@ def _raw_comparison_request(raw_content: str) -> Optional[Dict[str, Any]]:
                 return "Giảm chi phí vận hành dài hạn nhờ tối ưu nhân sự."
             if "trai nghiem" in cf:
                 return "Hiển thị chỗ trống, chỉ dẫn nhanh và thanh toán tiện lợi."
+            if "bao mat" in cf:
+                return "Dữ liệu được quản lý tập trung, phân quyền và lưu vết truy cập."
+            if "mo rong" in cf:
+                return "Dễ mở rộng thêm khu vực, thiết bị và người dùng trên cùng nền tảng."
         return ""
+
+    headers = ["Tiêu chí", option_a_pretty, option_b_pretty]
+    if note_header:
+        headers.append(note_header)
+
+    rows: List[List[str]] = []
+    for criterion in criteria[:8]:
+        row = [
+            criterion,
+            cell_for(option_a_pretty, criterion),
+            cell_for(option_b_pretty, criterion),
+        ]
+        if note_header:
+            row.append("Hệ thống thông minh có lợi thế hơn.")
+        rows.append(row)
 
     spec = normalize_table_spec(
         {
             "title": "So sánh phương án quản lý",
-            "headers": ["Tiêu chí", option_a_pretty, option_b_pretty],
-            "rows": [
-                [criterion, cell_for(option_a_pretty, criterion), cell_for(option_b_pretty, criterion)]
-                for criterion in criteria[:8]
-            ],
+            "headers": headers,
+            "rows": rows,
         }
     )
     if not spec:
@@ -336,7 +418,18 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
     rows_raw = raw.get("rows")
     if not isinstance(headers_raw, list) or not isinstance(rows_raw, list):
         return None
-    headers = [str(h).strip()[:60] for h in headers_raw if str(h).strip()]
+    def trim_text(value: Any, limit: int) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(text) <= limit:
+            return text
+        cut = text[:limit].rstrip()
+        if limit < len(text) and not text[limit].isspace():
+            boundary = cut.rfind(" ")
+            if boundary > max(8, limit // 2):
+                cut = cut[:boundary]
+        return cut.rstrip(" ,;:-")
+
+    headers = [trim_text(h, 60) for h in headers_raw if str(h).strip()]
     if len(headers) < 2:
         return None
     headers = headers[:_MAX_COLS]
@@ -345,7 +438,7 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
     for row in rows_raw:
         if not isinstance(row, (list, tuple)):
             continue
-        cells = [str(c).strip()[:_MAX_CELL_CHARS] for c in row[:ncols]]
+        cells = [trim_text(c, _MAX_CELL_CHARS) for c in row[:ncols]]
         while len(cells) < ncols:
             cells.append("")
         rows.append(cells[:ncols])
@@ -353,12 +446,59 @@ def normalize_table_spec(raw: Any) -> Optional[Dict[str, Any]]:
             break
     if len(rows) < 1:
         return None
-    title = str(raw.get("title") or "").strip()[:100]
+    title = trim_text(raw.get("title"), 100)
     return {
         "title": title,
         "headers": headers,
         "rows": rows,
     }
+
+
+def _merge_table_with_comparison_request(
+    existing: Dict[str, Any],
+    requested: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Keep useful LLM cells while enforcing explicitly requested headers and rows."""
+    current = normalize_table_spec(existing) or {}
+    required = normalize_table_spec(requested) or {}
+    if not required:
+        return current
+    if not current:
+        return required
+
+    current_headers = current.get("headers") or []
+    required_headers = required.get("headers") or []
+    current_header_positions = {
+        _fold_text(header): idx for idx, header in enumerate(current_headers) if _fold_text(header)
+    }
+    current_rows = {
+        _fold_text(row[0]): row
+        for row in (current.get("rows") or [])
+        if isinstance(row, list) and row and _fold_text(row[0])
+    }
+
+    merged_rows: List[List[str]] = []
+    for required_row in required.get("rows") or []:
+        key = _fold_text(required_row[0]) if required_row else ""
+        current_row = current_rows.get(key)
+        merged_row: List[str] = []
+        for col_idx, header in enumerate(required_headers):
+            value = str(required_row[col_idx] or "").strip() if col_idx == 0 and col_idx < len(required_row) else ""
+            existing_idx = current_header_positions.get(_fold_text(header))
+            if not value and current_row is not None and existing_idx is not None and existing_idx < len(current_row):
+                value = str(current_row[existing_idx] or "").strip()
+            if not value and col_idx < len(required_row):
+                value = str(required_row[col_idx] or "").strip()
+            merged_row.append(value)
+        merged_rows.append(merged_row)
+
+    return normalize_table_spec(
+        {
+            "title": current.get("title") or required.get("title") or "",
+            "headers": required_headers,
+            "rows": merged_rows,
+        }
+    ) or required
 
 
 def _table_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
@@ -597,7 +737,10 @@ async def build_table_specs_for_slides(
             continue
 
         deterministic = deterministic_table_spec_from_slide(slide)
-        if deterministic and _table_spec_has_text_evidence(deterministic, " ".join(_slide_lines(slide) + [raw_content[:2500]])):
+        # An explicitly requested table should be reconstructed by the table LLM
+        # from the requested columns and slide evidence. The generic two-column
+        # deterministic fallback loses the user's schema.
+        if planned_visual != "table" and deterministic and _table_spec_has_text_evidence(deterministic, " ".join(_slide_lines(slide) + [raw_content[:2500]])):
             out[idx] = deterministic
             debug_records.append(
                 {
@@ -690,6 +833,33 @@ async def build_table_specs_for_slides(
                 )
                 print(f"[slide_tables] slide {best_idx} table: raw comparison request {len(spec['rows'])} row(s)")
 
+    comparison_constraint = _raw_comparison_request(raw_content)
+    required_spec = (comparison_constraint or {}).get("spec")
+    if isinstance(required_spec, dict) and out:
+        required_rows = required_spec.get("rows") or []
+        constraint_is_complete = bool(required_rows) and all(
+            isinstance(row, list)
+            and len(row) == len(required_spec.get("headers") or [])
+            and all(str(cell or "").strip() for cell in row)
+            for row in required_rows
+        )
+        if constraint_is_complete:
+            eligible = [idx for idx in out if 0 <= idx < len(slides)]
+            if eligible:
+                best_idx = max(eligible, key=lambda idx: _slide_match_score(slides[idx], comparison_constraint))
+                merged = _merge_table_with_comparison_request(out[best_idx], required_spec)
+                if merged:
+                    out[best_idx] = merged
+                    debug_records.append(
+                        {
+                            "slide_index": best_idx,
+                            "title": str((slides[best_idx] or {}).get("title") or ""),
+                            "source": "explicit_table_constraint",
+                            "spec": merged,
+                            "status": "completed_before_review",
+                        }
+                    )
+
     out, debug_records = await review_visual_data_specs(
         content_extractor,
         structured,
@@ -699,44 +869,14 @@ async def build_table_specs_for_slides(
         raw_content=raw_content,
     )
 
-    if not out:
-        comparison_candidate = _raw_comparison_request(raw_content)
-        spec = (comparison_candidate or {}).get("spec")
-        if isinstance(spec, dict):
-            best_idx = -1
-            best_score = -1
-            for idx, slide in enumerate(slides):
-                if not isinstance(slide, dict) or chart_intent_from_slide(slide):
-                    continue
-                planned_visual = str(
-                    (visual_plan or {}).get(idx)
-                    or (visual_plan or {}).get(str(idx))
-                    or ""
-                ).strip().lower()
-                if planned_visual and planned_visual != "table":
-                    continue
-                score = _slide_match_score(slide, comparison_candidate)
-                folded_slide = _fold_text(" ".join([str(slide.get("title") or "")] + _slide_lines(slide)))
-                if any(k in folded_slide for k in ("thu cong", "thong minh", "so sanh", "phuong an", "toc do", "chinh xac", "chi phi")):
-                    score += 4
-                if planned_visual == "table":
-                    score += 3
-                if score > best_score:
-                    best_score = score
-                    best_idx = idx
-            if best_idx >= 0:
-                out[best_idx] = spec
-                debug_records.append(
-                    {
-                        "slide_index": best_idx,
-                        "title": str((slides[best_idx] or {}).get("title") or ""),
-                        "source": "raw_comparison_request",
-                        "spec": spec,
-                        "status": "created_after_review",
-                        "match_score": best_score,
-                    }
-                )
-                print(f"[slide_tables] slide {best_idx} table: raw comparison request after review {len(spec['rows'])} row(s)")
+    for idx in list(out):
+        planned_visual = str(
+            (visual_plan or {}).get(idx)
+            or (visual_plan or {}).get(str(idx))
+            or ""
+        ).strip().lower()
+        if planned_visual and planned_visual != "table":
+            out.pop(idx, None)
 
     if task_id:
         _write_debug_json(task_id, debug_records)

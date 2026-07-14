@@ -17,6 +17,15 @@ from config import (
 )
 
 
+def _has_explicit_slide_outline(text: str) -> bool:
+    """Detect orchestration intent without interpreting domain content."""
+    numbers = {
+        int(value)
+        for value in re.findall(r"\b(?:slide|trang)\s*(?:so|thu|số|thứ)?\s*(\d+)\b", str(text or ""), re.IGNORECASE)
+    }
+    return len(numbers) >= 2
+
+
 def _resolve_plan_image_limit(
     plan: Optional[str],
     slide_count: Optional[int],
@@ -374,6 +383,7 @@ class RedisQueue:
         from routes.api import (
             _apply_explicit_chart_type_targets,
             _explicit_chart_type_targets_from_prompt,
+            _explicit_slide_instruction_from_prompt,
             _explicit_visual_targets_from_prompt,
         )
 
@@ -396,7 +406,7 @@ class RedisQueue:
                 slide_count_int if (slide_count_int and slide_count_int > 0)
                 else (FREE_SLIDE_LIMIT if free_mode else None)
             )
-            force_exact_slide_count = bool(free_mode or (target_slides_override is not None))
+            force_exact_slide_count = target_slides_override is not None
             resolved_image_limit = _resolve_plan_image_limit(
                 plan_norm,
                 target_slides_override,
@@ -431,6 +441,17 @@ class RedisQueue:
                 user_instruction=task_data.get("user_instruction"),
                 doc_title_hint=doc_title_hint,
             )
+            user_instruction = str(task_data.get("user_instruction") or "").strip()
+            if user_instruction and _has_explicit_slide_outline(user_instruction):
+                structured_content = await content_extractor.revise_slide_deck(
+                    structured_content,
+                    "Follow this numbered slide outline exactly. Preserve the requested slide order, count, visual type, labels, values, columns, and rows. "
+                    "Do not split, merge, reorder, or omit any requested slide.\n\n" + user_instruction,
+                )
+                if force_exact_slide_count and target_slides_override:
+                    structured_content = await content_extractor._force_slide_count_exact(
+                        structured_content, int(target_slides_override)
+                    )
 
             # ── Text quality pass ─────────────────────────────────────
             from services.slide_text_quality import improve_slide_text_quality
@@ -502,6 +523,22 @@ class RedisQueue:
                     len(structured_content.get("slides") or []),
                 ),
             )
+            from services.slide_text_quality import improve_final_slide_quality
+            note_slides = structured_content.get("slides") or []
+            for idx, spec in table_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["table"] = spec
+            for idx, spec in chart_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["chart"] = spec
+            structured_content = await improve_final_slide_quality(
+                content_extractor,
+                structured_content,
+                task_id=task_id,
+                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            )
+            from services.plan_limits import enforce_plan_slide_limit
+            structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
@@ -532,6 +569,22 @@ class RedisQueue:
                         progress_cb=on_image_progress,
                         plan=plan_norm,
                         target_indices=sorted(image_target_indices) or None,
+                        force_target_indices=sorted(
+                            idx
+                            for idx, visual in _explicit_visual_targets_from_prompt(
+                                instruction_text,
+                                len(structured_content.get("slides") or []),
+                            ).items()
+                            if str(visual or "").strip().lower() == "image"
+                        ),
+                        force_instructions={
+                            idx: _explicit_slide_instruction_from_prompt(instruction_text, idx)
+                            for idx, visual in _explicit_visual_targets_from_prompt(
+                                instruction_text,
+                                len(structured_content.get("slides") or []),
+                            ).items()
+                            if str(visual or "").strip().lower() == "image"
+                        },
                         visual_plan=visual_plan,
                     )
                 except Exception as image_error:
@@ -657,6 +710,7 @@ class RedisQueue:
             _apply_explicit_chart_type_targets,
             _build_slide_spec_payload,
             _explicit_chart_type_targets_from_prompt,
+            _explicit_slide_instruction_from_prompt,
             _explicit_visual_targets_from_prompt,
             _resolve_plan_image_limit,
         )
@@ -681,7 +735,7 @@ class RedisQueue:
                 slide_count_int if (slide_count_int and slide_count_int > 0)
                 else (FREE_SLIDE_LIMIT if free_mode else None)
             )
-            force_exact_slide_count = bool(free_mode or (target_slides_override is not None))
+            force_exact_slide_count = target_slides_override is not None
             resolved_image_limit = _resolve_plan_image_limit(
                 plan_norm,
                 target_slides_override,
@@ -859,6 +913,23 @@ class RedisQueue:
                     slides[idx].pop("chart", None)
                     slides[idx]["layout"] = "text_image"
 
+            from services.slide_text_quality import improve_final_slide_quality
+            note_slides = structured_content.get("slides") or []
+            for idx, spec in table_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["table"] = spec
+            for idx, spec in chart_specs.items():
+                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
+                    note_slides[idx]["chart"] = spec
+            structured_content = await improve_final_slide_quality(
+                content_extractor,
+                structured_content,
+                task_id=task_id,
+                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            )
+            from services.plan_limits import enforce_plan_slide_limit
+            structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
+
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
 
@@ -886,6 +957,16 @@ class RedisQueue:
                         progress_cb=on_image_progress,
                         plan=plan_norm,
                         target_indices=sorted(image_target_indices) or None,
+                        force_target_indices=sorted(
+                            idx
+                            for idx, visual in explicit_visual_targets.items()
+                            if str(visual or "").strip().lower() == "image"
+                        ),
+                        force_instructions={
+                            idx: _explicit_slide_instruction_from_prompt(instruction_text, idx)
+                            for idx, visual in explicit_visual_targets.items()
+                            if str(visual or "").strip().lower() == "image"
+                        },
                         visual_plan=visual_plan,
                     )
                 except Exception as image_error:

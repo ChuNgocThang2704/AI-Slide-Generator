@@ -342,6 +342,85 @@ def _raw_chart_candidates(raw_content: str) -> List[Dict[str, Any]]:
     return candidates
 
 
+def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Dict[str, Any]]:
+    text = str(raw_content or "")
+    marker_re = re.compile(
+        r"\b(?:slide|trang)\s*(?:(?:số|so|thứ|thu)\s*)?(?:#\s*)?(\d+)\b",
+        flags=re.IGNORECASE,
+    )
+    markers = list(marker_re.finditer(text))
+    out: Dict[int, Dict[str, Any]] = {}
+    for pos, marker in enumerate(markers):
+        idx = int(marker.group(1)) - 1
+        if not (0 <= idx < slide_count):
+            continue
+        end = markers[pos + 1].start() if pos + 1 < len(markers) else len(text)
+        segment = text[marker.end():end].strip()
+        folded = _fold_text(segment)
+        if not re.search(r"\b(?:bieu\s*do|chart|graph)\b", folded):
+            continue
+        if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", folded):
+            chart_type = "line"
+        elif re.search(r"\b(?:tron|pie|thi\s+phan)\b", folded):
+            chart_type = "pie"
+        else:
+            chart_type = "bar"
+
+        chunks = [part.strip(" .") for part in re.split(r"[,;]", segment) if part.strip(" .")]
+        labels: List[str] = []
+        values: List[float] = []
+        raw_values: List[str] = []
+        for chunk_pos, chunk in enumerate(chunks):
+            if chunk_pos == 0:
+                chunk = re.split(
+                    r"\b(?:với|voi|gồm|gom|dữ\s+liệu|du\s+lieu|so\s+sánh|so\s+sanh)\b",
+                    chunk,
+                    flags=re.IGNORECASE,
+                )[-1].strip(" :.-")
+            numbers = list(re.finditer(r"[-+]?\d+(?:[.,]\d+)?", chunk))
+            if not numbers:
+                continue
+            number = numbers[-1]
+            label = chunk[:number.start()].strip(" :.-")
+            if ":" in label:
+                label = label.rsplit(":", 1)[-1].strip(" :.-")
+            if not label:
+                continue
+            value = _parse_float_cell(number.group(0))
+            if value is None:
+                continue
+            label_map = {
+                "sinh vien": "Sinh viên",
+                "giang vien": "Giảng viên",
+                "khach": "Khách",
+            }
+            labels.append(label_map.get(_fold_text(label), label[:38]))
+            values.append(value)
+            raw_values.append(chunk[number.start():])
+            if len(labels) >= _MAX_CATEGORIES:
+                break
+        if len(labels) < 2:
+            continue
+        titles = {
+            "line": "Biểu đồ đường",
+            "bar": "Biểu đồ cột",
+            "pie": "Biểu đồ tròn",
+        }
+        spec = normalize_chart_spec(
+            {
+                "title": titles[chart_type],
+                "chart_type": chart_type,
+                "labels": labels,
+                "values": values,
+                "unit": "percent" if "%" in " ".join(raw_values) else "number",
+                "is_percent": "%" in " ".join(raw_values),
+            }
+        )
+        if spec:
+            out[idx] = spec
+    return out
+
+
 def _raw_has_table_only_intent(raw_content: str) -> bool:
     folded = _fold_text(raw_content or "")
     if folded.count("|") < 4:
@@ -380,7 +459,18 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     labels_raw = raw.get("labels") or []
     if not isinstance(labels_raw, list):
         return None
-    labels = [str(x).strip()[:38] for x in labels_raw if str(x).strip()]
+    def trim_text(value: Any, limit: int) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(text) <= limit:
+            return text
+        cut = text[:limit].rstrip()
+        if limit < len(text) and not text[limit].isspace():
+            boundary = cut.rfind(" ")
+            if boundary > max(8, limit // 2):
+                cut = cut[:boundary]
+        return cut.rstrip(" ,;:-")
+
+    labels = [trim_text(x, 38) for x in labels_raw if str(x).strip()]
     if len(labels) < 2:
         return None
     labels = labels[:_MAX_CATEGORIES]
@@ -393,7 +483,7 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         for item in series_raw[:_MAX_SERIES]:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name") or "Series").strip()[:40]
+            name = trim_text(item.get("name") or "Series", 40)
             vals_raw = item.get("values") or []
             if not isinstance(vals_raw, list):
                 continue
@@ -426,7 +516,7 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         values = values[:n]
         if is_percent:
             values = [v / 100.0 if v > 1 else v for v in values]
-        sname = str(raw.get("series_name") or raw.get("title") or "Data").strip()[:40] or "Data"
+        sname = trim_text(raw.get("series_name") or raw.get("title") or "Data", 40) or "Data"
         series_out.append({"name": sname, "values": values})
 
     if not series_out:
@@ -448,7 +538,7 @@ def normalize_chart_spec(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if chart_type in {"pie", "doughnut"} and len(series_out) > 1:
         series_out = [series_out[0]]
 
-    title = str(raw.get("title") or "Tổng quan số liệu").strip()[:80]
+    title = trim_text(raw.get("title") or "Tổng quan số liệu", 80)
     primary_values = series_out[0]["values"]
     return {
         "title": title,
@@ -576,6 +666,30 @@ async def build_chart_specs_for_slides(
     debug_records: list[Dict[str, Any]] = []
     assigned_raw: Set[int] = set()
 
+    explicit_requests = _explicit_chart_requests(raw_content, len(slides))
+    for idx, spec in explicit_requests.items():
+        if idx in skip:
+            continue
+        planned_visual = str(
+            (visual_plan or {}).get(idx)
+            or (visual_plan or {}).get(str(idx))
+            or ""
+        ).strip().lower()
+        if planned_visual and planned_visual != "chart":
+            continue
+        out[idx] = spec
+        assigned_raw.add(idx)
+        debug_records.append(
+            {
+                "slide_index": idx,
+                "title": str((slides[idx] or {}).get("title") or ""),
+                "context": "explicit_slide_chart_request",
+                "spec": spec,
+                "status": "created",
+            }
+        )
+        print(f"[slide_charts] slide {idx} chart: explicit {spec['chart_type']} {len(spec['labels'])} point(s)")
+
     raw_candidates = _raw_chart_candidates(raw_content)
     if not raw_candidates and _raw_has_table_only_intent(raw_content):
         if task_id:
@@ -583,12 +697,19 @@ async def build_chart_specs_for_slides(
             _write_quality_report(task_id, [])
         return {}
     if raw_candidates:
-        used_slides: Set[int] = set()
+        used_slides: Set[int] = set(assigned_raw)
         for cand_idx, candidate in enumerate(raw_candidates):
             best_idx = -1
             best_score = 0
             for idx, slide in enumerate(slides):
                 if idx in used_slides or idx in skip or not isinstance(slide, dict):
+                    continue
+                planned_visual = str(
+                    (visual_plan or {}).get(idx)
+                    or (visual_plan or {}).get(str(idx))
+                    or ""
+                ).strip().lower()
+                if planned_visual and planned_visual != "chart":
                     continue
                 score = _slide_match_score(slide, candidate)
                 if score > best_score:
@@ -756,15 +877,15 @@ async def build_chart_specs_for_slides(
                 f"[slide_charts] slide {idx} chart: "
                 f"{spec['chart_type']} {len(spec['labels'])} point(s)"
             )
-    forced_chart_specs = {
-        idx: spec
-        for idx, spec in out.items()
-        if str(
+    for idx in list(out):
+        planned_visual = str(
             (visual_plan or {}).get(idx)
             or (visual_plan or {}).get(str(idx))
             or ""
-        ).strip().lower() == "chart"
-    }
+        ).strip().lower()
+        if planned_visual and planned_visual != "chart":
+            out.pop(idx, None)
+
     out, debug_records = await review_visual_data_specs(
         content_extractor,
         structured,
@@ -773,10 +894,6 @@ async def build_chart_specs_for_slides(
         kind="chart",
         raw_content=raw_content,
     )
-    for idx, spec in forced_chart_specs.items():
-        if idx not in out:
-            out[idx] = spec
-
     if task_id:
         _write_debug_json(task_id, debug_records)
         _write_quality_report(task_id, debug_records)

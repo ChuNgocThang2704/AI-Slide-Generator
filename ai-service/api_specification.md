@@ -111,7 +111,19 @@ generate_images=true
 revision_scope=auto
 ```
 
-AI Service se tu hieu sua slide nao hay sua full deck dua tren prompt.
+AI Service se tu hieu sua slide nao hay sua full deck dua tren prompt. Neu BE/FE da
+biet slide dich, nen gui them `revision_scope=slide` va field target. Target co
+cau truc trong request luon duoc uu tien hon suy doan tu prompt.
+
+Contract revise:
+
+- Sua mot/vai slide: slide ngoai target duoc giu nguyen ca text, visual va layout.
+- Chi doi title: cac field con lai cua slide duoc giu nguyen.
+- Them slide: deck cu duoc giu nguyen va slide moi duoc append.
+- Xoa slide: cac slide con lai duoc giu nguyen va danh lai `index` lien tuc.
+- Sua table: response tra bang hoan chinh, khong chi tra delta; khong co cell rong.
+- Sua chart: labels, values, unit va `chart_type` nam trong object `chart` cuoi.
+- Sua anh: gui `generate_images=true`; ket qua co image URL/path trong slide dich.
 
 ### Request Examples
 
@@ -231,9 +243,18 @@ Voi task revise, `result` co them metadata:
   "revision_scope": "slide",
   "target_slide_indices": [5],
   "changed_fields": ["text"],
+  "post_review": {
+    "kind": "revise_contract_qa",
+    "issues": [],
+    "fixes": [],
+    "ok": true
+  },
   "revision_prompt": "..."
 }
 ```
+
+`post_review.ok=true` chi khi JSON cuoi khong con contract issue. BE co the log
+field nay de monitor/debug; FE khong bat buoc hien cho user.
 
 ### Error Response
 
@@ -446,6 +467,11 @@ Luu y: cancel la best-effort. Neu task dang goi model/image server ben ngoai, vi
 - BE nen luu lai `task_id`, prompt goc, va `result.deck` sau khi completed.
 - De sua deck, FE/BE gui `source_task_id` cua task completed gan nhat.
 - Sau revise, nen dung `task_id` moi lam source cho lan revise tiep theo.
+- Khi UI da biet slide dich, gui target field thay vi chi dua vao prompt:
+  - Mot slide: `revision_scope=slide`, `slide_number=3`.
+  - Nhieu slide: `revision_scope=slide`, `target_slide_numbers=1,4`.
+  - Toan deck: `revision_scope=deck`.
+- Sau completed, thay toan bo deck tren FE bang `result.deck`; khong merge delta o client.
 
 ## 10. Minimal FE Render Rule
 

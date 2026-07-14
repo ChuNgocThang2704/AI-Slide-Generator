@@ -1,4 +1,5 @@
 import sys
+from contextlib import asynccontextmanager
 # Configure console encoding to UTF-8 to prevent charmap/UnicodeEncodeError on Windows
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -10,12 +11,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from routes.api import router as api_router
+from routes.api import initialize_api_services, router as api_router
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    initialize_api_services()
+    yield
 
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="AI Slide Generator API")
+    app = FastAPI(title="AI Slide Generator API", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
