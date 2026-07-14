@@ -1,5 +1,5 @@
 import re
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
 from config import (
@@ -50,7 +50,6 @@ def resolve_plan_image_limit(
     return max(0, min(calculated_limit, max_limit))
 
 def detect_requested_slide_count(text: str) -> Optional[int]:
-    import re
     if not text:
         return None
     # Tìm kiếm các mẫu như: "15 slide", "12 trang", "10 pages", "12 slides"
@@ -65,60 +64,58 @@ def detect_requested_slide_count(text: str) -> Optional[int]:
 def validate_plan_limits(
     plan: str,
     slide_count: Optional[int],
-    raw_content: Optional[str] = None
+    raw_content: Optional[str] = None,
 ) -> Tuple[Optional[int], Optional[int]]:
-    """
-    Validates limits based on selected plan (free, pro, ultra).
-    Returns: (target_slides_override, resolved_slide_count)
-    Raises HTTPException 400 if validation fails.
-    """
+    """Validate input limits and resolve only an explicitly requested count."""
     plan_norm = (plan or "pro").strip().lower()
-    
-    # 1. Validate plan and character limits
     if plan_norm == "free":
-        char_limit = FREE_CHAR_LIMIT
-        slide_limit_max = FREE_SLIDE_LIMIT
+        char_limit, slide_limit_max = FREE_CHAR_LIMIT, FREE_SLIDE_LIMIT
     elif plan_norm == "ultra":
-        char_limit = ULTRA_CHAR_LIMIT
-        slide_limit_max = ULTRA_SLIDE_LIMIT_MAX
-    else: # pro
-        char_limit = PRO_CHAR_LIMIT
-        slide_limit_max = PRO_SLIDE_LIMIT_MAX
-        
+        char_limit, slide_limit_max = ULTRA_CHAR_LIMIT, ULTRA_SLIDE_LIMIT_MAX
+    else:
+        char_limit, slide_limit_max = PRO_CHAR_LIMIT, PRO_SLIDE_LIMIT_MAX
+
     if raw_content and len(raw_content) > char_limit:
         raise HTTPException(
             status_code=400,
-            detail=f"Độ dài nội dung vượt quá giới hạn của gói {plan_norm.upper()} ({len(raw_content)} > {char_limit} ký tự)."
+            detail=(
+                f"Do dai noi dung vuot qua gioi han cua goi {plan_norm.upper()} "
+                f"({len(raw_content)} > {char_limit} ky tu)."
+            ),
         )
-        
-    # 2. Resolve slide count & check slide limits
-    if plan_norm == "free" and not (slide_count and slide_count > 0):
-        target_slides_override = FREE_SLIDE_LIMIT
-        resolved_slide_count = FREE_SLIDE_LIMIT
-    else:
-        # Check if slide_count is requested. If slide_count is 0 or None, try to detect from raw_content
-        actual_slide_count = slide_count
-        if (actual_slide_count is None or actual_slide_count <= 0) and raw_content:
-            detected = detect_requested_slide_count(raw_content)
-            if detected and 1 <= detected <= slide_limit_max:
-                print(f"[api] Detected requested slide count in prompt: {detected}")
-                actual_slide_count = detected
 
-        # For pro and ultra, slide_count is optional.
-        if actual_slide_count and actual_slide_count > 0:
-            if actual_slide_count > slide_limit_max:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Số slide yêu cầu vượt quá giới hạn tối đa của gói {plan_norm.upper()} ({actual_slide_count} > {slide_limit_max} slides)."
-                )
-            target_slides_override = actual_slide_count
-            resolved_slide_count = actual_slide_count
-        else:
-            target_slides_override = None
-            resolved_slide_count = None
-            
-    return target_slides_override, resolved_slide_count
+    actual_slide_count = slide_count
+    if (actual_slide_count is None or actual_slide_count <= 0) and raw_content:
+        actual_slide_count = detect_requested_slide_count(raw_content)
 
+    if actual_slide_count and actual_slide_count > 0:
+        if actual_slide_count > slide_limit_max:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"So slide yeu cau vuot qua gioi han toi da cua goi {plan_norm.upper()} "
+                    f"({actual_slide_count} > {slide_limit_max} slides)."
+                ),
+            )
+        print(f"[api] Detected requested slide count in prompt: {actual_slide_count}")
+        return actual_slide_count, actual_slide_count
+    return None, None
+
+
+def enforce_plan_slide_limit(content: Dict[str, Any], plan: str) -> Dict[str, Any]:
+    """Apply the plan maximum without padding an automatically-sized deck."""
+    plan_norm = (plan or "pro").strip().lower()
+    maximum = (
+        FREE_SLIDE_LIMIT
+        if plan_norm == "free"
+        else ULTRA_SLIDE_LIMIT_MAX
+        if plan_norm == "ultra"
+        else PRO_SLIDE_LIMIT_MAX
+    )
+    slides = content.get("slides") if isinstance(content, dict) else None
+    if isinstance(slides, list) and len(slides) > maximum:
+        content["slides"] = slides[:maximum]
+    return content
 def as_bool_flag(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default

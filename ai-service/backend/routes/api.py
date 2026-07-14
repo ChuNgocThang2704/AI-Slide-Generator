@@ -27,6 +27,7 @@ from services.slide_text_quality import improve_slide_text_quality
 from services.slide_quality import build_visual_plan, improve_deck_source_grounding
 from services.plan_limits import (
     as_bool_flag as _as_bool_flag,
+    enforce_plan_slide_limit as _enforce_plan_slide_limit,
     form_wants_slide_images as _form_wants_slide_images,
     resolve_plan_image_limit as _resolve_plan_image_limit,
     validate_plan_limits as _validate_plan_limits,
@@ -984,7 +985,7 @@ async def generate_slide_spec(
         # Quét số slide từ prompt text của người dùng trước, nếu không có mới dùng content để tính
         text_for_detection = text or raw_content
         target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=text_for_detection)
-        force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
+        force_exact_slide_count = target_slides_override is not None
 
         # Tự động phát hiện yêu cầu sinh ảnh từ prompt text nếu tham số generate_images là false
         want_images_flag = _form_wants_slide_images(generate_images)
@@ -1082,6 +1083,7 @@ async def generate_slide_spec(
                             structured, int(target_slides_override)
                         )
 
+                structured = _enforce_plan_slide_limit(structured, plan_norm)
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 visual_plan_bg = await build_visual_plan(
                     content_extractor,
@@ -1480,7 +1482,7 @@ async def generate_slide_full(
         task_id = str(uuid.uuid4())
         plan_norm = (plan or "pro").strip().lower()
         target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count)
-        force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
+        force_exact_slide_count = target_slides_override is not None
         resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
         slide_preset = SlideGenerator.normalize_slide_preset(slide_theme) or "modern"
 
@@ -1509,7 +1511,7 @@ async def generate_slide_full(
         # Quét số slide từ prompt text của người dùng trước, nếu không có mới dùng content để tính
         text_for_detection = text or raw_content
         target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=text_for_detection)
-        force_exact_slide_count = bool(plan_norm == "free" or (target_slides_override is not None))
+        force_exact_slide_count = target_slides_override is not None
 
         # Tự động phát hiện yêu cầu sinh ảnh từ prompt text nếu tham số generate_images là false
         want_images_flag = _form_wants_slide_images(generate_images)
@@ -1584,6 +1586,7 @@ async def generate_slide_full(
                         task_id=task_id_bg,
                     )
 
+                structured = _enforce_plan_slide_limit(structured, plan_norm)
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 visual_plan_bg = await build_visual_plan(
                     content_extractor,

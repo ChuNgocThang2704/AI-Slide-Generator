@@ -406,7 +406,7 @@ class RedisQueue:
                 slide_count_int if (slide_count_int and slide_count_int > 0)
                 else (FREE_SLIDE_LIMIT if free_mode else None)
             )
-            force_exact_slide_count = bool(free_mode or (target_slides_override is not None))
+            force_exact_slide_count = target_slides_override is not None
             resolved_image_limit = _resolve_plan_image_limit(
                 plan_norm,
                 target_slides_override,
@@ -537,6 +537,8 @@ class RedisQueue:
                 task_id=task_id,
                 source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
             )
+            from services.plan_limits import enforce_plan_slide_limit
+            structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
@@ -733,7 +735,7 @@ class RedisQueue:
                 slide_count_int if (slide_count_int and slide_count_int > 0)
                 else (FREE_SLIDE_LIMIT if free_mode else None)
             )
-            force_exact_slide_count = bool(free_mode or (target_slides_override is not None))
+            force_exact_slide_count = target_slides_override is not None
             resolved_image_limit = _resolve_plan_image_limit(
                 plan_norm,
                 target_slides_override,
@@ -925,6 +927,8 @@ class RedisQueue:
                 task_id=task_id,
                 source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
             )
+            from services.plan_limits import enforce_plan_slide_limit
+            structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
