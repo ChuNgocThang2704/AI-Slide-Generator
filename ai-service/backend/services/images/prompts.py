@@ -344,23 +344,37 @@ def _revision_visual_phrase(instruction: str) -> str:
             color = "red "
         action = " driving through a raised parking barrier" if any(k in folded for k in ("barie", "barrier", "cong")) else ""
         parts.append(f"{color}electric car{action}")
+    elif any(k in folded for k in ("o to", "xe hoi", "car", "vehicle", "automobile")):
+        parts.append("cars parked in a parking lot")
     if any(k in folded for k in ("bai do", "bai dau", "parking")):
         parts.append("modern university parking lot")
     if any(k in folded for k in ("cam bien", "iot", "sensor")):
-        parts.append("IoT parking sensors")
-    camera_forbidden = bool(
+        parts.append("IoT sensors at each parking space")
+    # camera_forbidden: only triggers when negation directly precedes "camera"
+    # WITHOUT a shot-type qualifier (can canh, close-up, close up).
+    # "Không dùng hình camera cận cảnh" means "no close-up camera shot", NOT "no cameras".
+    camera_closup_forbidden = bool(
         re.search(
-            r"\b(?:khong|cam|tranh|without|no)\b.{0,35}\b(?:camera|giam\s+sat|surveillance)\b",
+            r"\b(?:khong|cam|tranh|without|no)\b.{0,20}\b(?:camera|giam\s+sat)\b.{0,25}\b(?:can\s+canh|close[- ]up|closeup)\b",
             folded,
         )
     )
-    if not camera_forbidden and any(k in folded for k in ("camera", "giam sat", "surveillance")):
-        parts.append("surveillance cameras")
+    camera_entirely_forbidden = bool(
+        re.search(
+            r"\b(?:khong|cam|tranh|without|no)\b.{0,15}\b(?:camera|giam\s+sat|surveillance)\b",
+            folded,
+        )
+    ) and not camera_closup_forbidden
+    if not camera_entirely_forbidden and any(k in folded for k in ("camera", "giam sat", "surveillance", "nhan dien", "bien so")):
+        cam_label = "license plate recognition camera" if any(k in folded for k in ("bien so", "nhan dien bien so", "license plate")) else "surveillance cameras"
+        if camera_closup_forbidden:
+            cam_label += ", wide-angle view"
+        parts.append(cam_label)
     if any(k in folded for k in ("bang", "hien thi", "dien tu", "display", "led")):
         parts.append("digital display board showing available parking spaces")
     if any(k in folded for k in ("cho trong", "trong", "available")) and not any("available parking spaces" in p for p in parts):
-        parts.append("available parking spaces")
-    return ", ".join(parts[:4])
+        parts.append("available parking spaces indicator")
+    return ", ".join(parts[:6])  # expanded from 4 to 6 to cover more requested objects
 
 
 def _build_prompt(

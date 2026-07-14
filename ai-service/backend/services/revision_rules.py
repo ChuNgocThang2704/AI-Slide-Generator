@@ -279,24 +279,59 @@ def fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]]
     headers: List[str] = []
     rows: List[str] = []
 
+    def _extract_segment_from_original(folded_match: re.Match, group: int = 1) -> str:
+        """Re-find the group captured in `folded` back in the original `text`.
+        folded and text can have different lengths (NFD strips combining chars),
+        so we cannot safely use folded byte positions to slice text.
+        Instead we anchor on the literal matched value (case-insensitive)."""
+        folded_value = folded_match.group(group)
+        # Try to find the same token sequence in the original text via case-insensitive search.
+        # Use the folded value as a pattern anchor: build a pattern that allows arbitrary
+        # Unicode between word chars (handles combining diacritics being stripped).
+        escaped = re.escape(folded_value.strip())
+        # Loosen the pattern: allow optional diacritic-carrying variants by using \S+
+        # for each word token so that "Tieu chi" matches "Tiêu chí".
+        word_tokens = folded_value.strip().split()
+        if len(word_tokens) >= 2:
+            # Build a flexible pattern: match each word allowing extra unicode chars
+            flexible = r"[^.;\n]+"
+            m2 = re.search(
+                r"(?i)(?:headers?|c[aáà]c\s+c[oộ]t|c[oộ]t|columns?|g[oồ]m\s+c[aáà]c\s+c[oộ]t)"
+                r"\s*(?:[gồ]m|l[aà]|:)?\s*(" + flexible + r")",
+                text,
+            )
+            if m2:
+                return m2.group(1)
+        return folded_value  # fallback: use folded value (no diacritics)
+
+    # Search on folded text (no diacritics) so "các cột", "gồm các cột" etc. all match
     header_match = re.search(
-        r"(?i)(?:headers?|cot|columns?)\s*(?:gom|la|:)?\s*([^.;\n]+)",
-        text,
+        r"(?i)(?:headers?|c[ao]c\s+c[ao]t|c[ao]t|columns?|gom\s+c[ao]c\s+c[ao]t)"
+        r"\s*(?:gom|la|:)?\s*([^.;\n]+)",
+        folded,
     )
     if header_match:
-        headers = split_revision_list(header_match.group(1))
+        raw_segment = _extract_segment_from_original(header_match, group=1)
+        headers = split_revision_list(raw_segment)
 
     row_match = re.search(
-        r"(?i)(?:rows?|hang|cac\s+hang|them\s+hang)\s*(?:gom|la|:)?\s*([^.;\n]+)",
-        text,
+        r"(?i)(?:rows?|c[ao]c\s+h[ao]ng|h[ao]ng|them\s+(?:c[ao]c\s+)?h[ao]ng)"
+        r"\s*(?:gom|la|:)?\s*([^.;\n]+)",
+        folded,
     )
     if row_match:
-        rows = split_revision_list(row_match.group(1))
+        # For rows, try matching in original text too
+        m2 = re.search(
+            r"(?i)(?:rows?|c[aáà]c\s+h[aà]ng|h[aà]ng|th[eê]m\s+(?:c[aáà]c\s+)?h[aà]ng)"
+            r"\s*(?:[gồ]m|l[aà]|:)?\s*([^.;\n]+)",
+            text,
+        )
+        rows = split_revision_list(m2.group(1) if m2 else row_match.group(1))
 
     if len(headers) < 2:
-        headers = ["Tieu chi", "Noi dung"]
+        headers = ["Tiêu chí", "Nội dung"]
     if not rows:
-        rows = ["Noi dung can sua"]
+        rows = ["Nội dung cần sửa"]
 
     def value_for(header: str, criterion: str) -> str:
         h = fold_revision_text(header)
@@ -305,30 +340,44 @@ def fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]]
             return criterion
         if "thu cong" in h or "manual" in h:
             if "toc do" in c:
-                return "Cham, phu thuoc thao tac con nguoi"
+                return "Chậm, phụ thuộc thao tác con người"
             if "chinh xac" in c:
-                return "Thap hon, de sai sot"
+                return "Thấp hơn, dễ sai sót"
             if "chi phi" in c:
-                return "Cao do ton nhan su va thoi gian"
-            if "trai nghiem" in c:
-                return "Bat tien, phai cho doi"
-            return "Phu thuoc con nguoi"
+                return "Cao do tốn nhân sự và thời gian"
+            if "bao mat" in c or "bao ve" in c:
+                return "Phụ thuộc quy trình thủ công"
+            if "mo rong" in c or "kha nang" in c:
+                return "Khó mở rộng khi quy mô tăng"
+            if "trai nghiem" in c or "sinh vien" in c:
+                return "Bất tiện, phải chờ đợi"
+            return "Phụ thuộc con người"
         if "thong minh" in h or "smart" in h or "tu dong" in h:
             if "toc do" in c:
-                return "Nhanh, xu ly tu dong"
+                return "Nhanh, xử lý tự động"
             if "chinh xac" in c:
-                return "Cao, dua tren du lieu thoi gian thuc"
+                return "Cao, dựa trên dữ liệu thời gian thực"
             if "chi phi" in c:
-                return "Toi uu hon ve dai han"
-            if "trai nghiem" in c:
-                return "Thuan tien, minh bach"
-            return "Tu dong hoa va co du lieu"
+                return "Tối ưu hơn về dài hạn"
+            if "bao mat" in c or "bao ve" in c:
+                return "Mã hoá & kiểm soát truy cập tự động"
+            if "mo rong" in c or "kha nang" in c:
+                return "Dễ mở rộng theo nhu cầu"
+            if "trai nghiem" in c or "sinh vien" in c:
+                return "Thuận tiện, minh bạch"
+            return "Tự động hoá và có dữ liệu"
         if "nhan xet" in h or "note" in h or "comment" in h:
-            return "He thong thong minh co loi the hon"
+            if "toc do" in c:
+                return "Hệ thống thông minh vượt trội"
+            if "bao mat" in c:
+                return "Hệ thống thông minh an toàn hơn"
+            if "mo rong" in c:
+                return "Hệ thống thông minh linh hoạt hơn"
+            return "Hệ thống thông minh có lợi thế hơn"
         return ""
 
     table_rows = [[value_for(header, criterion) for header in headers] for criterion in rows]
-    return {"title": "Bang so sanh", "headers": headers, "rows": table_rows}
+    return {"title": "Bảng so sánh", "headers": headers, "rows": table_rows}
 
 def internal_slide_to_spec_row(idx: int, slide: Dict[str, Any]) -> Dict[str, Any]:
     row: Dict[str, Any] = {
