@@ -623,7 +623,10 @@ async def _build_revised_slide_spec_payload(
         for idx in image_instruction_targets:
             slides = revised.get("slides") or []
             if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
-                slides[idx]["_image_revision_instruction"] = revision_prompt
+                # Trích đoạn instruction riêng cho từng slide thay vì dùng toàn bộ revision_prompt.
+                # Tránh LLM thấy lệnh không liên quan (vd. sửa bảng slide khác) khi generate ảnh.
+                slide_instruction = _explicit_slide_instruction_from_prompt(revision_prompt, idx)
+                slides[idx]["_image_revision_instruction"] = slide_instruction or revision_prompt
 
     if await should_stop():
         raise TaskCancelledError()
@@ -703,19 +706,35 @@ async def _build_revised_slide_spec_payload(
                 if idx < len(old_slides) and isinstance(old_slides[idx], dict)
                 else None
             )
-            if not isinstance(old_table, dict):
-                continue
-            repaired_raw = await content_extractor.extract_table_spec(
-                {
-                    "slide": revised["slides"][idx],
-                    "context": (
-                        "Revise the existing table according to the user request. Preserve every existing header and row "
-                        "unless the request explicitly changes or removes it. Return the complete final table, never only the delta.\n\n"
-                        f"Existing table JSON:\n{json.dumps(old_table, ensure_ascii=False)}\n\n"
-                        f"User request:\n{revision_prompt}"
-                    ),
-                }
-            )
+            # Build context depending on whether a table already exists on this slide.
+            # Previously we skipped slides with no prior table (old_table is None), which
+            # caused the bug: user asked to create a new table on a bullets-only slide but
+            # got the 2-column regex fallback instead of a proper LLM-generated table.
+            if isinstance(old_table, dict):
+                table_context = (
+                    "Revise the existing table according to the user request. Preserve every existing header and row "
+                    "unless the request explicitly changes or removes it. Return the complete final table, never only the delta.\n\n"
+                    f"Existing table JSON:\n{json.dumps(old_table, ensure_ascii=False)}\n\n"
+                    f"User request:\n{revision_prompt}"
+                )
+                repaired_raw = await content_extractor.extract_table_spec(
+                    {"slide": revised["slides"][idx], "context": table_context}
+                )
+            else:
+                # No existing table — create one from scratch based on the user prompt.
+                # Use create_table_spec (TABLE_CREATE_SYSTEM) so the LLM knows to BUILD,
+                # not EXTRACT — it will never return empty headers/rows for a user request
+                # that explicitly lists column names and row criteria.
+                table_context = (
+                    "Create a new comparison table for this slide according to the user request. "
+                    "Use the exact column headers and row criteria specified in the request. "
+                    "Fill each cell with concise, factual content relevant to the slide topic. "
+                    "Return the complete table JSON, never leave cells empty.\n\n"
+                    f"User request:\n{revision_prompt}"
+                )
+                repaired_raw = await content_extractor.create_table_spec(
+                    {"slide": revised["slides"][idx], "context": table_context}
+                )
             repaired_spec = normalize_table_spec(repaired_raw)
             if repaired_spec:
                 headers = repaired_spec.get("headers") or []
@@ -772,6 +791,14 @@ async def _build_revised_slide_spec_payload(
         revised,
         source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
     )
+    if wants_text_revision or wants_deck_restructure:
+        from services.deck_coherence import improve_deck_coherence
+        revised = await improve_deck_coherence(
+            content_extractor,
+            revised,
+            task_id=task_id,
+            allowed_indices=plan_targets or None,
+        )
 
     image_paths = None
     if want_images and wants_image_revision:
@@ -809,10 +836,27 @@ async def _build_revised_slide_spec_payload(
         ]
         if missing_image_targets:
             slide_numbers = ", ".join(str(idx + 1) for idx in missing_image_targets)
-            raise RuntimeError(
-                f"Không thể tạo ảnh mới đạt yêu cầu cho slide {slide_numbers}; "
-                "bản sửa không được áp dụng để tránh báo thành công nhưng vẫn dùng ảnh cũ."
+            print(
+                f"[revise-spec] WARNING: image generation failed for slide(s) {slide_numbers}; "
+                "keeping original image_url from previous spec."
             )
+            # Khôi phục image_url cũ cho các slide không generate được ảnh.
+            # KHÔNG raise RuntimeError — giữ nguyên mọi thay đổi text/table/chart.
+            revised_slides = revised.get("slides") or []
+            for idx in missing_image_targets:
+                if not (0 <= idx < len(revised_slides)) or not isinstance(revised_slides[idx], dict):
+                    continue
+                old_url = (
+                    old_slides[idx].get("image_url")
+                    if idx < len(old_slides) and isinstance(old_slides[idx], dict)
+                    else None
+                )
+                if old_url:
+                    revised_slides[idx]["image_url"] = old_url
+                    if image_paths is None:
+                        image_paths = {}
+                    image_paths[idx] = old_url
+            changed_fields.append("image_partial")
 
     spec_payload = _build_slide_spec_payload(
         task_id=task_id,
@@ -1084,6 +1128,12 @@ async def generate_slide_spec(
                         )
 
                 structured = _enforce_plan_slide_limit(structured, plan_norm)
+                from services.deck_coherence import improve_deck_coherence
+                structured = await improve_deck_coherence(
+                    content_extractor,
+                    structured,
+                    task_id=task_id_bg,
+                )
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 visual_plan_bg = await build_visual_plan(
                     content_extractor,
@@ -1587,6 +1637,12 @@ async def generate_slide_full(
                     )
 
                 structured = _enforce_plan_slide_limit(structured, plan_norm)
+                from services.deck_coherence import improve_deck_coherence
+                structured = await improve_deck_coherence(
+                    content_extractor,
+                    structured,
+                    task_id=task_id_bg,
+                )
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 visual_plan_bg = await build_visual_plan(
                     content_extractor,

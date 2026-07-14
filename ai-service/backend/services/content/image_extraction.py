@@ -14,6 +14,7 @@ from services.content.prompts import (
     CHART_SPEC_SYSTEM as _CHART_SPEC_SYSTEM,
     IMAGE_SEMANTIC_SYSTEM as _IMAGE_SEMANTIC_SYSTEM,
     ONE_PASS_IMAGE_SCENE_SYSTEM as _ONE_PASS_SYSTEM,
+    TABLE_CREATE_SYSTEM as _TABLE_CREATE_SYSTEM,
     TABLE_SPEC_SYSTEM as _TABLE_SPEC_SYSTEM,
 )
 
@@ -195,6 +196,15 @@ class ImageExtractionMixin:
             slide_content, _TABLE_SPEC_SYSTEM, 900, "extract_table_spec"
         )
 
+    async def create_table_spec(self, slide_content: Dict[str, Any]) -> Dict[str, Any]:
+        """Tạo bảng mới hoàn toàn theo yêu cầu của người dùng (không phải trích xuất từ slide cũ).
+        Dùng prompt CREATE thay vì EXTRACT — LLM được chỉ dẫn phải sinh ra đủ cột/hàng theo yêu cầu,
+        không bao giờ trả về empty.
+        """
+        return await self._extract_json_from_slide(
+            slide_content, _TABLE_CREATE_SYSTEM, 900, "create_table_spec"
+        )
+
     async def extract_image_scene(
         self, slide_content: Dict[str, Any], system_prompt: str = ""
     ) -> str:
@@ -239,12 +249,26 @@ class ImageExtractionMixin:
             f"\nREQUIRED OBJECT: {domain_object}"
         )
 
-        user_msg = (
-            f"{context}\n\n"
-            f"Domain: {domain}\n"
-            f"Must include object: {domain_object}\n\n"
-            "Scene description (15-25 English words, real photographable scene, no text/diagrams):"
-        )
+        revision_instruction = str(slide.get("_image_revision_instruction") or "").strip()
+
+        if revision_instruction:
+            # Khi có yêu cầu sửa ảnh cụ thể từ user, đưa thẳng vào user_msg dưới dạng constraint bắt buộc.
+            # Đây là fix tổng quát — hoạt động với mọi domain/yêu cầu, không cần keyword hardcoded.
+            user_msg = (
+                f"{context}\n\n"
+                f"USER IMAGE REQUEST (MANDATORY — build the scene around this, translate to English visuals):\n"
+                f"{revision_instruction}\n\n"
+                f"Domain: {domain}\n"
+                f"Must include object: {domain_object}\n\n"
+                "Scene description (15-25 English words, real photographable scene matching the user request, no text/diagrams):"
+            )
+        else:
+            user_msg = (
+                f"{context}\n\n"
+                f"Domain: {domain}\n"
+                f"Must include object: {domain_object}\n\n"
+                "Scene description (15-25 English words, real photographable scene, no text/diagrams):"
+            )
 
         try:
             raw = await self._llm_completion_plain_text(

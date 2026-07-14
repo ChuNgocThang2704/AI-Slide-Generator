@@ -539,6 +539,12 @@ class RedisQueue:
             )
             from services.plan_limits import enforce_plan_slide_limit
             structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
+            from services.deck_coherence import improve_deck_coherence
+            structured_content = await improve_deck_coherence(
+                content_extractor,
+                structured_content,
+                task_id=task_id,
+            )
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
@@ -929,6 +935,12 @@ class RedisQueue:
             )
             from services.plan_limits import enforce_plan_slide_limit
             structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
+            from services.deck_coherence import improve_deck_coherence
+            structured_content = await improve_deck_coherence(
+                content_extractor,
+                structured_content,
+                task_id=task_id,
+            )
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)

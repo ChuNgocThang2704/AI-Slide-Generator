@@ -41,8 +41,38 @@ class RevisionRulesTest(unittest.TestCase):
         self.assertTrue(table["rows"])
         self.assertTrue(all(len(row) == len(table["headers"]) for row in table["rows"]))
 
+    def test_builds_vietnamese_diacritics_table_fallback(self):
+        # Kiểm tra prompt thực tế của user
+        prompt = (
+            "sửa slide 5 thành bảng gồm các cột Tiêu chí, Quản lý thủ công, Hệ thống thông minh, Nhận xét. "
+            "Thêm các hàng: tốc độ xử lý, độ chính xác, chi phí vận hành, bảo mật dữ liệu, khả năng mở rộng và trải nghiệm sinh viên"
+        )
+        table = fallback_table_from_revision_prompt(prompt)
+        self.assertIsNotNone(table)
+        self.assertEqual(len(table["headers"]), 4)
+        self.assertEqual(table["headers"], ["Tiêu chí", "Quản lý thủ công", "Hệ thống thông minh", "Nhận xét"])
+        self.assertEqual(len(table["rows"]), 6)
+        # Check first column value of each row matches requested criteria
+        criteria = [row[0].lower() for row in table["rows"]]
+        self.assertIn("toc do xu ly", [c.replace("ố", "o").replace("ử", "u").replace("ý", "y").replace("đ", "d") for c in criteria])
+
     def test_detects_image_request(self):
         self.assertTrue(revision_prompt_mentions_image("Doi anh slide 5 thanh xe o to"))
+        
+    def test_image_revision_visual_phrase_scenarios(self):
+        from services.images.prompts import _revision_visual_phrase
+        # Test 1: Bãi đỗ xe thông minh, có camera nhận diện biển số, không dùng camera cận cảnh
+        prompt = (
+            "Chỉ thay ảnh slide 3 bằng hình bãi đỗ xe thông minh trong trường đại học, "
+            "có ô tô, cảm biến tại từng vị trí đỗ, camera nhận diện biển số và bảng điện tử hiển thị số chỗ trống. "
+            "Không dùng hình camera cận cảnh."
+        )
+        phrase = _revision_visual_phrase(prompt)
+        # Đảm bảo không bị camera_forbidden block hoàn toàn, nhưng vẫn nhận diện được camera nhận diện biển số
+        self.assertIn("license plate recognition camera", phrase)
+        self.assertIn("modern university parking lot", phrase)
+        self.assertIn("IoT sensors", phrase)
+        self.assertIn("digital display board", phrase)
 
 
 if __name__ == "__main__":

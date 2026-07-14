@@ -138,6 +138,28 @@ Rules:
 - No markdown, no explanation outside JSON."""
 
 
+TABLE_CREATE_SYSTEM = """Create a comparison table based on the user's explicit request.
+The user has specified exact column headers and row criteria in their request — follow them precisely.
+
+Return ONLY valid JSON:
+{
+  "title": "short descriptive table caption",
+  "headers": ["Column A", "Column B", "Column C"],
+  "rows": [
+    ["row1 col1", "row1 col2", "row1 col3"],
+    ["row2 col1", "row2 col2", "row2 col3"]
+  ]
+}
+
+Rules:
+- Use EXACTLY the column headers named in the user request. Preserve their order and original language (Vietnamese or English).
+- Use EXACTLY the row criteria listed in the user request as the first column of each row.
+- Fill every other cell with concise (3-10 words), factual content relevant to the slide topic and column meaning.
+- NEVER return empty headers or empty rows — if a user specified N columns and M rows, return exactly N headers and M rows.
+- Each row must have the same number of cells as headers.
+- No markdown, no explanation outside JSON."""
+
+
 MAX_BULLETS_PER_SLIDE = 5
 MAX_WORDS_PER_BULLET = 18   # Hard max — dùng nhất quán toàn pipeline
 MIN_WORDS_PER_BULLET = 12   # Minimum để bullet có đủ nghĩa
