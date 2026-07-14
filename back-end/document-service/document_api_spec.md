@@ -274,6 +274,11 @@ After submit:
 3. Replace FE slide state with the new pages
 ```
 
+BE enforces `MAX_REVISIONS_PER_DAY` before submitting the AI task: Free `2`,
+Pro `10`, Ultra `30`. An exhausted quota returns `QUOTA_EXCEEDED`; a failed AI
+revision refunds the consumed unit. Plan selection is derived from the
+authenticated user's subscription and is never accepted from this request.
+
 BE persists the complete revised deck. FE must reload `/pages`; it must not
 merge a revision delta locally. Slides outside a single-slide target are
 preserved, including text, table, chart, image, and layout.

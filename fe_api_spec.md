@@ -249,6 +249,19 @@ Render priority:
 POST /api/document/projects/{projectId}/revise
 ```
 
+Revision quota is enforced by BE from the authenticated user's subscription:
+
+| Plan | Revisions per day |
+|---|---:|
+| Free | 2 |
+| Pro | 10 |
+| Ultra | 30 |
+
+When exhausted, the endpoint returns `QUOTA_EXCEEDED` without creating an AI
+task. Failed AI revisions are refunded. The quota appears under
+`MAX_REVISIONS_PER_DAY` in the existing subscription quota response. FE does
+not send a plan value; the Java BE resolves it from the authenticated user.
+
 Request body:
 
 ```json

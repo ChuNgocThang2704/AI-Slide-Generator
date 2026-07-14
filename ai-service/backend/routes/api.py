@@ -3,11 +3,9 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
-import html
 import json
 import httpx
 import re
-import unicodedata
 
 from services.file_processor import FileProcessor
 from services.content_extractor import ContentExtractor, TaskCancelledError
@@ -20,16 +18,6 @@ from config import (
     VLLM_BASIC_AUTH_PASS,
     REDIS_OFFLOAD_WHEN_WORKER_ALIVE,
     REDIS_QUEUE_MIN_CHARS,
-    IMAGE_GEN_API_BASE_URL,
-    FREE_IMAGE_LIMIT,
-    PRO_IMAGE_LIMIT_MAX,
-    ULTRA_IMAGE_LIMIT_MAX,
-    FREE_SLIDE_LIMIT,
-    PRO_SLIDE_LIMIT_MAX,
-    ULTRA_SLIDE_LIMIT_MAX,
-    FREE_CHAR_LIMIT,
-    PRO_CHAR_LIMIT,
-    ULTRA_CHAR_LIMIT,
 )
 from filename_utils import pptx_path_for_task, resolve_pptx_by_task_id
 from services.slide_charts import build_chart_specs_for_slides
@@ -37,6 +25,29 @@ from services.slide_tables import build_table_specs_for_slides
 from services.images import build_image_paths_for_slides
 from services.slide_text_quality import improve_slide_text_quality
 from services.slide_quality import build_visual_plan, improve_deck_source_grounding
+from services.plan_limits import (
+    as_bool_flag as _as_bool_flag,
+    form_wants_slide_images as _form_wants_slide_images,
+    resolve_plan_image_limit as _resolve_plan_image_limit,
+    validate_plan_limits as _validate_plan_limits,
+)
+from services.text_utils import plain_slide_text as _plain_slide_text
+from services.revision_rules import (
+    apply_explicit_chart_type_targets as _apply_explicit_chart_type_targets,
+    explicit_chart_type_targets_from_prompt as _explicit_chart_type_targets_from_prompt,
+    explicit_slide_instruction_from_prompt as _explicit_slide_instruction_from_prompt,
+    explicit_visual_targets_from_prompt as _explicit_visual_targets_from_prompt,
+    fallback_table_from_revision_prompt as _fallback_table_from_revision_prompt,
+    fold_revision_text as _fold_revision_text,
+    internal_slide_to_spec_row as _internal_slide_to_spec_row,
+    parse_revision_target_indices as _parse_revision_target_indices,
+    revision_prompt_add_slide_count as _revision_prompt_add_slide_count,
+    revision_prompt_delete_slide_indices as _revision_prompt_delete_slide_indices,
+    revision_prompt_mentions_image as _revision_prompt_mentions_image,
+    revision_prompt_mentions_table as _revision_prompt_mentions_table,
+    revision_prompt_preserve_slide_indices as _revision_prompt_preserve_slide_indices,
+    revision_prompt_title_overrides as _revision_prompt_title_overrides,
+)
 
 router = APIRouter()
 
@@ -46,203 +57,23 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-file_processor = FileProcessor()
-content_extractor = ContentExtractor(model_name=LLM_MODEL)
-slide_generator = SlideGenerator()
-redis_queue = RedisQueue()
+file_processor: Optional[FileProcessor] = None
+content_extractor: Optional[ContentExtractor] = None
+slide_generator: Optional[SlideGenerator] = None
+redis_queue: Optional[RedisQueue] = None
 
 
-def _plain_slide_text(value: Any) -> str:
-    """Return user-visible slide text without markdown formatting markers."""
-    t = unicodedata.normalize("NFKC", html.unescape(str(value or ""))).strip()
-    if not t:
-        return ""
-    t = t.translate(str.maketrans({
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u2013": "-",
-        "\u2014": "-",
-        "\u2026": "...",
-    }))
-    t = re.sub(r"<[^>\n]{1,80}>", " ", t)
-    t = re.sub(r"[•◦▪▫■□●○◆◇★☆✓✔✗✘➜→←↑↓↔]", " ", t)
-    cleaned_chars: List[str] = []
-    symbol_keep = set("$€£¥₫%‰+-=<>±×÷°")
-    for ch in t:
-        if ch == "\ufffd":
-            continue
-        cat = unicodedata.category(ch)
-        if cat[0] == "C":
-            cleaned_chars.append(" ")
-            continue
-        if cat[0] == "S" and ch not in symbol_keep:
-            cleaned_chars.append(" ")
-            continue
-        cleaned_chars.append(ch)
-    t = "".join(cleaned_chars)
-    t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
-    t = re.sub(r"^\s*\*+", "", t)
-    t = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", t)
-    t = re.sub(r"__([^_\n]+)__", r"\1", t)
-    t = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", t)
-    t = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", t)
-    t = re.sub(r"\*{2,}", "", t)
-    t = re.sub(r"_{2,}", "", t)
-    t = re.sub(r"\*+\s*:", ":", t)
-    t = re.sub(r":\s*\*+\s*", ": ", t)
-    t = re.sub(r"\s+\*+\s+", " ", t)
-    t = re.sub(r"\s{2,}", " ", t)
-    return t.strip()
-
-
-def _form_wants_slide_images(generate_images: Optional[str]) -> bool:
-    s = (generate_images or "true").strip().lower()
-    if s in ("0", "false", "no", "off"):
-        return False
-    if not (IMAGE_GEN_API_BASE_URL or "").strip():
-        print("[main] generate_images=true but IMAGE_GEN_API_BASE_URL is empty, skip SDXL.")
-        return False
-    return True
-
-
-def _resolve_plan_image_limit(
-    plan: Optional[str],
-    slide_count: Optional[int],
-    image_limit: Optional[int] = None,
-) -> int:
-    plan_norm = (plan or "pro").strip().lower()
-    if plan_norm == "free":
-        max_limit = max(0, int(FREE_IMAGE_LIMIT))
-        ratio = 0.5
-    elif plan_norm == "ultra":
-        max_limit = max(0, int(ULTRA_IMAGE_LIMIT_MAX))
-        ratio = 0.7
-    else:
-        max_limit = max(0, int(PRO_IMAGE_LIMIT_MAX))
-        ratio = 0.5
-
-    total = int(slide_count or 10)
-    calculated_limit = max(1, round(total * ratio))
-
-    requested = None
-    if image_limit is not None:
-        try:
-            requested = int(image_limit)
-        except Exception:
-            requested = None
-
-    if requested is not None:
-        return max(0, min(requested, calculated_limit, max_limit))
-    return max(0, min(calculated_limit, max_limit))
-
-
-def _detect_requested_slide_count(text: str) -> Optional[int]:
-    import re
-    if not text:
-        return None
-    # Tìm kiếm các mẫu như: "15 slide", "12 trang", "10 pages", "12 slides"
-    matches = re.findall(r"\b(\d+)\s*(?:slide|trang|page)s?\b", text.lower())
-    if matches:
-        try:
-            return int(matches[-1]) # Lấy giá trị khớp cuối cùng
-        except ValueError:
-            return None
-    return None
-
-
-def _explicit_visual_targets_from_prompt(text: str, slide_count: int) -> Dict[int, str]:
-    folded = _fold_revision_text(text)
-    if not folded or slide_count <= 0:
-        return {}
-
-    targets: Dict[int, str] = {}
-    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
-        try:
-            idx = int(match.group(1)) - 1
-        except Exception:
-            continue
-        if not (0 <= idx < slide_count):
-            continue
-
-        window_end = min(len(folded), match.end() + 180)
-        next_slide = re.search(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded[match.end():window_end])
-        if next_slide:
-            window_end = match.end() + next_slide.start()
-        window = folded[match.start():window_end]
-        before = folded[max(0, match.start() - 80): match.start()]
-        context = before + " " + window
-        if re.search(r"\b(?:giu|khong\s+doi|keep)\b", context):
-            continue
-        if re.search(
-            r"\b(?:chi\s+(?:co\s+)?van\s+ban|text[\s_-]*only)\b"
-            r"|\bkhong\s+(?:co\s+)?bang\b.{0,80}\bkhong\s+(?:co\s+)?bieu\s*do\b"
-            r"|\bkhong\s+(?:co\s+)?bieu\s*do\b.{0,80}\bkhong\s+(?:co\s+)?bang\b",
-            window,
-        ):
-            targets[idx] = "none"
-        elif re.search(r"\b(?:anh|hinh|image|photo|picture|minh\s+hoa)\b", window):
-            targets[idx] = "image"
-        elif re.search(r"\b(?:bieu\s*do|chart|graph)\b", window):
-            targets[idx] = "chart"
-        elif re.search(r"\b(?:bang|table|so\s+sanh)\b", window):
-            targets[idx] = "table"
-    return targets
-
-
-def _explicit_chart_type_targets_from_prompt(text: str, slide_count: int) -> Dict[int, str]:
-    folded = _fold_revision_text(text)
-    if not folded or slide_count <= 0:
-        return {}
-
-    targets: Dict[int, str] = {}
-    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
-        try:
-            idx = int(match.group(1)) - 1
-        except Exception:
-            continue
-        if not (0 <= idx < slide_count):
-            continue
-
-        window_end = min(len(folded), match.end() + 220)
-        next_slide = re.search(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded[match.end():window_end])
-        if next_slide:
-            window_end = match.end() + next_slide.start()
-        window = folded[match.start():window_end]
-        if not re.search(r"\b(?:bieu\s*do|chart|graph)\b", window):
-            continue
-        if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", window):
-            targets[idx] = "line"
-        elif re.search(r"\b(?:tron|pie|thi\s+phan)\b", window):
-            targets[idx] = "pie"
-        elif re.search(r"\b(?:cot|column|bar)\b", window):
-            targets[idx] = "bar"
-    return targets
-
-
-def _explicit_slide_instruction_from_prompt(text: str, slide_index: int) -> str:
-    marker_re = re.compile(
-        r"\b(?:slide|trang)\s*(?:(?:số|so|thứ|thu)\s*)?(?:#\s*)?(\d+)\b",
-        flags=re.IGNORECASE,
-    )
-    markers = list(marker_re.finditer(str(text or "")))
-    for pos, marker in enumerate(markers):
-        if int(marker.group(1)) - 1 != int(slide_index):
-            continue
-        end = markers[pos + 1].start() if pos + 1 < len(markers) else len(str(text or ""))
-        return str(text or "")[marker.start():end].strip()
-    return ""
-
-
-def _apply_explicit_chart_type_targets(chart_specs: Optional[dict], targets: Dict[int, str]) -> None:
-    if not chart_specs or not targets:
-        return
-    for idx, chart_type in targets.items():
-        spec = chart_specs.get(idx)
-        if isinstance(spec, dict) and chart_type:
-            spec["chart_type"] = chart_type
-            spec["type"] = chart_type
+def initialize_api_services(queue: Optional[RedisQueue] = None) -> None:
+    """Initialize stateful API services during the FastAPI lifespan."""
+    global file_processor, content_extractor, slide_generator, redis_queue
+    if file_processor is None:
+        file_processor = FileProcessor()
+    if content_extractor is None:
+        content_extractor = ContentExtractor(model_name=LLM_MODEL)
+    if slide_generator is None:
+        slide_generator = SlideGenerator()
+    if redis_queue is None:
+        redis_queue = queue or RedisQueue()
 
 
 def _detect_generate_images_request(text: str) -> bool:
@@ -251,70 +82,6 @@ def _detect_generate_images_request(text: str) -> bool:
         return False
     t = text.lower()
     return any(key in t for key in ("kem anh", "kèm ảnh", "co hinh", "có hình", "sinh anh", "sinh ảnh", "generate image", "with image"))
-
-
-def _validate_plan_limits(
-    plan: str,
-    slide_count: Optional[int],
-    raw_content: Optional[str] = None
-) -> Tuple[Optional[int], Optional[int]]:
-    """
-    Validates limits based on selected plan (free, pro, ultra).
-    Returns: (target_slides_override, resolved_slide_count)
-    Raises HTTPException 400 if validation fails.
-    """
-    plan_norm = (plan or "pro").strip().lower()
-    
-    # 1. Validate plan and character limits
-    if plan_norm == "free":
-        char_limit = FREE_CHAR_LIMIT
-        slide_limit_max = FREE_SLIDE_LIMIT
-    elif plan_norm == "ultra":
-        char_limit = ULTRA_CHAR_LIMIT
-        slide_limit_max = ULTRA_SLIDE_LIMIT_MAX
-    else: # pro
-        char_limit = PRO_CHAR_LIMIT
-        slide_limit_max = PRO_SLIDE_LIMIT_MAX
-        
-    if raw_content and len(raw_content) > char_limit:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Độ dài nội dung vượt quá giới hạn của gói {plan_norm.upper()} ({len(raw_content)} > {char_limit} ký tự)."
-        )
-        
-    # 2. Resolve slide count & check slide limits
-    if plan_norm == "free" and not (slide_count and slide_count > 0):
-        target_slides_override = FREE_SLIDE_LIMIT
-        resolved_slide_count = FREE_SLIDE_LIMIT
-    else:
-        # Check if slide_count is requested. If slide_count is 0 or None, try to detect from raw_content
-        actual_slide_count = slide_count
-        if (actual_slide_count is None or actual_slide_count <= 0) and raw_content:
-            detected = _detect_requested_slide_count(raw_content)
-            if detected and 1 <= detected <= slide_limit_max:
-                print(f"[api] Detected requested slide count in prompt: {detected}")
-                actual_slide_count = detected
-
-        # For pro and ultra, slide_count is optional.
-        if actual_slide_count and actual_slide_count > 0:
-            if actual_slide_count > slide_limit_max:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Số slide yêu cầu vượt quá giới hạn tối đa của gói {plan_norm.upper()} ({actual_slide_count} > {slide_limit_max} slides)."
-                )
-            target_slides_override = actual_slide_count
-            resolved_slide_count = actual_slide_count
-        else:
-            target_slides_override = None
-            resolved_slide_count = None
-            
-    return target_slides_override, resolved_slide_count
-
-
-def _as_bool_flag(value: Optional[str], default: bool = False) -> bool:
-    if value is None:
-        return default
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _image_url_from_path(path_str: str) -> Optional[str]:
@@ -513,286 +280,6 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
     }
 
 
-def _parse_revision_target_indices(
-    *,
-    revision_prompt: str,
-    slide_count: int,
-    slide_index: Optional[int] = None,
-    slide_number: Optional[int] = None,
-    target_slide_indices: Optional[str] = None,
-    target_slide_numbers: Optional[str] = None,
-) -> List[int]:
-    """Resolve partial-revision targets as 0-based slide indices."""
-    targets = set()
-
-    def add_index(value: Any, *, one_based: bool):
-        try:
-            n = int(value)
-        except Exception:
-            return
-        idx = n - 1 if one_based else n
-        if 0 <= idx < slide_count:
-            targets.add(idx)
-
-    def add_many(raw: Optional[str], *, one_based: bool):
-        if not raw:
-            return
-        text = str(raw).strip()
-        if not text:
-            return
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                for item in data:
-                    add_index(item, one_based=one_based)
-                return
-            add_index(data, one_based=one_based)
-            return
-        except Exception:
-            pass
-        for part in re.split(r"[,;\s]+", text):
-            if part.strip():
-                add_index(part.strip(), one_based=one_based)
-
-    add_index(slide_index, one_based=False)
-    add_index(slide_number, one_based=True)
-    add_many(target_slide_indices, one_based=False)
-    add_many(target_slide_numbers, one_based=True)
-
-    prompt = str(revision_prompt or "")
-    folded = unicodedata.normalize("NFD", prompt.lower())
-    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
-    folded = folded.replace("đ", "d")
-    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
-        add_index(match.group(1), one_based=True)
-    for match in re.finditer(r"\b(\d+)\s*(?:slide|trang)\b", folded):
-        add_index(match.group(1), one_based=True)
-    if re.search(r"\b(?:slide|trang)\s*(?:cuoi|last|final)\b", folded) and slide_count > 0:
-        targets.add(slide_count - 1)
-    if re.search(r"\b(?:slide|trang)\s*(?:dau|first)\b", folded) and slide_count > 0:
-        targets.add(0)
-
-    return sorted(targets)
-
-
-def _fold_revision_text(text: str) -> str:
-    folded = unicodedata.normalize("NFD", str(text or "").lower())
-    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
-    return folded.replace("đ", "d").replace("Ä‘", "d")
-
-
-def _revision_prompt_mentions_image(text: str) -> bool:
-    folded = _fold_revision_text(text)
-    return bool(
-        re.search(
-            r"\b(?:anh|hinh|visual|picture|photo|image|illustration)\b|\bminh\s+hoa\b",
-            folded,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _revision_prompt_mentions_table(text: str) -> bool:
-    folded = _fold_revision_text(text)
-    return bool(
-        re.search(
-            r"\b(?:bang|table|comparison\s+table)\b|\bdu\s+lieu\s+bang\b|\bso\s+sanh\b",
-            folded,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _revision_prompt_add_slide_count(text: str) -> int:
-    folded = _fold_revision_text(text)
-    if not re.search(r"\b(?:them|add|bo\s+sung|chen)\b", folded):
-        return 0
-    match = re.search(r"\b(?:them|add|bo\s+sung|chen)\s*(\d+)?\s*(?:slide|trang)\b", folded)
-    if match:
-        try:
-            return max(1, min(int(match.group(1) or "1"), 10))
-        except Exception:
-            return 1
-    if re.search(r"\b(?:slide|trang)\s+(?:moi|cuoi)\b", folded):
-        return 1
-    return 0
-
-
-def _revision_prompt_delete_slide_indices(text: str, slide_count: int) -> List[int]:
-    folded = _fold_revision_text(text)
-    delete_signal = r"(?:\b(?:xoa|delete|remove)\b|\bbo\s+(?:slide|trang)\b)"
-    if slide_count <= 0 or not re.search(delete_signal, folded):
-        return []
-    targets: set[int] = set()
-    for match in re.finditer(r"\b(?:xoa|delete|remove|bo)\s*(?:slide|trang)?\s*(?:so|thu)?\s*(\d+)\b", folded):
-        try:
-            idx = int(match.group(1)) - 1
-        except Exception:
-            continue
-        if 0 <= idx < slide_count:
-            targets.add(idx)
-    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
-        before = folded[max(0, match.start() - 60): match.start()]
-        if not re.search(delete_signal, before):
-            continue
-        try:
-            idx = int(match.group(1)) - 1
-        except Exception:
-            continue
-        if 0 <= idx < slide_count:
-            targets.add(idx)
-    if re.search(r"\b(?:xoa|delete|remove|bo).{0,30}(?:slide|trang)\s+(?:cuoi|last|final)\b", folded):
-        targets.add(slide_count - 1)
-    if re.search(r"\b(?:xoa|delete|remove|bo).{0,30}(?:slide|trang)\s+(?:dau|first)\b", folded):
-        targets.add(0)
-    return sorted(targets)
-
-
-def _revision_prompt_preserve_slide_indices(text: str, slide_count: int) -> List[int]:
-    folded = _fold_revision_text(text)
-    if slide_count <= 0 or not re.search(r"\b(?:giu|khong\s+doi|keep|unchanged|nhu\s+cu)\b", folded):
-        return []
-    targets: set[int] = set()
-    for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
-        before = folded[max(0, match.start() - 80): match.start()]
-        after = folded[match.end(): min(len(folded), match.end() + 80)]
-        context = f"{before} {after}"
-        if not re.search(r"\b(?:giu|khong\s+doi|keep|unchanged|nhu\s+cu)\b", context):
-            continue
-        try:
-            idx = int(match.group(1)) - 1
-        except Exception:
-            continue
-        if 0 <= idx < slide_count:
-            targets.add(idx)
-    return sorted(targets)
-
-
-def _revision_prompt_title_overrides(text: str, slide_count: int) -> Dict[int, str]:
-    raw = str(text or "")
-    folded = _fold_revision_text(raw)
-    if slide_count <= 0 or not re.search(r"\b(?:tieu\s*de|title)\b", folded):
-        return {}
-    overrides: Dict[int, str] = {}
-    patterns = [
-        r"(?is)(?:slide|trang)\s*(?:s[ốo]|th[ứu])?\s*(\d+).*?(?:tiêu\s*đề|title).*?(?:thành|là|to)\s*[\"']?([^\"'.\n]+)",
-        r"(?is)(?:đổi|sửa|change|set).*?(?:tiêu\s*đề|title).*?(?:slide|trang)\s*(?:s[ốo]|th[ứu])?\s*(\d+).*?(?:thành|là|to)\s*[\"']?([^\"'.\n]+)",
-        r"(?is)(?:slide|trang)\s*(?:so|thu)?\s*(\d+).*?(?:tieu\s*de|title).*?(?:thanh|la|to)\s*[\"'“”]?([^\"'“”.\n]+)",
-        r"(?is)(?:doi|sua|change|set).*?(?:tieu\s*de|title).*?(?:slide|trang)\s*(?:so|thu)?\s*(\d+).*?(?:thanh|la|to)\s*[\"'“”]?([^\"'“”.\n]+)",
-    ]
-    for pattern in patterns:
-        for match in re.finditer(pattern, raw):
-            try:
-                idx = int(match.group(1)) - 1
-            except Exception:
-                continue
-            title = _plain_slide_text(match.group(2)).strip(" .:-\"'")
-            if 0 <= idx < slide_count and title:
-                overrides[idx] = title
-    return overrides
-
-
-def _split_revision_list(value: str) -> List[str]:
-    parts = re.split(r"[,;|/]+|\s+-\s+|\s+\bva\b\s+|\s+\band\b\s+", str(value or ""), flags=re.IGNORECASE)
-    return [p.strip(" .:-") for p in parts if p and p.strip(" .:-")]
-
-
-def _fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]]:
-    text = str(prompt or "")
-    folded = _fold_revision_text(text)
-    if not _revision_prompt_mentions_table(text):
-        return None
-
-    headers: List[str] = []
-    rows: List[str] = []
-
-    header_match = re.search(
-        r"(?i)(?:headers?|cot|columns?)\s*(?:gom|la|:)?\s*([^.;\n]+)",
-        text,
-    )
-    if header_match:
-        headers = _split_revision_list(header_match.group(1))
-
-    row_match = re.search(
-        r"(?i)(?:rows?|hang|cac\s+hang|them\s+hang)\s*(?:gom|la|:)?\s*([^.;\n]+)",
-        text,
-    )
-    if row_match:
-        rows = _split_revision_list(row_match.group(1))
-
-    if len(headers) < 2:
-        headers = ["Tieu chi", "Noi dung"]
-    if not rows:
-        rows = ["Noi dung can sua"]
-
-    def value_for(header: str, criterion: str) -> str:
-        h = _fold_revision_text(header)
-        c = _fold_revision_text(criterion)
-        if h in {"tieu chi", "criterion", "criteria"} or "tieu chi" in h:
-            return criterion
-        if "thu cong" in h or "manual" in h:
-            if "toc do" in c:
-                return "Cham, phu thuoc thao tac con nguoi"
-            if "chinh xac" in c:
-                return "Thap hon, de sai sot"
-            if "chi phi" in c:
-                return "Cao do ton nhan su va thoi gian"
-            if "trai nghiem" in c:
-                return "Bat tien, phai cho doi"
-            return "Phu thuoc con nguoi"
-        if "thong minh" in h or "smart" in h or "tu dong" in h:
-            if "toc do" in c:
-                return "Nhanh, xu ly tu dong"
-            if "chinh xac" in c:
-                return "Cao, dua tren du lieu thoi gian thuc"
-            if "chi phi" in c:
-                return "Toi uu hon ve dai han"
-            if "trai nghiem" in c:
-                return "Thuan tien, minh bach"
-            return "Tu dong hoa va co du lieu"
-        if "nhan xet" in h or "note" in h or "comment" in h:
-            return "He thong thong minh co loi the hon"
-        return ""
-
-    table_rows = [[value_for(header, criterion) for header in headers] for criterion in rows]
-    return {"title": "Bang so sanh", "headers": headers, "rows": table_rows}
-
-
-def _internal_slide_to_spec_row(idx: int, slide: Dict[str, Any]) -> Dict[str, Any]:
-    row: Dict[str, Any] = {
-        "index": idx,
-        "title": _plain_slide_text(slide.get("title") or f"Slide {idx + 1}"),
-        "bullets": [
-            _plain_slide_text(x)
-            for x in (slide.get("bullets") or [])
-            if _plain_slide_text(x)
-        ],
-        "notes": _plain_slide_text(slide.get("notes") or ""),
-        "chart": slide.get("chart") if isinstance(slide.get("chart"), dict) else None,
-        "table": slide.get("table") if isinstance(slide.get("table"), dict) else None,
-        "image": None,
-        "layout": str(slide.get("layout") or "text_only"),
-        "primary_visual": None,
-        "likely_multi_pptx_slides": bool(slide.get("likely_multi_pptx_slides")),
-    }
-    if slide.get("image_url"):
-        row["image"] = {
-            "url": str(slide.get("image_url")),
-            "path": str(slide.get("image_url")),
-            "mime": "image/jpeg",
-        }
-    if row["table"]:
-        row["layout"] = "text_table"
-        row["primary_visual"] = "table"
-    elif row["chart"]:
-        row["layout"] = "text_chart"
-        row["primary_visual"] = "chart"
-    elif row["image"]:
-        row["layout"] = "text_image"
-        row["primary_visual"] = "image"
-    return row
-
-
 def _review_revised_spec_payload(
     spec_payload: Dict[str, Any],
     *,
@@ -853,6 +340,36 @@ def _review_revised_spec_payload(
         if not (0 <= idx < len(slides)) or not isinstance(slides[idx], dict):
             continue
         table = slides[idx].get("table")
+        folded_prompt = _fold_revision_text(revision_prompt)
+        has_explicit_table_shape = bool(
+            re.search(r"\b(?:cot|column|header)s?\b", folded_prompt)
+            and re.search(r"\b(?:hang|row)s?\b", folded_prompt)
+        )
+        if fallback_table and has_explicit_table_shape and isinstance(table, dict):
+            expected_headers = {
+                _fold_revision_text(value).strip()
+                for value in (fallback_table.get("headers") or [])
+                if str(value or "").strip()
+            }
+            actual_headers = {
+                _fold_revision_text(value).strip()
+                for value in (table.get("headers") or [])
+                if str(value or "").strip()
+            }
+            expected_rows = {
+                _fold_revision_text(row[0]).strip()
+                for row in (fallback_table.get("rows") or [])
+                if isinstance(row, list) and row and str(row[0] or "").strip()
+            }
+            actual_rows = {
+                _fold_revision_text(row[0]).strip()
+                for row in (table.get("rows") or [])
+                if isinstance(row, list) and row and str(row[0] or "").strip()
+            }
+            if not expected_headers.issubset(actual_headers) or not expected_rows.issubset(actual_rows):
+                slides[idx]["table"] = fallback_table
+                table = fallback_table
+                fixes.append({"type": "enforced_explicit_table_shape", "slide": idx + 1})
         if fallback_table and not (
             isinstance(table, dict) and table.get("headers") and table.get("rows")
         ):

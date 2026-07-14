@@ -25,6 +25,7 @@ public class Constants {
     public interface FEATURE_KEY {
         String MAX_SLIDES_PER_DAY = "MAX_SLIDES_PER_DAY";
         String MAX_IMAGES_PER_SLIDE = "MAX_IMAGES_PER_SLIDE";
+        String MAX_REVISIONS_PER_DAY = "MAX_REVISIONS_PER_DAY";
         String ALLOW_EXPORT_PDF = "ALLOW_EXPORT_PDF";
         String ALLOW_CUSTOM_TEMPLATE = "ALLOW_CUSTOM_TEMPLATE";
     }

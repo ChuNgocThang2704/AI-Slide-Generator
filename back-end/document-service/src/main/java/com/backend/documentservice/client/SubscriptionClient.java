@@ -28,4 +28,7 @@ public interface SubscriptionClient {
 
     @PostMapping("/internal/quota/consume")
     ApiResponse<QuotaConsumeResponse> consumeQuota(@RequestBody InternalQuotaRequest request);
+
+    @PostMapping("/internal/quota/revert")
+    ApiResponse<QuotaConsumeResponse> revertQuota(@RequestBody InternalQuotaRequest request);
 }

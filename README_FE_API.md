@@ -38,6 +38,12 @@ GET  /api/document/projects/{projectId}/progress
 GET  /api/document/projects/{projectId}/pages
 ```
 
+AI revise is limited per user per day by subscription: Free `2`, Pro `10`,
+Ultra `30`. When the quota is exhausted, BE returns the existing
+`QUOTA_EXCEEDED` error and does not start an AI task. A failed AI revise is
+automatically refunded. FE can read `MAX_REVISIONS_PER_DAY` from the existing
+subscription quotas endpoint; it must not send or choose the account plan.
+
 When FE has one selected slide, send `revisionScope="slide"` and the 1-based
 `slideNumber`. For multi-slide natural-language edits, send the slide numbers in
 `revisionPrompt` with `revisionScope="auto"`. For a full-deck rewrite, send

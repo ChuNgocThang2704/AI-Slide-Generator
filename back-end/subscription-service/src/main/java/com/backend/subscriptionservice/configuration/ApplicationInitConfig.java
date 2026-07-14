@@ -41,6 +41,7 @@ public class ApplicationInitConfig {
             updatePackagePricesIfNull(freePack, BigDecimal.ZERO, BigDecimal.ZERO);
             initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.MAX_SLIDES_PER_DAY, 3);
             initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE, 5);
+            initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.MAX_REVISIONS_PER_DAY, 2);
             initFeatureIfNotExist(freePack.getId(), Constants.FEATURE_KEY.ALLOW_EXPORT_PDF, 0); // 0: False
 
             // 2. Khởi tạo Gói PRO ($10 USD / 199.000 VNĐ)
@@ -57,6 +58,7 @@ public class ApplicationInitConfig {
             updatePackagePricesIfNull(proPack, new BigDecimal("199000"), new BigDecimal("10"));
             initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.MAX_SLIDES_PER_DAY, 20);
             initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE, 15);
+            initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.MAX_REVISIONS_PER_DAY, 10);
             initFeatureIfNotExist(proPack.getId(), Constants.FEATURE_KEY.ALLOW_EXPORT_PDF, 1); // 1: True
 
             // 3. Khởi tạo Gói ULTRA ($20 USD / 499.000 VNĐ)
@@ -73,6 +75,7 @@ public class ApplicationInitConfig {
             updatePackagePricesIfNull(ultraPack, new BigDecimal("499000"), new BigDecimal("20"));
             initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.MAX_SLIDES_PER_DAY, 999999);
             initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE, 35);
+            initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.MAX_REVISIONS_PER_DAY, 30);
             initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.ALLOW_EXPORT_PDF, 1);
             initFeatureIfNotExist(ultraPack.getId(), Constants.FEATURE_KEY.ALLOW_CUSTOM_TEMPLATE, 1);
 

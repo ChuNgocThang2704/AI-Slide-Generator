@@ -279,6 +279,17 @@ public class ProjectService {
             throw new AppException(ErrorCode.AI_API_ERROR, "Project chua co AI task hoan thanh de sua.");
         }
 
+        String revisionQuotaKey = "MAX_REVISIONS_PER_DAY";
+        ApiResponse<QuotaCheckResponse> quotaResponse = subscriptionClient.checkQuota(userId, revisionQuotaKey);
+        if (quotaResponse == null || quotaResponse.getData() == null || !quotaResponse.getData().isAllowed()) {
+            throw new AppException(ErrorCode.QUOTA_EXCEEDED, "Da het luot sua slide trong ngay.");
+        }
+        subscriptionClient.consumeQuota(InternalQuotaRequest.builder()
+                .userId(userId)
+                .featureKey(revisionQuotaKey)
+                .amount(1)
+                .build());
+
         project.setStatus(Constants.PROJECT_STATUS.CREATE);
         project.setAiTaskId(null);
         project = projectRepository.save(project);
@@ -310,7 +321,7 @@ public class ProjectService {
     }
 
     @Async
-    public void reviseSlidesAsync(UUID projectId, String sourceTaskId, ProjectReviseRequest request, String userRole) {
+    public void reviseSlidesAsync(UUID projectId, UUID userId, String sourceTaskId, ProjectReviseRequest request, String userRole) {
         try {
             Project project = projectRepository.findById(projectId)
                     .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
@@ -345,6 +356,7 @@ public class ProjectService {
             projectRepository.save(proj);
             log.info("[document-service] Da cap nhat slide sau khi revise, project ID: {}", projectId);
         } catch (AppException e) {
+            revertRevisionQuota(userId);
             log.error("[document-service] Loi ung dung khi revise slide tu AI cho project ID: {}", projectId, e);
             updateAiTaskLogsFromProgress(projectId, "failed", objectMapper.createObjectNode().put("error", e.getMessage()));
             Project proj = projectRepository.findById(projectId).orElse(null);
@@ -353,6 +365,7 @@ public class ProjectService {
                 projectRepository.save(proj);
             }
         } catch (Exception e) {
+            revertRevisionQuota(userId);
             log.error("[document-service] That bai khi revise slide tu AI cho project ID: {}", projectId, e);
             updateAiTaskLogsFromProgress(projectId, "failed", objectMapper.createObjectNode().put("error", e.getMessage()));
             Project proj = projectRepository.findById(projectId).orElse(null);
@@ -360,6 +373,18 @@ public class ProjectService {
                 proj.setStatus(Constants.PROJECT_STATUS.FAILED);
                 projectRepository.save(proj);
             }
+        }
+    }
+
+    private void revertRevisionQuota(UUID userId) {
+        try {
+            subscriptionClient.revertQuota(InternalQuotaRequest.builder()
+                    .userId(userId)
+                    .featureKey("MAX_REVISIONS_PER_DAY")
+                    .amount(1)
+                    .build());
+        } catch (Exception quotaError) {
+            log.error("Khong the hoan lai quota sua slide cho user {}", userId, quotaError);
         }
     }
 

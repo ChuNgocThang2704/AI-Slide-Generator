@@ -96,7 +96,7 @@ public class DocumentController {
             @RequestBody @Valid ProjectReviseRequest request) {
         String sourceTaskId = projectService.getCurrentAiTaskId(id, currentUserId());
         ProjectResponse response = projectService.requestSlideRevision(id, currentUserId(), request, currentUserRole());
-        projectService.reviseSlidesAsync(id, sourceTaskId, request, currentUserRole());
+        projectService.reviseSlidesAsync(id, currentUserId(), sourceTaskId, request, currentUserRole());
         return ApiResponse.<ProjectResponse>builder()
                 .data(response)
                 .build();

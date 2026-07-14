@@ -5,12 +5,10 @@ const API =
     ? 'http://localhost:8000'
     : window.location.origin
 
-const DEFAULT_PLAN = 'pro'
-
 const PLAN_CONFIG = {
-  free: { label: 'Free', maxSlides: 10, maxImages: 5, maxChars: 10000 },
-  pro: { label: 'Pro', maxSlides: 30, maxImages: 15, maxChars: 50000 },
-  ultra: { label: 'Ultra', maxSlides: 50, maxImages: 35, maxChars: 100000 },
+  free: { label: 'Free', maxSlides: 10, maxImages: 5, maxChars: 10000, maxRevisions: 2 },
+  pro: { label: 'Pro', maxSlides: 30, maxImages: 15, maxChars: 50000, maxRevisions: 10 },
+  ultra: { label: 'Ultra', maxSlides: 50, maxImages: 35, maxChars: 100000, maxRevisions: 30 },
 }
 
 function SlidePreview({ deck }) {
@@ -271,6 +269,7 @@ function useSpecTasks() {
 }
 
 export default function App() {
+  const [plan, setPlan] = useState('pro')
   const [tab, setTab] = useState('text')
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
@@ -278,7 +277,7 @@ export default function App() {
   const [revisionPrompt, setRevisionPrompt] = useState('')
   const { activeTaskId, busy, cancel, progress, reviseSpec, spec, status, submitSpec } = useSpecTasks()
 
-  const cfg = PLAN_CONFIG[DEFAULT_PLAN]
+  const cfg = PLAN_CONFIG[plan]
   const deck = spec?.deck
   const sourceTaskId = spec?.task_id
   const charCount = text.trim().length
@@ -294,7 +293,7 @@ export default function App() {
 
   const buildBaseForm = () => {
     const fd = new FormData()
-    fd.append('plan', DEFAULT_PLAN)
+    fd.append('plan', plan)
     return fd
   }
 
@@ -322,7 +321,7 @@ export default function App() {
     fd.append('source_task_id', sourceTaskId)
     fd.append('revision_prompt', revisionPrompt)
     fd.append('revision_scope', 'auto')
-    fd.append('plan', DEFAULT_PLAN)
+    fd.append('plan', plan)
     reviseSpec(fd)
   }
 
@@ -354,6 +353,30 @@ export default function App() {
               Check ket noi
             </button>
             <span>{checkMsg || 'Backend chua check | vLLM chua check'}</span>
+          </div>
+
+          <div className="field">
+            <label>Goi kiem thu</label>
+            <div className="segmented" role="group" aria-label="Goi kiem thu">
+              {Object.entries(PLAN_CONFIG).map(([key, item]) => (
+                <button
+                  className={plan === key ? 'active' : ''}
+                  disabled={busy}
+                  key={key}
+                  onClick={() => setPlan(key)}
+                  type="button"
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="plan-badge">
+              <strong>{cfg.label}</strong>
+              <span>
+                Toi da {cfg.maxSlides} slide, {cfg.maxImages} anh, {cfg.maxChars.toLocaleString()} ky tu;
+                {` ${cfg.maxRevisions} luot sua/ngay qua BE.`}
+              </span>
+            </div>
           </div>
 
           <div className="tabs">
