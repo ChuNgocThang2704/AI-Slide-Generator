@@ -155,9 +155,7 @@ async def review_visual_data_specs(
     """Trả về các đặc tả đã được lọc và các bản ghi debug đã cập nhật."""
     if not specs or not VISUAL_DATA_REVIEW_ENABLE:
         return specs, debug_records
-    if not getattr(content_extractor, "gemini_available", False):
-        return specs, debug_records
-    if not hasattr(content_extractor, "_gemini_completion_plain_text"):
+    if not hasattr(content_extractor, "_llm_completion_plain_text"):
         return specs, debug_records
 
     candidates = _reviewable_records(structured, specs, debug_records)
@@ -201,7 +199,7 @@ async def review_visual_data_specs(
     ]
 
     try:
-        raw = await content_extractor._gemini_completion_plain_text(
+        raw = await content_extractor._llm_completion_plain_text(
             messages,
             max_tokens=1400,
             temperature=0.05,

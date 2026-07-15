@@ -626,9 +626,9 @@ async def _gemini_review_speaker_notes(
     *,
     source_language: str = "auto",
 ) -> Tuple[Dict[str, Any], List[int]]:
-    if not _GEMINI_REVIEW_ENABLE or not getattr(content_extractor, "gemini_available", False):
+    if not _GEMINI_REVIEW_ENABLE:
         return structured, []
-    if not hasattr(content_extractor, "_gemini_completion_plain_text"):
+    if not hasattr(content_extractor, "_llm_completion_plain_text"):
         return structured, []
 
     slides = structured.get("slides") or []
@@ -678,7 +678,7 @@ async def _gemini_review_speaker_notes(
         {"role": "user", "content": json.dumps({"slides": review_items}, ensure_ascii=False)},
     ]
     try:
-        raw = await content_extractor._gemini_completion_plain_text(
+        raw = await content_extractor._llm_completion_plain_text(
             messages,
             max_tokens=min(6000, 700 + 450 * len(review_items)),
             temperature=0.2,
@@ -833,9 +833,9 @@ async def _gemini_review_slide_text(
     source_language: str = "auto",
 ) -> Tuple[Dict[str, Any], List[int]]:
     """Yêu cầu Gemini đánh giá các slide yếu/bị cắt cụt với tư cách là một người phản biện độc lập."""
-    if not _GEMINI_REVIEW_ENABLE or not getattr(content_extractor, "gemini_available", False):
+    if not _GEMINI_REVIEW_ENABLE:
         return structured, []
-    if not hasattr(content_extractor, "_gemini_completion_plain_text"):
+    if not hasattr(content_extractor, "_llm_completion_plain_text"):
         return structured, []
 
     review_items = _slide_subset_for_review(structured, records)
@@ -867,7 +867,7 @@ async def _gemini_review_slide_text(
     ]
 
     try:
-        raw = await content_extractor._gemini_completion_plain_text(
+        raw = await content_extractor._llm_completion_plain_text(
             messages,
             max_tokens=1800,
             temperature=0.15,
@@ -934,10 +934,10 @@ async def _gemini_repair_titles_after_review(
     danh từ riêng hoặc cụm từ kỹ thuật bị cắt làm đôi. Giải pháp sửa lỗi dự phòng xác định (deterministic)
     vẫn khả dụng khi Gemini không được định cấu hình hoặc gặp lỗi.
     """
-    if not _GEMINI_REVIEW_ENABLE or not getattr(content_extractor, "gemini_available", False):
+    if not _GEMINI_REVIEW_ENABLE:
         fallback = copy.deepcopy(structured)
         return fallback, _repair_titles_after_review(fallback)
-    if not hasattr(content_extractor, "_gemini_completion_plain_text"):
+    if not hasattr(content_extractor, "_llm_completion_plain_text"):
         fallback = copy.deepcopy(structured)
         return fallback, _repair_titles_after_review(fallback)
 
@@ -987,7 +987,7 @@ async def _gemini_repair_titles_after_review(
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
         try:
-            raw = await content_extractor._gemini_completion_plain_text(
+            raw = await content_extractor._llm_completion_plain_text(
                 messages,
                 max_tokens=800,  # 800 tokens là quá đủ cho 5 slide titles
                 temperature=0.05,

@@ -372,6 +372,23 @@ vllm serve Qwen/Qwen3-8B \
   --enable-prefix-caching
 ```
 
+## Hướng dẫn tự Host vLLM Server (Vision-Language Model - Duyệt ảnh offline)
+
+Nếu muốn tự chạy mô hình đa phương thức để kiêm cả khâu sinh slide lẫn tự duyệt ảnh (không cần Gemini API), hãy dùng lệnh sau:
+
+```bash
+vllm serve Qwen/Qwen3-VL-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --dtype auto \
+  --gpu-memory-utilization 0.90 \
+  --max-model-len 16384 \
+  --served-model-name Qwen3-8B \
+  --enable-prefix-caching \
+  --limit-mm-per-prompt image=1
+```
+*(Giữ nguyên `--served-model-name Qwen3-8B` để không phải sửa lại file cấu hình `.env` của backend).*
+
 ## JSON Spec API For BE/FE
 
 Create a deck:
