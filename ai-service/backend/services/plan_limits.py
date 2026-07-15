@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException
 from config import (
     IMAGE_GEN_API_BASE_URL,
+    GEMINI_API_KEY, STOCK_PHOTO_ENABLE, PEXELS_API_KEY,
     FREE_IMAGE_LIMIT, PRO_IMAGE_LIMIT_MAX, ULTRA_IMAGE_LIMIT_MAX,
     FREE_SLIDE_LIMIT, PRO_SLIDE_LIMIT_MAX, ULTRA_SLIDE_LIMIT_MAX,
     FREE_CHAR_LIMIT, PRO_CHAR_LIMIT, ULTRA_CHAR_LIMIT,
@@ -14,8 +15,13 @@ def form_wants_slide_images(generate_images: Optional[str]) -> bool:
     s = (generate_images or "true").strip().lower()
     if s in ("0", "false", "no", "off"):
         return False
-    if not (IMAGE_GEN_API_BASE_URL or "").strip():
-        print("[main] generate_images=true but IMAGE_GEN_API_BASE_URL is empty, skip SDXL.")
+    has_sdxl = bool((IMAGE_GEN_API_BASE_URL or "").strip())
+    has_gemini = bool(GEMINI_API_KEY)
+    has_stock = bool(STOCK_PHOTO_ENABLE and PEXELS_API_KEY)
+    if not has_sdxl:
+        print("[main] IMAGE_GEN_API_BASE_URL is empty, SDXL skipped.")
+    if not (has_sdxl or has_gemini or has_stock):
+        print("[main] No image source available (no SDXL, no Gemini key, no Pexels key). Skip image generation.")
         return False
     return True
 
@@ -30,10 +36,10 @@ def resolve_plan_image_limit(
         ratio = 0.5
     elif plan_norm == "ultra":
         max_limit = max(0, int(ULTRA_IMAGE_LIMIT_MAX))
-        ratio = 0.7
+        ratio = 1.0
     else:
         max_limit = max(0, int(PRO_IMAGE_LIMIT_MAX))
-        ratio = 0.5
+        ratio = 0.8
 
     total = int(slide_count or 10)
     calculated_limit = max(1, round(total * ratio))
@@ -116,6 +122,7 @@ def enforce_plan_slide_limit(content: Dict[str, Any], plan: str) -> Dict[str, An
     if isinstance(slides, list) and len(slides) > maximum:
         content["slides"] = slides[:maximum]
     return content
+
 def as_bool_flag(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default

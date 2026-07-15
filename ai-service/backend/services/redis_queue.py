@@ -10,6 +10,7 @@ from filename_utils import pptx_path_for_task
 from config import (
     FREE_IMAGE_LIMIT,
     IMAGE_GEN_API_BASE_URL,
+    GEMINI_API_KEY, STOCK_PHOTO_ENABLE, PEXELS_API_KEY,
     OUTPUT_DIR,
     PRO_IMAGE_LIMIT_MAX,
     ULTRA_IMAGE_LIMIT_MAX,
@@ -24,8 +25,6 @@ def _has_explicit_slide_outline(text: str) -> bool:
         for value in re.findall(r"\b(?:slide|trang)\s*(?:so|thu|số|thứ)?\s*(\d+)\b", str(text or ""), re.IGNORECASE)
     }
     return len(numbers) >= 2
-
-
 def _resolve_plan_image_limit(
     plan: Optional[str],
     slide_count: Optional[int],
@@ -62,7 +61,12 @@ def _task_wants_images(task_data: Dict[str, Any]) -> bool:
     enabled = str(raw if raw is not None else "true").strip().lower() not in (
         "0", "false", "no", "off",
     )
-    return enabled and bool((IMAGE_GEN_API_BASE_URL or "").strip())
+    if not enabled:
+        return False
+    has_sdxl = bool((IMAGE_GEN_API_BASE_URL or "").strip())
+    has_gemini = bool(GEMINI_API_KEY)
+    has_stock = bool(STOCK_PHOTO_ENABLE and PEXELS_API_KEY)
+    return has_sdxl or has_gemini or has_stock
 
 
 def exc_to_error_message(exc: BaseException) -> str:

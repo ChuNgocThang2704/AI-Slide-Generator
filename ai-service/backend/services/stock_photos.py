@@ -88,8 +88,12 @@ async def _search_wikimedia(
     }
     try:
         r = await client.get(_WIKIMEDIA_API, params=params, headers=headers, timeout=10.0)
-        data = r.json() if r.status_code == 200 else {}
-    except Exception:
+        if r.status_code != 200:
+            print(f"[stock_photos] Wikimedia search HTTP error: {r.status_code} for query '{query}'")
+            return []
+        data = r.json()
+    except Exception as e:
+        print(f"[stock_photos] Wikimedia search exception: {e} for query '{query}'")
         return []
     pages = (data.get("query") or {}).get("pages") or {}
     if not isinstance(pages, dict):
@@ -133,8 +137,12 @@ async def _search_pexels(
     headers = {"Authorization": api_key}
     try:
         r = await client.get(_PEXELS_API, params=params, headers=headers, timeout=10.0)
-        data = r.json() if r.status_code == 200 else {}
-    except Exception:
+        if r.status_code != 200:
+            print(f"[stock_photos] Pexels search HTTP error: {r.status_code} for query '{query}', headers: {r.text[:200]}")
+            return []
+        data = r.json()
+    except Exception as e:
+        print(f"[stock_photos] Pexels search exception: {e} for query '{query}'")
         return []
     photos = data.get("photos") or []
     results = []
