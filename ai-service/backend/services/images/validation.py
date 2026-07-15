@@ -28,6 +28,9 @@ from config import (
     GCP_VERTEX_AI_ENABLE,
     GCP_PROJECT_ID,
     GCP_REGION,
+    VLLM_API_BASE_URL,
+    VLLM_BASIC_AUTH_USER,
+    VLLM_BASIC_AUTH_PASS,
 )
 from .semantics import (
     _COVERAGE_THRESHOLD,
@@ -248,8 +251,10 @@ async def _vlm_judge_image(
 ) -> Optional[Dict[str, Any]]:
     if not IMAGE_VLM_JUDGE_ENABLE:
         return None
-    use_vertex = GCP_VERTEX_AI_ENABLE and GCP_PROJECT_ID
-    if not use_vertex and not GEMINI_API_KEY:
+    model = (IMAGE_VLM_JUDGE_MODEL or "").strip()
+    use_vllm = bool(VLLM_API_BASE_URL and model and not model.lower().startswith("gemini"))
+    use_vertex = bool(GCP_VERTEX_AI_ENABLE and GCP_PROJECT_ID and not use_vllm)
+    if not use_vertex and not use_vllm and not GEMINI_API_KEY:
         return None
     model = (IMAGE_VLM_JUDGE_MODEL or "").strip()
     if not model:
@@ -317,6 +322,17 @@ async def _vlm_judge_image(
         f"Generation prompt:\n{(prompt or '')[:700]}\n\n"
         "Judge the attached image."
     )
+    resized_image_bytes = image_bytes
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.width > 512 or img.height > 512:
+            img.thumbnail((512, 512))
+            out_buf = io.BytesIO()
+            img.save(out_buf, format="PNG")
+            resized_image_bytes = out_buf.getvalue()
+    except Exception as resize_err:
+        print(f"[vlm_judge] Failed to resize image for VLM: {resize_err}")
+
     payload: Dict[str, Any] = {
         "contents": [
             {
@@ -327,7 +343,7 @@ async def _vlm_judge_image(
                     {
                         "inline_data": {
                             "mime_type": "image/png",
-                            "data": base64.b64encode(image_bytes).decode("ascii"),
+                            "data": base64.b64encode(resized_image_bytes).decode("ascii"),
                         }
                     },
                 ]
@@ -340,7 +356,39 @@ async def _vlm_judge_image(
         },
     }
     headers: Dict[str, str] = {}
-    if use_vertex:
+    if use_vllm:
+        openai_payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"{instruction}\n\n{user_text}"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{base64.b64encode(resized_image_bytes).decode('ascii')}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": 0.0,
+            "max_tokens": 320,
+        }
+        url = VLLM_API_BASE_URL.rstrip("/")
+        if not url.endswith("/v1"):
+            url = f"{url}/v1"
+        url = f"{url}/chat/completions"
+
+        if VLLM_BASIC_AUTH_USER and VLLM_BASIC_AUTH_PASS:
+            credential = f"{VLLM_BASIC_AUTH_USER}:{VLLM_BASIC_AUTH_PASS}"
+            auth_encoded = base64.b64encode(credential.encode("utf-8")).decode("ascii")
+            headers["Authorization"] = f"Basic {auth_encoded}"
+    elif use_vertex:
         payload["generationConfig"]["thinkingConfig"] = {
             "thinkingBudget": 0
         }
@@ -360,20 +408,37 @@ async def _vlm_judge_image(
             f"{model}:generateContent?key={GEMINI_API_KEY}"
         )
     try:
-        resp = await client.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=httpx.Timeout(float(IMAGE_VLM_JUDGE_TIMEOUT_SEC), connect=10.0),
-        )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        candidates = data.get("candidates") or []
-        if not candidates:
-            return None
-        parts = ((candidates[0] or {}).get("content") or {}).get("parts") or []
-        txt = "\n".join(str((p or {}).get("text") or "") for p in parts).strip()
+        if use_vllm:
+            resp = await client.post(
+                url,
+                json=openai_payload,
+                headers=headers,
+                timeout=httpx.Timeout(float(IMAGE_VLM_JUDGE_TIMEOUT_SEC), connect=10.0),
+            )
+            if resp.status_code != 200:
+                print(f"[vlm_judge] vLLM request failed (status={resp.status_code}): {resp.text}")
+                return None
+            data = resp.json()
+            choices = data.get("choices") or []
+            if not choices:
+                return None
+            txt = str(choices[0].get("message", {}).get("content") or "").strip()
+        else:
+            resp = await client.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=httpx.Timeout(float(IMAGE_VLM_JUDGE_TIMEOUT_SEC), connect=10.0),
+            )
+            if resp.status_code != 200:
+                print(f"[vlm_judge] Gemini/Vertex request failed (status={resp.status_code}): {resp.text}")
+                return None
+            data = resp.json()
+            candidates = data.get("candidates") or []
+            if not candidates:
+                return None
+            parts = ((candidates[0] or {}).get("content") or {}).get("parts") or []
+            txt = "\n".join(str((p or {}).get("text") or "") for p in parts).strip()
         parsed = _extract_first_json_object(txt)
         if not isinstance(parsed, dict):
             return None
@@ -478,7 +543,10 @@ async def _vlm_judge_image(
             "acceptance_policy": policy,
             "model": model,
         }
-    except Exception:
+    except Exception as e:
+        import traceback
+        print(f"[vlm_judge] Exception in VLM Judge: {e}")
+        traceback.print_exc()
         return None
 
 

@@ -33,13 +33,13 @@ def resolve_plan_image_limit(
     plan_norm = (plan or "pro").strip().lower()
     if plan_norm == "free":
         max_limit = max(0, int(FREE_IMAGE_LIMIT))
-        ratio = 0.5
+        ratio = 0.4
     elif plan_norm == "ultra":
         max_limit = max(0, int(ULTRA_IMAGE_LIMIT_MAX))
-        ratio = 1.0
+        ratio = 0.8
     else:
         max_limit = max(0, int(PRO_IMAGE_LIMIT_MAX))
-        ratio = 0.8
+        ratio = 0.6
 
     total = int(slide_count or 10)
     calculated_limit = max(1, round(total * ratio))
