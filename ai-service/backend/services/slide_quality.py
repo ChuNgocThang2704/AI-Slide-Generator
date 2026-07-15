@@ -21,10 +21,8 @@ _CHART_HINT_RE = re.compile(
 )
 _TABLE_HINT_RE = re.compile(
     r"\b(?:compare|comparison|versus|vs|before|after|pros|cons|criteria|option|"
-    r"current|target|solution|problem|feature|benefit|risk|impact|status|"
     r"so\s*sánh|so\s*sanh|tiêu\s*chí|tieu\s*chi|ưu\s*điểm|uu\s*diem|"
-    r"nhược\s*điểm|nhuoc\s*diem|phương\s*án|phuong\s*an|"
-    r"hiện\s*trạng|hien\s*trang|giải\s*pháp|giai\s*phap)\b",
+    r"nhược\s*điểm|nhuoc\s*diem|phương\s*án|phuong\s*an)\b",
     re.IGNORECASE,
 )
 _NUMBER_RE = re.compile(r"[-+]?\d+(?:[.,]\d+)?\s*(?:%|k|m|tr|triệu|tỷ|ty)?", re.IGNORECASE)
@@ -163,10 +161,12 @@ async def improve_deck_source_grounding(
 
 def _heuristic_visual(slide: Dict[str, Any], *, want_images: bool) -> str:
     layout = str(slide.get("layout") or "").strip().lower()
+    # Slide đã có object table/chart thật sự → luôn ưu tiên
     if isinstance(slide.get("table"), dict) or "table" in layout:
         return "table"
     if isinstance(slide.get("chart"), dict) or slide.get("chart_type") or "chart" in layout:
         return "chart"
+
     text = _slide_text(slide, max_chars=1400)
     numbers = _NUMBER_RE.findall(text)
     if _TABLE_HINT_RE.search(text) and (
@@ -177,8 +177,6 @@ def _heuristic_visual(slide: Dict[str, Any], *, want_images: bool) -> str:
         return "chart"
     if _TABLE_HINT_RE.search(text) and (text.count(":") >= 2 or len(numbers) >= 1):
         return "table"
-    if want_images and layout in {"text_image", "split_columns", "timeline", "big_quote", "hero_stat", "intro"}:
-        return "image"
     if want_images:
         return "image"
     return "none"
