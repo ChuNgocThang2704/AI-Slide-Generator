@@ -291,7 +291,6 @@ public class ProjectService {
                 .build());
 
         project.setStatus(Constants.PROJECT_STATUS.CREATE);
-        project.setAiTaskId(null);
         project = projectRepository.save(project);
 
         AITaskLog reviseLog = AITaskLog.builder()
