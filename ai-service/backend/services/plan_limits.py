@@ -15,13 +15,13 @@ def form_wants_slide_images(generate_images: Optional[str]) -> bool:
     s = (generate_images or "true").strip().lower()
     if s in ("0", "false", "no", "off"):
         return False
-    has_sdxl = bool((IMAGE_GEN_API_BASE_URL or "").strip())
+    has_flux = bool((IMAGE_GEN_API_BASE_URL or "").strip())
     has_gemini = bool(GEMINI_API_KEY)
     has_stock = bool(STOCK_PHOTO_ENABLE and PEXELS_API_KEY)
-    if not has_sdxl:
-        print("[main] IMAGE_GEN_API_BASE_URL is empty, SDXL skipped.")
-    if not (has_sdxl or has_gemini or has_stock):
-        print("[main] No image source available (no SDXL, no Gemini key, no Pexels key). Skip image generation.")
+    if not has_flux:
+        print("[main] IMAGE_GEN_API_BASE_URL is empty, FLUX skipped.")
+    if not (has_flux or has_gemini or has_stock):
+        print("[main] No image source available (no FLUX, no Gemini key, no Pexels key). Skip image generation.")
         return False
     return True
 

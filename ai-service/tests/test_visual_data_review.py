@@ -22,6 +22,9 @@ class FakeExtractor:
             }]
         })
 
+    async def _llm_completion_plain_text(self, messages, **kwargs):
+        return await self._gemini_completion_plain_text(messages, **kwargs)
+
     async def extract_table_spec(self, data):
         self.repair_calls += 1
         return self.repaired

@@ -620,11 +620,12 @@ def _ground_and_trim_speaker_notes(notes: str, source: str, max_words: int = 125
     return " ".join(kept).strip()
 
 
-async def _gemini_review_speaker_notes(
+async def _review_speaker_notes(
     content_extractor,
     structured: Dict[str, Any],
     *,
     source_language: str = "auto",
+    provider: str = "auto",
 ) -> Tuple[Dict[str, Any], List[int]]:
     if not _GEMINI_REVIEW_ENABLE:
         return structured, []
@@ -683,6 +684,7 @@ async def _gemini_review_speaker_notes(
             max_tokens=min(6000, 700 + 450 * len(review_items)),
             temperature=0.2,
             json_mode=True,
+            provider=provider,
         )
         parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
     except Exception as e:
@@ -731,7 +733,7 @@ async def improve_speaker_notes_quality(
     source_language: str = "auto",
 ) -> Dict[str, Any]:
     """Re-run the notes-only QA after any downstream step that may rewrite slide text."""
-    improved, changed = await _gemini_review_speaker_notes(
+    improved, changed = await _review_speaker_notes(
         content_extractor,
         structured,
         source_language=source_language,
@@ -768,7 +770,7 @@ async def improve_final_slide_quality(
     batch_size = max(1, _GEMINI_REVIEW_MAX_SLIDES)
     for start in range(0, len(records), batch_size):
         try:
-            improved, _ = await _gemini_review_slide_text(
+            improved, _ = await _review_slide_text(
                 content_extractor,
                 improved,
                 records[start : start + batch_size],
@@ -777,13 +779,13 @@ async def improve_final_slide_quality(
         except Exception as e:
             print(f"[slide_text_quality] final semantic review failed: {e}")
 
-    improved, _ = await _gemini_repair_titles_after_review(
+    improved, _ = await _review_and_repair_titles(
         content_extractor,
         improved,
         source_language=source_language,
     )
     try:
-        improved, _ = await _gemini_review_speaker_notes(
+        improved, _ = await _review_speaker_notes(
             content_extractor,
             improved,
             source_language=source_language,
@@ -826,11 +828,12 @@ def _valid_review_slide(item: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-async def _gemini_review_slide_text(
+async def _review_slide_text(
     content_extractor,
     structured: Dict[str, Any],
     records: List[Dict[str, Any]],
     source_language: str = "auto",
+    provider: str = "auto",
 ) -> Tuple[Dict[str, Any], List[int]]:
     """Yêu cầu Gemini đánh giá các slide yếu/bị cắt cụt với tư cách là một người phản biện độc lập."""
     if not _GEMINI_REVIEW_ENABLE:
@@ -872,6 +875,7 @@ async def _gemini_review_slide_text(
             max_tokens=1800,
             temperature=0.15,
             json_mode=True,
+            provider=provider,
         )
         parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
     except Exception as e:
@@ -913,20 +917,21 @@ def _valid_title_decision(item: Any) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     fixed = _sanitize_inline_markup(item.get("fixed_title") or item.get("title") or "")
-    if not fixed or _looks_corrupted_text(fixed):
+    if not fixed or len(fixed) > 160 or _looks_corrupted_text(fixed):
         return None
     return {
         "index": idx,
         "pass": bool(item.get("pass")),
-        "fixed_title": fixed[:120],
+        "fixed_title": fixed,
         "reason": str(item.get("reason") or "").strip()[:200],
     }
 
 
-async def _gemini_repair_titles_after_review(
+async def _review_and_repair_titles(
     content_extractor,
     structured: Dict[str, Any],
     source_language: str = "auto",
+    provider: str = "auto",
 ) -> Tuple[Dict[str, Any], List[int]]:
     """Sử dụng Gemini như một người phản biện tiêu đề theo ngữ nghĩa cho toàn bộ bài thuyết trình.
 
@@ -935,11 +940,9 @@ async def _gemini_repair_titles_after_review(
     vẫn khả dụng khi Gemini không được định cấu hình hoặc gặp lỗi.
     """
     if not _GEMINI_REVIEW_ENABLE:
-        fallback = copy.deepcopy(structured)
-        return fallback, _repair_titles_after_review(fallback)
+        return structured, []
     if not hasattr(content_extractor, "_llm_completion_plain_text"):
-        fallback = copy.deepcopy(structured)
-        return fallback, _repair_titles_after_review(fallback)
+        return structured, []
 
     slides = structured.get("slides") or []
     if not isinstance(slides, list) or not slides:
@@ -992,6 +995,7 @@ async def _gemini_repair_titles_after_review(
                 max_tokens=800,  # 800 tokens là quá đủ cho 5 slide titles
                 temperature=0.05,
                 json_mode=True,
+                provider=provider,
             )
             parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
             decisions = (parsed or {}).get("titles") if isinstance(parsed, dict) else None
@@ -1011,8 +1015,7 @@ async def _gemini_repair_titles_after_review(
             decisions.extend(res)
 
     if not decisions:
-        fallback = copy.deepcopy(structured)
-        return fallback, _repair_titles_after_review(fallback)
+        return structured, []
 
     improved = copy.deepcopy(structured)
     out_slides = improved.get("slides") or []
@@ -1030,12 +1033,10 @@ async def _gemini_repair_titles_after_review(
         key = _norm_title_key(fixed)
         slide_bullets = out_slides[idx].get("bullets") or out_slides[idx].get("content") or []
         if not key or key in seen or _is_suspicious_title(fixed, bullets=slide_bullets):
-            fixed = _derive_title_from_bullets(
-                out_slides[idx].get("bullets") or out_slides[idx].get("content") or [],
-                fallback=current or fixed,
-                seen=seen,
-            )
-            key = _norm_title_key(fixed)
+            current_key = _norm_title_key(current)
+            if current_key:
+                seen.add(current_key)
+            continue
         if key and key not in seen:
             if fixed != current:
                 out_slides[idx]["title"] = fixed
@@ -1043,7 +1044,6 @@ async def _gemini_repair_titles_after_review(
             seen.add(key)
 
     # Bắt bất kỳ slide nào bị Gemini bỏ sót hoặc tiêu đề trùng lặp do mô hình tạo ra.
-    changed.extend(i for i in _repair_titles_after_review(improved) if i not in changed)
     return _sanitize_structured_text(improved), sorted(set(changed))
 
 
@@ -1054,7 +1054,7 @@ async def improve_slide_titles_quality(
     source_language: str = "auto",
 ) -> Dict[str, Any]:
     """Re-run title-only QA after downstream stages that may rewrite slide text."""
-    improved, changed = await _gemini_repair_titles_after_review(
+    improved, changed = await _review_and_repair_titles(
         content_extractor,
         structured,
         source_language=source_language,
@@ -1104,37 +1104,95 @@ async def improve_slide_text_quality(
                 print(f"[slide_text_quality] refine slide {idx} failed: {e}")
 
     mid = _evaluate_deck(improved, source_language=source_language)
-    gemini_refined: List[int] = []
+    qwen_refined: List[int] = []
     try:
-        improved, gemini_refined = await _gemini_review_slide_text(
+        improved, qwen_refined = await _review_slide_text(
             content_extractor,
             improved,
             mid,
             source_language=source_language,
+            provider="vllm",
         )
     except Exception as e:
-        print(f"[slide_text_quality] Gemini review pass failed: {e}")
+        print(f"[slide_text_quality] Qwen review pass failed: {e}")
 
-    improved, title_refined = await _gemini_repair_titles_after_review(
+    gemini_refined: List[int] = []
+    after_qwen = _evaluate_deck(improved, source_language=source_language)
+    uncertain = [
+        record for record in after_qwen
+        if float(record.get("score") or 0.0) < 0.82 or record.get("issues")
+    ]
+    if uncertain and getattr(content_extractor, "gemini_available", False):
+        try:
+            print(
+                f"[slide_text_quality] escalating {len(uncertain)} uncertain slide(s) "
+                "from Qwen to Gemini"
+            )
+            improved, gemini_refined = await _review_slide_text(
+                content_extractor,
+                improved,
+                uncertain,
+                source_language=source_language,
+                provider="gemini",
+            )
+        except Exception as e:
+            print(f"[slide_text_quality] Gemini escalation failed: {e}")
+
+    improved, qwen_title_refined = await _review_and_repair_titles(
         content_extractor,
         improved,
         source_language=source_language,
+        provider="vllm",
     )
-    note_refined: List[int] = []
-    try:
-        improved, note_refined = await _gemini_review_speaker_notes(
+    gemini_title_refined: List[int] = []
+    title_issues_remain = any(
+        set(record.get("issues") or [])
+        & {"weak_title", "suspicious_title", "off_topic_title", "duplicate_slide_title"}
+        for record in _evaluate_deck(improved, source_language=source_language)
+    )
+    if title_issues_remain and getattr(content_extractor, "gemini_available", False):
+        improved, gemini_title_refined = await _review_and_repair_titles(
             content_extractor,
             improved,
             source_language=source_language,
+            provider="gemini",
+        )
+
+    qwen_note_refined: List[int] = []
+    try:
+        improved, qwen_note_refined = await _review_speaker_notes(
+            content_extractor,
+            improved,
+            source_language=source_language,
+            provider="vllm",
         )
     except Exception as e:
-        print(f"[slide_text_quality] speaker notes pass failed: {e}")
+        print(f"[slide_text_quality] Qwen speaker notes pass failed: {e}")
+    gemini_note_refined: List[int] = []
+    notes_need_escalation = any(
+        isinstance(slide, dict) and _speaker_note_issues(slide)
+        for slide in (improved.get("slides") or [])
+    )
+    if notes_need_escalation and getattr(content_extractor, "gemini_available", False):
+        try:
+            improved, gemini_note_refined = await _review_speaker_notes(
+                content_extractor,
+                improved,
+                source_language=source_language,
+                provider="gemini",
+            )
+        except Exception as e:
+            print(f"[slide_text_quality] Gemini speaker notes escalation failed: {e}")
     improved = _sanitize_structured_text(improved)
     after = _evaluate_deck(improved, source_language=source_language)
-    all_refined = sorted(set(refined + gemini_refined + title_refined + note_refined))
+    title_refined = sorted(set(qwen_title_refined + gemini_title_refined))
+    note_refined = sorted(set(qwen_note_refined + gemini_note_refined))
+    all_refined = sorted(set(refined + qwen_refined + gemini_refined + title_refined + note_refined))
     _write_text_quality_report(task_id, after, all_refined, source_language=source_language)
+    if qwen_refined:
+        print(f"[slide_text_quality] Qwen reviewed/refined slides: {qwen_refined}")
     if gemini_refined:
-        print(f"[slide_text_quality] Gemini reviewed/refined slides: {gemini_refined}")
+        print(f"[slide_text_quality] Gemini escalation refined slides: {gemini_refined}")
     if title_refined:
         print(f"[slide_text_quality] title post-check refined slides: {title_refined}")
     if note_refined:

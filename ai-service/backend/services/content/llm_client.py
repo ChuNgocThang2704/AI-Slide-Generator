@@ -36,10 +36,19 @@ class LLMClientMixin:
         max_tokens: int = 200,
         temperature: float = 0.55,
         json_mode: bool = False,
+        provider: str = "auto",
     ) -> str:
         """Thực hiện một lượt hoàn thành trò chuyện (chat completion) và trả về văn bản thuần túy."""
+        provider = (provider or "auto").strip().lower()
+        if provider == "gemini":
+            return await self._gemini_completion_plain_text(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                json_mode=json_mode,
+            )
         model_name = self.model_name
-        if self.vllm_available:
+        if self.vllm_available and provider in {"auto", "vllm"}:
             nothink_msgs = list(messages)
 
             def _strip_think(text: str) -> str:
@@ -82,7 +91,7 @@ class LLMClientMixin:
                     self.vllm_available = False
                 
                 # Dự phòng (fallback) sang Gemini nếu có sẵn
-                if self.gemini_available:
+                if provider == "auto" and self.gemini_available:
                     print("Falling back to Gemini plain text completion.")
                     return await self._gemini_completion_plain_text(
                         messages,
@@ -92,6 +101,8 @@ class LLMClientMixin:
                     )
                 raise
 
+        if provider == "vllm":
+            raise RuntimeError("vLLM is not available for the requested review pass.")
         if self.gemini_available:
             return await self._gemini_completion_plain_text(
                 messages,

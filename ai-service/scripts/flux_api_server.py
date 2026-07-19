@@ -1,13 +1,13 @@
 """
-Chỉ dịch vụ SINH ẢNH (SDXL) — không phải API tạo slide PowerPoint (DemoDoan chạy host/port khác).
+Chỉ dịch vụ SINH ẢNH FLUX, không phải API tạo slide PowerPoint.
 
 Copy lên máy GPU, rồi ví dụ:
 
   export HF_HOME=/path/to/cache   # tùy chọn
-  export SDXL_PORT=8080           # khớp map container :8080 (vd. ngoài :26229 -> :8080)
-  python sdxl_api_server.py
+  export FLUX_PORT=8080
+  python flux_api_server.py
 
-Hoặc: uvicorn sdxl_api_server:app --host 0.0.0.0 --port 8080
+Hoặc: uvicorn flux_api_server:app --host 0.0.0.0 --port 8080
 
 Backend slide (máy khác) gọi HTTP tới URL này qua IMAGE_GEN_API_BASE_URL — không trùng VLLM/slide API.
 
@@ -18,7 +18,7 @@ Test local (Windows, tránh proxy làm reset kết nối):
   curl.exe --noproxy "*" -sS http://127.0.0.1:8080/health
 
 Yêu cầu: torch + diffusers + transformers + accelerate + fastapi + uvicorn + pillow
-Model mặc định: SG161222/RealVisXL_V5.0 (tải lần đầu, cần VRAM ~12GB+ fp16).
+Model mặc định: black-forest-labs/FLUX.1-schnell.
 """
 import base64
 import io
@@ -59,7 +59,7 @@ _load_env_file(Path(__file__).resolve().parent / ".env")
 _load_env_file(Path(__file__).resolve().parent.parent / ".env")
 _load_env_file(Path(__file__).resolve().parent.parent / "backend" / ".env")
 
-STATIC_DIR = Path(__file__).resolve().parent / "sdxl_static"
+STATIC_DIR = Path(__file__).resolve().parent / "flux_static"
 
 # Lazy load pipeline
 _pipe = None
@@ -110,51 +110,17 @@ def get_pipe():
     if _pipe is not None:
         return _pipe
     import torch
-    from diffusers import FluxPipeline, StableDiffusionXLPipeline
+    from diffusers import FluxPipeline
 
-    model_type = (os.getenv("IMAGE_MODEL_TYPE", "sdxl") or "sdxl").strip().lower()
-    model_id = os.getenv("SDXL_MODEL_ID", "SG161222/RealVisXL_V5.0")
-
-    if model_type == "flux":
-        model_id = os.getenv("FLUX_MODEL_ID", "black-forest-labs/FLUX.1-schnell")
-        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-        _pipe = FluxPipeline.from_pretrained(model_id, torch_dtype=dtype)
-        _pipe.enable_attention_slicing()
-        if hasattr(_pipe, "vae"):
-            _pipe.vae.enable_slicing()
-            _pipe.vae.enable_tiling()
-        if torch.cuda.is_available():
-            _pipe.enable_model_cpu_offload()
-    else:
-        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        _pipe = StableDiffusionXLPipeline.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            variant="fp16" if dtype == torch.float16 else None,
-        )
-        if torch.cuda.is_available():
-            _pipe = _pipe.to("cuda")
-    return _pipe
-    import torch
-    from diffusers import FluxPipeline, StableDiffusionXLPipeline
-
-    model_type = (os.getenv("IMAGE_MODEL_TYPE", "sdxl") or "sdxl").strip().lower()
-    model_id = os.getenv("SDXL_MODEL_ID", "SG161222/RealVisXL_V5.0")
-
-    if model_type == "flux":
-        model_id = os.getenv("FLUX_MODEL_ID", "black-forest-labs/FLUX.1-schnell")
-        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-        _pipe = FluxPipeline.from_pretrained(model_id, torch_dtype=dtype)
-    else:
-        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        _pipe = StableDiffusionXLPipeline.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            variant="fp16" if dtype == torch.float16 else None,
-        )
-
+    model_id = os.getenv("FLUX_MODEL_ID", "black-forest-labs/FLUX.1-schnell")
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    _pipe = FluxPipeline.from_pretrained(model_id, torch_dtype=dtype)
+    _pipe.enable_attention_slicing()
+    if hasattr(_pipe, "vae"):
+        _pipe.vae.enable_slicing()
+        _pipe.vae.enable_tiling()
     if torch.cuda.is_available():
-        _pipe = _pipe.to("cuda")
+        _pipe.enable_model_cpu_offload()
     return _pipe
 
 
@@ -183,7 +149,7 @@ async def lifespan(app: FastAPI):
     _pipe = None
 
 
-app = FastAPI(title="SDXL API", lifespan=lifespan)
+app = FastAPI(title="FLUX API", lifespan=lifespan)
 
 
 @app.get("/")
@@ -195,7 +161,7 @@ async def root():
 @app.get("/ping")
 async def ping():
     """Không import torch — dùng để kiểm tra HTTP/proxy (curl: thêm --noproxy '*')."""
-    return {"ok": True, "service": "sdxl-api"}
+    return {"ok": True, "service": "flux-api"}
 
 
 class GenerateBody(BaseModel):
@@ -243,7 +209,6 @@ async def generate(body: GenerateBody) -> Any:
     import torch
 
     pipe = get_pipe()
-    model_type = (os.getenv("IMAGE_MODEL_TYPE", "sdxl") or "sdxl").strip().lower()
     gen = None
     if body.seed is not None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -252,30 +217,12 @@ async def generate(body: GenerateBody) -> Any:
 
     try:
         prompt = body.prompt
-        negative_prompt = body.negative_prompt or ""
-        if model_type == "sdxl":
-            clipped_prompt = _truncate_to_clip_budget(pipe, prompt, budget=75)
-            clipped_negative = _truncate_to_clip_budget(pipe, negative_prompt, budget=75)
-            if clipped_prompt != prompt:
-                print(
-                    f"[sdxl_api] prompt clipped for CLIP budget: "
-                    f"{_clip_token_len(pipe, prompt)} -> {_clip_token_len(pipe, clipped_prompt)}"
-                )
-            if clipped_negative != negative_prompt:
-                print(
-                    f"[sdxl_api] negative_prompt clipped for CLIP budget: "
-                    f"{_clip_token_len(pipe, negative_prompt)} -> {_clip_token_len(pipe, clipped_negative)}"
-                )
-            prompt = clipped_prompt
-            negative_prompt = clipped_negative
-
         steps = body.steps
         guidance_scale = body.guidance_scale
-        if model_type == "flux":
-            model_id = os.getenv("FLUX_MODEL_ID", "black-forest-labs/FLUX.1-schnell").lower()
-            if "schnell" in model_id:
-                steps = min(max(1, steps), 8)
-                guidance_scale = 0.0
+        model_id = os.getenv("FLUX_MODEL_ID", "black-forest-labs/FLUX.1-schnell").lower()
+        if "schnell" in model_id:
+            steps = min(max(1, steps), 8)
+            guidance_scale = 0.0
 
         kwargs = {
             "prompt": prompt,
@@ -285,9 +232,6 @@ async def generate(body: GenerateBody) -> Any:
             "guidance_scale": guidance_scale,
             "generator": gen,
         }
-        # FluxPipeline does not support negative_prompt in common setups.
-        if model_type != "flux":
-            kwargs["negative_prompt"] = negative_prompt or None
         out = pipe(**kwargs)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -361,6 +305,6 @@ if STATIC_DIR.is_dir():
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.getenv("SDXL_HOST", "0.0.0.0")
-    port = int(os.getenv("SDXL_PORT", "8080"))
+    host = os.getenv("FLUX_HOST", "0.0.0.0")
+    port = int(os.getenv("FLUX_PORT", "8080"))
     uvicorn.run(app, host=host, port=port)

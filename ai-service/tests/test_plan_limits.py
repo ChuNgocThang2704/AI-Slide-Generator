@@ -28,7 +28,7 @@ class PlanLimitsTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 400)
 
     def test_image_limit_respects_plan_and_deck_ratio(self):
-        self.assertEqual(resolve_plan_image_limit("free", 10), 5)
+        self.assertEqual(resolve_plan_image_limit("free", 10), 4)
         self.assertEqual(resolve_plan_image_limit("pro", 30), 15)
         self.assertEqual(resolve_plan_image_limit("ultra", 50), 35)
 

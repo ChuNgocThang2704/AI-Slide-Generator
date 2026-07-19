@@ -2,7 +2,7 @@
 
 ImageExtractionMixin cung cấp các phương thức để trích xuất prompt ảnh, siêu dữ liệu 
 ngữ nghĩa (semantic metadata), cấu trúc biểu đồ (chart specs) và cấu trúc bảng (table specs) từ nội dung slide bằng LLM.
-Các hằng số cấp mô-đun và hàm bổ trợ để nhận diện loại slide cũng như làm sạch prompt SDXL cũng được định nghĩa ở đây.
+Các hằng số cấp mô-đun và hàm bổ trợ để nhận diện loại slide cũng như làm sạch prompt FLUX cũng được định nghĩa ở đây.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ _DOMAIN_OBJECTS: Dict[str, str] = {
     "general": "documents and practical tools on desk",
 }
 
-_SDXL_NOISY_RE = re.compile(
+_FLUX_NOISY_RE = re.compile(
     r"\b(infographic|flowchart|flow\s+chart|user\s+interface|bar\s+chart|line\s+chart|"
     r"pie\s+chart|screenshot|dashboard|diagram\s+with|presentation\s+slide|"
     r"neural\s+network\s+diagram|labeled\s+chart|mind\s*map|whiteboard)\b",
@@ -84,22 +84,22 @@ def _build_slide_context_for_image(slide: Dict[str, Any], max_chars: int = 600) 
 
 
 
-def _scrub_sdxl_prompt(text: str) -> str:
-    t = _SDXL_NOISY_RE.sub(" ", (text or "").strip())
+def _scrub_flux_prompt(text: str) -> str:
+    t = _FLUX_NOISY_RE.sub(" ", (text or "").strip())
     return " ".join(t.split())
 
 class ImageExtractionMixin:
     @staticmethod
-    def _scrub_sdxl_positive(text: str) -> str:
+    def _scrub_flux_positive(text: str) -> str:
         """Loại bỏ một số từ khóa dễ khiến model sinh ra sơ đồ/infographic/chữ viết trong positive prompt."""
         t = (text or "").strip()
         if not t:
             return t
-        t = _SDXL_NOISY_RE.sub(" ", t)
+        t = _FLUX_NOISY_RE.sub(" ", t)
         return " ".join(t.split())
 
     @staticmethod
-    def _sanitize_sdxl_prompt(text: str) -> str:
+    def _sanitize_flux_prompt(text: str) -> str:
         t = (text or "").strip()
         for prefix in (
             "Prompt:",
@@ -116,10 +116,10 @@ class ImageExtractionMixin:
         t = t.strip().strip('"').strip("'")
         return " ".join(t.split())
 
-    def _fallback_sdxl_prompt(
+    def _fallback_flux_prompt(
         self, title: str, content_points: List[Any]
     ) -> str:
-        """Tạo prompt dự phòng cho SDXL (bằng tiếng Anh) khi không gọi được LLM bằng cách kết hợp tiêu đề + ý đầu và thêm phong cách ảnh."""
+        """Tạo prompt FLUX dự phòng khi không gọi được LLM."""
         topic = (title or "presentation").strip()
         extra = ""
         if content_points:
@@ -128,7 +128,7 @@ class ImageExtractionMixin:
                 extra = " " + first[:220]
         topic_en = (f"{topic}{extra}")[:200].strip()
         # Ánh xạ đơn giản: lấy noun phrase đầu, thêm ngôn ngữ stock photography
-        return self._scrub_sdxl_positive(
+        return self._scrub_flux_positive(
             f"calm workspace scene representing {topic_en}, "
             "soft window light, clean minimal background, single subject"
         )[:300]
@@ -235,7 +235,7 @@ class ImageExtractionMixin:
         title = (slide.get("title") or "").strip()
 
         if not self.vllm_available:
-            return self._fallback_sdxl_prompt(title, content_points)
+            return self._fallback_flux_prompt(title, content_points)
 
         slide_type = _detect_slide_type_for_image(slide)
         photo_hint = _SLIDE_TYPE_PHOTO_CONTEXT.get(slide_type, _SLIDE_TYPE_PHOTO_CONTEXT["default"])
@@ -276,13 +276,13 @@ class ImageExtractionMixin:
                 max_tokens=80,
                 temperature=0.2,
             )
-            result = _scrub_sdxl_prompt(self._sanitize_sdxl_prompt(raw))
+            result = _scrub_flux_prompt(self._sanitize_flux_prompt(raw))
             if len(result.split()) >= 8:
                 return result[:500]
         except Exception as e:
             print(f"[extract_image_scene] LLM error: {e}")
 
-        fallback = _scrub_sdxl_prompt(
+        fallback = _scrub_flux_prompt(
             f"{photo_hint} Include {domain_object}. The scene is related to: {title}."
         )
         return fallback[:300]

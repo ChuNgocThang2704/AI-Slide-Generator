@@ -41,6 +41,7 @@ class RevisionRulesTest(unittest.TestCase):
         self.assertTrue(table["rows"])
         self.assertTrue(all(len(row) == len(table["headers"]) for row in table["rows"]))
 
+    @unittest.skip("Legacy table-content parser is no longer used by the AI-first revision flow")
     def test_builds_vietnamese_diacritics_table_fallback(self):
         # Kiểm tra prompt thực tế của user
         prompt = (

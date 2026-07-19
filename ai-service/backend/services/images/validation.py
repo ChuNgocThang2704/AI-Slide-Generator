@@ -25,6 +25,7 @@ from config import (
     IMAGE_VLM_JUDGE_MODEL,
     IMAGE_VLM_JUDGE_TIMEOUT_SEC,
     GEMINI_API_KEY,
+    GEMINI_MODEL,
     GCP_VERTEX_AI_ENABLE,
     GCP_PROJECT_ID,
     GCP_REGION,
@@ -42,7 +43,7 @@ from .semantics import (
 
 
 def _estimate_clip_tokens(text: str) -> int:
-    # Xấp xỉ cho cảnh báo ngân sách token CLIP của SDXL.
+    # Xấp xỉ số token phục vụ log và kiểm tra độ dài prompt.
     # Việc tách từ thực tế (tokenization) có sự khác biệt, nhưng thế này là đủ để gắn cờ các prompt rủi ro.
     chunks = re.findall(r"[A-Za-z0-9]+|[^\w\s]", text or "")
     return len(chunks)
@@ -248,17 +249,41 @@ async def _vlm_judge_image(
     max_artifact: Optional[float] = None,
     min_style: Optional[float] = None,
     is_stock_photo: bool = False,
+    model_override: Optional[str] = None,
+    allow_escalation: bool = True,
 ) -> Optional[Dict[str, Any]]:
     if not IMAGE_VLM_JUDGE_ENABLE:
         return None
-    model = (IMAGE_VLM_JUDGE_MODEL or "").strip()
+    model = (model_override or IMAGE_VLM_JUDGE_MODEL or "").strip()
     use_vllm = bool(VLLM_API_BASE_URL and model and not model.lower().startswith("gemini"))
     use_vertex = bool(GCP_VERTEX_AI_ENABLE and GCP_PROJECT_ID and not use_vllm)
     if not use_vertex and not use_vllm and not GEMINI_API_KEY:
         return None
-    model = (IMAGE_VLM_JUDGE_MODEL or "").strip()
+    model = (model_override or IMAGE_VLM_JUDGE_MODEL or "").strip()
     if not model:
         return None
+
+    async def _escalate_to_gemini(reason: str) -> Optional[Dict[str, Any]]:
+        if not (allow_escalation and use_vllm and GEMINI_API_KEY and GEMINI_MODEL):
+            return None
+        print(f"[vlm_judge] escalating Qwen review to Gemini: {reason}")
+        result = await _vlm_judge_image(
+            client,
+            image_bytes=image_bytes,
+            prompt=prompt,
+            slide=slide,
+            semantic=semantic,
+            min_relevance=min_relevance,
+            max_artifact=max_artifact,
+            min_style=min_style,
+            is_stock_photo=is_stock_photo,
+            model_override=GEMINI_MODEL,
+            allow_escalation=False,
+        )
+        if result is not None:
+            result["escalated_from"] = model
+            result["escalation_reason"] = reason
+        return result
     context = _slide_context_for_vlm(slide, semantic)
 
     policy = _image_acceptance_policy(semantic, is_stock_photo=is_stock_photo)
@@ -417,11 +442,11 @@ async def _vlm_judge_image(
             )
             if resp.status_code != 200:
                 print(f"[vlm_judge] vLLM request failed (status={resp.status_code}): {resp.text}")
-                return None
+                return await _escalate_to_gemini(f"vllm_http_{resp.status_code}")
             data = resp.json()
             choices = data.get("choices") or []
             if not choices:
-                return None
+                return await _escalate_to_gemini("vllm_empty_choices")
             txt = str(choices[0].get("message", {}).get("content") or "").strip()
         else:
             resp = await client.post(
@@ -441,7 +466,8 @@ async def _vlm_judge_image(
             txt = "\n".join(str((p or {}).get("text") or "") for p in parts).strip()
         parsed = _extract_first_json_object(txt)
         if not isinstance(parsed, dict):
-            return None
+            escalated = await _escalate_to_gemini("invalid_review_json")
+            return escalated
         relevance = float(parsed.get("relevance_score") or 0.0)
         artifact = float(parsed.get("artifact_score") or 1.0)
         style = float(parsed.get("style_match_score") or 0.0)
@@ -529,7 +555,7 @@ async def _vlm_judge_image(
             and not style_failure
         )
         passed = strict_pass
-        return {
+        result = {
             "relevance_score": round(relevance, 3),
             "artifact_score": round(artifact, 3),
             "style_match_score": round(style, 3),
@@ -543,11 +569,25 @@ async def _vlm_judge_image(
             "acceptance_policy": policy,
             "model": model,
         }
+        near_boundary = (
+            abs(relevance - min_rel) <= 0.12
+            or abs(artifact - max_art) <= 0.12
+            or (not is_stock_photo and abs(style - min_sty) <= 0.12)
+            or bool(parsed.get("pass")) != bool(strict_pass)
+        )
+        if use_vllm and near_boundary and not severe_failure:
+            escalated = await _escalate_to_gemini(
+                f"borderline_scores(relevance={relevance:.3f},artifact={artifact:.3f},style={style:.3f})"
+            )
+            if escalated is not None:
+                escalated["qwen_review"] = result
+                return escalated
+        return result
     except Exception as e:
         import traceback
         print(f"[vlm_judge] Exception in VLM Judge: {e}")
         traceback.print_exc()
-        return None
+        return await _escalate_to_gemini(type(e).__name__)
 
 
 _DEBUG_DIR = Path("outputs") / "debug"
