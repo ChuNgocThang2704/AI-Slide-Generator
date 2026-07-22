@@ -1,0 +1,724 @@
+/* EditableSlide.css */
+
+.editable-slide-root {
+  width: 960px;
+  height: 540px;
+  overflow: hidden;
+  border-radius: 10px;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+}
+
+/* Base slide */
+.es-slide {
+  width: 100%; height: 100%;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 64px;
+  font-family: 'Inter', sans-serif;
+}
+
+.es-content,
+.es-twocol,
+.es-imgtext {
+  align-items: flex-start;
+}
+
+/* Decorations */
+.es-deco { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.es-deco-c1 { position: absolute; width: 400px; height: 400px; border-radius: 50%; top: -120px; right: -120px; filter: blur(60px); opacity: 0.6; }
+.es-deco-c2 { position: absolute; width: 280px; height: 280px; border-radius: 50%; bottom: -70px; left: -70px;  filter: blur(50px); opacity: 0.5; }
+.es-deco-line { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; opacity: 0.85; }
+
+/* All content above deco */
+.es-slide > *:not(.es-deco) { position: relative; z-index: 1; }
+
+/* ── Inline editable base ── */
+.es-editable {
+  outline: none;
+  cursor: text;
+  min-width: 40px;
+  border-radius: 6px;
+  transition: box-shadow 0.15s, background 0.15s;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.es-editable:empty::before {
+  content: attr(data-placeholder);
+  opacity: 0.35;
+  font-style: italic;
+  pointer-events: none;
+}
+
+.es-editable:hover {
+  box-shadow: inset 0 0 0 1.5px rgba(108,99,255,0.3);
+}
+
+.es-editable:focus {
+  box-shadow: inset 0 0 0 2px #6c63ff;
+  background: rgba(108,99,255,0.05) !important;
+}
+
+/* Edit hint tooltip on hover */
+.es-slide:hover .es-editable::after {
+  content: '✎';
+  position: absolute;
+  top: -18px; right: 4px;
+  font-size: 10px;
+  color: #6c63ff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.es-editable:hover::after { opacity: 1; }
+
+/* ── Shared elements ── */
+.es-bar { height: 4px; width: 48px; border-radius: 999px; margin-bottom: 14px; }
+.es-divider { height: 3px; width: 80px; border-radius: 999px; margin-top: 10px; }
+.es-badge {
+  display: inline-flex; align-items: center;
+  padding: 4px 16px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; letter-spacing: 2px;
+  border: 1px solid; text-transform: uppercase; margin-bottom: 12px;
+  font-family: 'Outfit',sans-serif;
+}
+
+.es-main-title {
+  font-family: 'Outfit',sans-serif;
+  font-size: 52px; font-weight: 800;
+  line-height: 1.1; letter-spacing: -1px;
+  padding: 4px 6px; border-radius: 8px;
+}
+
+.es-subtitle {
+  font-size: 17px; font-weight: 400;
+  line-height: 1.55; max-width: 560px;
+  padding: 4px 6px; border-radius: 8px;
+}
+
+.es-section-title {
+  font-family: 'Outfit',sans-serif;
+  font-size: 34px; font-weight: 700;
+  line-height: 1.2; margin-bottom: 8px;
+  padding: 2px 6px; border-radius: 6px;
+}
+
+.es-body-text {
+  font-size: 14px; line-height: 1.75;
+  padding: 6px 8px; border-radius: 6px;
+}
+
+/* ── TITLE ── */
+.es-title-content {
+  display: flex; flex-direction: column;
+  align-items: center; text-align: center;
+  width: 100%; max-width: 700px; gap: 12px;
+}
+
+/* ── CONTENT ── */
+.es-content-inner { width: 100%; display: flex; flex-direction: column; }
+
+.es-bullets-wrap {
+  margin-top: 4px;
+  position: relative;
+}
+
+.es-bullets-editable {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  min-height: 100px;
+  padding: 4px 0;
+  font-family: inherit;
+}
+
+.es-bullets-editable ul {
+  list-style-type: disc;
+  padding-left: 20px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: inherit;
+}
+
+.es-bullets-editable li {
+  line-height: 1.6;
+  font-size: 14px;
+  padding: 2px 0;
+  font-family: inherit;
+}
+
+/* ── TWO COLUMN ── */
+.es-twocol .es-content-inner { gap: 16px; }
+.es-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+.es-col-card {
+  border-radius: 10px; border: 1px solid;
+  padding: 16px; display: flex; flex-direction: column; gap: 10px;
+}
+
+.es-col-heading {
+  font-family: 'Outfit',sans-serif;
+  font-size: 15px; font-weight: 700;
+  padding: 2px 6px; border-radius: 6px;
+}
+
+.es-col-points {
+  font-size: 13px; line-height: 1.8;
+  min-height: 60px; padding: 4px;
+  border-radius: 6px;
+}
+
+/* ── IMAGE + TEXT ── */
+.es-imgtext-inner {
+  width: 100%; display: grid;
+  grid-template-columns: 1fr 1.4fr; gap: 36px; align-items: center;
+}
+
+.es-img-box {
+  border-radius: 14px; border: 1px solid;
+  aspect-ratio: 4/3; display: flex;
+  flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px;
+  cursor: pointer;
+}
+
+.es-emoji {
+  font-size: 64px; line-height: 1;
+  min-width: 80px; text-align: center;
+  border-radius: 8px;
+}
+
+.es-img-hint {
+  font-size: 11px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.es-img-box:hover .es-img-hint {
+  opacity: 0.4;
+}
+
+.es-imgtext-content { display: flex; flex-direction: column; gap: 12px; }
+
+/* ── QUOTE ── */
+.es-quote-inner {
+  max-width: 660px; display: flex;
+  flex-direction: column; align-items: center;
+  text-align: center; gap: 16px;
+}
+
+.es-quote-mark {
+  font-family: 'Outfit',sans-serif;
+  font-size: 110px; line-height: 0.8;
+  font-weight: 900; margin-bottom: -10px; opacity: 0.8;
+}
+
+.es-quote-text {
+  font-family: 'Outfit',sans-serif;
+  font-size: 20px; font-weight: 500;
+  line-height: 1.6; font-style: italic;
+  padding: 8px; border-radius: 8px;
+  text-align: center;
+}
+
+.es-quote-divider { height: 3px; width: 56px; border-radius: 999px; }
+.es-quote-author { font-size: 15px; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+.es-quote-role   { font-size: 12px; opacity: 0.6; padding: 2px 8px; border-radius: 6px; }
+
+/* ── THANK YOU ── */
+.es-ty-content {
+  display: flex; flex-direction: column;
+  align-items: center; text-align: center;
+  gap: 16px; max-width: 600px;
+}
+
+.es-ty-icon {
+  width: 68px; height: 68px; border-radius: 50%;
+  border: 1px solid; display: flex;
+  align-items: center; justify-content: center;
+  font-size: 28px;
+}
+
+.es-ty-contact {
+  padding: 9px 28px; border-radius: 999px;
+  font-size: 13px; font-weight: 600;
+  border: 1px solid; min-width: 180px; text-align: center;
+}
+
+/* =============================================================================
+   TEMPLATE-SPECIFIC LAYOUT VARIATIONS (ALIGNMENT & STRUCTURE)
+   ============================================================================= */
+
+/* ─── 1. LEFT ALIGNMENT FOR MODERN-DARK, BLUE-PLANET, TECH-PURPLE, PLAYFUL-YELLOW, NATURE-GREEN ─── */
+.editable-slide-root[data-theme="modern-dark"] .es-title-content,
+.editable-slide-root[data-theme="blue-planet"] .es-title-content,
+.editable-slide-root[data-theme="tech-purple"] .es-title-content,
+.editable-slide-root[data-theme="nature-green"] .es-title-content,
+.editable-slide-root[data-theme="playful-yellow"] .es-title-content {
+  align-items: flex-start;
+  text-align: left;
+}
+
+/* Restrict text width in blue-planet to prevent overlap with the glowing planet at bottom-right */
+.editable-slide-root[data-theme="blue-planet"] .es-title-content {
+  max-width: 530px;
+}
+
+/* ─── 2. GRID LAYOUT FOR BULLET POINTS IN TECH-PURPLE ─── */
+.editable-slide-root[data-theme="tech-purple"] .es-bullets-editable {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Bracket styling for tech-purple main title */
+.editable-slide-root[data-theme="tech-purple"] .es-main-title::before {
+  content: "[ ";
+  color: #e056fd;
+}
+.editable-slide-root[data-theme="tech-purple"] .es-main-title::after {
+  content: " ]";
+  color: #e056fd;
+}
+
+/* ─── 3. ASYMMETRIC / SKEWED COLUMNS FOR TWO-COLUMN ─── */
+.editable-slide-root[data-theme="modern-dark"] .es-col-card:nth-child(2),
+.editable-slide-root[data-theme="tech-purple"] .es-col-card:nth-child(2) {
+  transform: translateY(18px);
+}
+
+.editable-slide-root[data-theme="nature-green"] .es-col-card:nth-child(1) {
+  background: rgba(39, 174, 96, 0.12) !important;
+}
+.editable-slide-root[data-theme="nature-green"] .es-col-card:nth-child(2) {
+  background: rgba(46, 204, 113, 0.05) !important;
+}
+
+/* ─── 4. IMAGE-TEXT SWAP & CUSTOM STYLING ─── */
+
+/* Swap position (Image on Right, Text on Left) for modern-dark, blue-planet, tech-purple */
+.editable-slide-root[data-theme="modern-dark"] .es-imgtext-inner,
+.editable-slide-root[data-theme="blue-planet"] .es-imgtext-inner,
+.editable-slide-root[data-theme="tech-purple"] .es-imgtext-inner {
+  grid-template-columns: 1.4fr 1fr;
+}
+.editable-slide-root[data-theme="modern-dark"] .es-img-box,
+.editable-slide-root[data-theme="blue-planet"] .es-img-box,
+.editable-slide-root[data-theme="tech-purple"] .es-img-box {
+  order: 2;
+}
+
+/* Leaf-shaped image wrapper for nature-green */
+.editable-slide-root[data-theme="nature-green"] .es-img-box {
+  border-radius: 60% 40% 60% 40% / 50% 50% 50% 50% !important;
+  background: rgba(39, 174, 96, 0.08) !important;
+}
+
+/* Playful offset shadow styling for playful-yellow image card */
+.editable-slide-root[data-theme="playful-yellow"] .es-img-box {
+  transform: rotate(-1deg);
+  box-shadow: 6px 6px 0px rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.4) !important;
+}
+
+/* Technical frame bounds for tech-purple image box */
+.editable-slide-root[data-theme="tech-purple"] .es-img-box {
+  border: 1px dashed #e056fd !important;
+  border-radius: 4px;
+}
+
+/* ─── 5. QUOTE SLIDE LAYOUT STYLES ─── */
+
+/* Floating left-aligned glass card layout for modern-dark and blue-planet */
+.editable-slide-root[data-theme="modern-dark"] .es-quote-inner,
+.editable-slide-root[data-theme="blue-planet"] .es-quote-inner {
+  align-items: flex-start;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  padding: 32px;
+  border-radius: 16px;
+  max-width: 580px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+}
+.editable-slide-root[data-theme="modern-dark"] .es-quote-text,
+.editable-slide-root[data-theme="blue-planet"] .es-quote-text {
+  text-align: left;
+  padding: 0;
+}
+
+/* Speech bubble styled quote card for playful-yellow */
+.editable-slide-root[data-theme="playful-yellow"] .es-quote-inner {
+  background: rgba(245, 158, 11, 0.05);
+  border: 2px solid rgba(245, 158, 11, 0.15);
+  border-radius: 24px;
+  padding: 24px 32px;
+  max-width: 580px;
+}
+
+/* ─── 6. SOFT BLUE TEMPLATE LAYOUTS (SLIDESPEAK STYLE) ─── */
+
+.es-slide-number {
+  position: absolute;
+  bottom: 20px;
+  right: 28px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  opacity: 0.5;
+  font-family: 'Outfit', sans-serif;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Left align all title slides for soft-blue and royal-purple */
+.editable-slide-root[data-theme="soft-blue"] .es-title-content,
+.editable-slide-root[data-theme="royal-purple"] .es-title-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-title-content .es-badge,
+.editable-slide-root[data-theme="royal-purple"] .es-title-content .es-badge {
+  position: absolute;
+  left: 64px;
+  top: 110px;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-title-content .es-main-title,
+.editable-slide-root[data-theme="royal-purple"] .es-title-content .es-main-title {
+  position: absolute;
+  left: 64px;
+  top: 154px;
+  width: 620px;
+  text-align: left;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-title-content .es-subtitle,
+.editable-slide-root[data-theme="royal-purple"] .es-title-content .es-subtitle {
+  position: absolute;
+  left: 64px;
+  top: 290px;
+  width: 520px;
+  text-align: left;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-title-content .es-divider,
+.editable-slide-root[data-theme="royal-purple"] .es-title-content .es-divider {
+  position: absolute;
+  left: 64px;
+  top: 380px;
+}
+
+/* Slide Page Number Card like SlideSpeak */
+.editable-slide-root[data-theme="soft-blue"] .es-slide-number,
+.slide-renderer-root[data-theme="soft-blue"] .slide-slide-number,
+.editable-slide-root[data-theme="royal-purple"] .es-slide-number,
+.slide-renderer-root[data-theme="royal-purple"] .slide-slide-number {
+  position: absolute !important;
+  bottom: 24px !important;
+  right: 32px !important;
+  background: #ffffff !important;
+  border: 1.5px solid #e1effa !important;
+  border-radius: 8px !important;
+  padding: 6px 14px !important;
+  font-size: 20px !important;
+  font-weight: 800 !important;
+  color: #0f4c81 !important;
+  box-shadow: 0 4px 10px rgba(15, 76, 129, 0.06) !important;
+  font-family: 'Outfit', sans-serif !important;
+  opacity: 1 !important;
+  letter-spacing: 0 !important;
+  pointer-events: none;
+}
+
+.editable-slide-root[data-theme="royal-purple"] .es-slide-number,
+.slide-renderer-root[data-theme="royal-purple"] .slide-slide-number {
+  color: #9948FF !important;
+  border-color: rgba(153, 72, 255, 0.2) !important;
+}
+
+/* Image+Text layout for soft-blue and royal-purple: exact coordinates matching SlideSpeak */
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext {
+  position: relative;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext-inner,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext-inner {
+  display: block; /* Disable default grid to allow absolute coordinate layout */
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-img-box,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-img-box {
+  position: absolute;
+  left: 480px;
+  top: 102px;
+  width: 410px;
+  height: 310px;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext-content,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext-content {
+  position: static; /* Let absolute items align with the slide root */
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-bar,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-bar {
+  position: absolute;
+  left: 48px;
+  top: 50px;
+  width: 6px;
+  height: 38px;
+  border-radius: 999px;
+  margin-bottom: 0;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-section-title,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-section-title {
+  position: absolute;
+  left: 64px;
+  top: 48px;
+  width: 800px;
+  text-align: left;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-body-text,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-body-text {
+  position: absolute;
+  left: 64px;
+  top: 140px;
+  width: 380px;
+  height: 280px;
+  text-align: left;
+  line-height: 1.8;
+  font-size: 15px;
+}
+
+/* Image+Text specific shapes (circle shape and clover shape backdrop) */
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-img-box {
+  border-radius: 50% !important;
+  border: none !important;
+  background: #e0f2fe !important;
+  overflow: visible !important;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-img-box::before {
+  content: "";
+  position: absolute;
+  width: 130%;
+  height: 130%;
+  top: -15%;
+  left: -15%;
+  background-color: #0f4c81;
+  opacity: 0.12;
+  border-radius: 30% 70% 30% 70% / 50% 50% 50% 50%;
+  transform: rotate(45deg);
+  z-index: -1;
+}
+
+/* Quote slide for soft-blue: white card floating on blue-grey background */
+.editable-slide-root[data-theme="soft-blue"] .es-quote,
+.editable-slide-root[data-theme="royal-purple"] .es-quote {
+  background: linear-gradient(135deg, #a5becc 0%, #bdcfda 100%) !important;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-quote-inner,
+.editable-slide-root[data-theme="royal-purple"] .es-quote-inner {
+  background: #ffffff !important;
+  border: 1px solid rgba(15, 76, 129, 0.08) !important;
+  box-shadow: 0 15px 35px -5px rgba(15, 76, 129, 0.15) !important;
+  padding: 36px 48px !important;
+  border-radius: 12px !important;
+  max-width: 620px !important;
+  align-items: center !important;
+  text-align: center !important;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-quote-text,
+.editable-slide-root[data-theme="royal-purple"] .es-quote-text {
+  font-size: 18px !important;
+  font-weight: 500 !important;
+  color: #1c3d5a !important;
+  text-align: center !important;
+  line-height: 1.65 !important;
+  font-family: 'Outfit', sans-serif !important;
+  padding: 0 !important;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-quote-author,
+.editable-slide-root[data-theme="royal-purple"] .es-quote-author {
+  color: #0f4c81 !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  font-family: 'Outfit', sans-serif !important;
+}
+
+.editable-slide-root[data-theme="royal-purple"] .es-quote-inner {
+  border-color: rgba(153, 72, 255, 0.25) !important;
+  box-shadow: 0 15px 35px -5px rgba(153, 72, 255, 0.2) !important;
+}
+.editable-slide-root[data-theme="royal-purple"] .es-quote-author {
+  color: #9948FF !important;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-quote-mark,
+.editable-slide-root[data-theme="royal-purple"] .es-quote-mark {
+  display: none !important;
+}
+.editable-slide-root[data-theme="soft-blue"] .es-quote-divider,
+.editable-slide-root[data-theme="royal-purple"] .es-quote-divider {
+  display: none !important;
+}
+
+/* Content slide for soft-blue and royal-purple: exact coordinates */
+.editable-slide-root[data-theme="soft-blue"] .es-content,
+.editable-slide-root[data-theme="royal-purple"] .es-content {
+  position: relative;
+}
+.editable-slide-root[data-theme="soft-blue"] .es-content .es-bar,
+.editable-slide-root[data-theme="royal-purple"] .es-content .es-bar {
+  position: absolute;
+  left: 48px;
+  top: 50px;
+  width: 6px;
+  height: 38px;
+  border-radius: 999px;
+  margin-bottom: 0;
+}
+.editable-slide-root[data-theme="soft-blue"] .es-content .es-section-title,
+.editable-slide-root[data-theme="royal-purple"] .es-content .es-section-title {
+  position: static !important;
+  width: auto !important;
+  text-align: left;
+}
+
+
+/* ─── IMAGE+TEXT LAYOUT FOR SOFT-BLUE AND ROYAL-PURPLE IN EDITOR ─── */
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext {
+  position: relative;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext-inner,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext-inner {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-img-box,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-img-box {
+  position: absolute;
+  left: 480px;
+  top: 102px;
+  width: 410px;
+  height: 310px;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-bar,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-bar {
+  position: absolute;
+  left: -16px;
+  top: 6px;
+  width: 6px;
+  height: 38px;
+  border-radius: 999px;
+  margin-bottom: 0;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext-content,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext-content {
+  position: absolute;
+  left: 64px;
+  top: 30px;
+  width: 390px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-section-title,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-section-title {
+  position: static !important;
+  width: auto !important;
+  font-size: 34px !important;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-body-text,
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-body-text {
+  position: static !important;
+  width: auto !important;
+  height: auto !important;
+  font-size: 16.5px !important;
+  line-height: 1.65 !important;
+}
+
+
+/* Image box styles (circle & background shapes) */
+.editable-slide-root[data-theme="soft-blue"] .es-img-box {
+  border-radius: 50% !important;
+  border: none !important;
+  background: #e0f2fe !important;
+  position: relative;
+  overflow: visible !important;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-imgtext .es-img-box::before {
+  content: "";
+  position: absolute;
+  width: 130%;
+  height: 130%;
+  top: -15%;
+  left: -15%;
+  background-color: #0d5099;
+  opacity: 0.12;
+  border-radius: 30% 70% 30% 70% / 50% 50% 50% 50%;
+  transform: rotate(45deg);
+  z-index: -1;
+}
+
+.editable-slide-root[data-theme="royal-purple"] .es-img-box {
+  border-radius: 50% !important;
+  border: none !important;
+  background: rgba(153, 72, 255, 0.15) !important;
+  position: relative;
+  overflow: visible !important;
+}
+
+.editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-img-box::before {
+  content: "";
+  position: absolute;
+  width: 130%;
+  height: 130%;
+  top: -15%;
+  left: -15%;
+  background-color: #9948FF;
+  opacity: 0.15;
+  border-radius: 30% 70% 30% 70% / 50% 50% 50% 50%;
+  transform: rotate(45deg);
+  z-index: -1;
+}
+
+/* Ensure images clip to the circular container */
+.es-img-box img {
+  border-radius: inherit;
+}
+

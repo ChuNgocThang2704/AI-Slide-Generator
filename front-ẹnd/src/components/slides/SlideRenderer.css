@@ -1,0 +1,791 @@
+/* ──────────────────────────────────────────
+   SlideRenderer.css — Core slide styles
+   ────────────────────────────────────────── */
+
+/* Root wrapper */
+.slide-renderer-root {
+  width: 960px;
+  height: 540px;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  position: relative;
+}
+
+/* Slide base */
+.slide-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 64px;
+  font-family: 'Inter', sans-serif;
+}
+
+/* ── Background decorations ── */
+.slide-bg-deco {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.deco-circle {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+}
+
+.deco-1 {
+  width: 400px;
+  height: 400px;
+  top: -100px;
+  right: -100px;
+  opacity: 0.6;
+}
+
+.deco-2 {
+  width: 300px;
+  height: 300px;
+  bottom: -80px;
+  left: -80px;
+  opacity: 0.5;
+}
+
+.deco-line {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  opacity: 0.8;
+}
+
+/* All content above decorations */
+.slide-wrap > *:not(.slide-bg-deco) {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Slide Number ── */
+.slide-slide-number {
+  position: absolute;
+  bottom: 20px;
+  right: 28px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  opacity: 0.5;
+  font-family: 'Outfit', sans-serif;
+  z-index: 2;
+}
+
+/* ── Accent bar ── */
+.slide-accent-bar {
+  height: 4px;
+  width: 48px;
+  border-radius: 999px;
+  margin-bottom: 12px;
+}
+
+/* ═══════════ TITLE SLIDE ═══════════ */
+.slide-title-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+  max-width: 700px;
+  gap: 16px;
+}
+
+.slide-title-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 18px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  border: 1px solid;
+  text-transform: uppercase;
+  font-family: 'Outfit', sans-serif;
+}
+
+.slide-main-title {
+  font-family: 'Outfit', sans-serif;
+  font-size: 54px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -1px;
+}
+
+.slide-subtitle {
+  font-size: 18px;
+  font-weight: 400;
+  opacity: 0.8;
+  max-width: 560px;
+  line-height: 1.55;
+}
+
+.slide-title-divider {
+  height: 3px;
+  width: 80px;
+  border-radius: 999px;
+  margin-top: 8px;
+}
+
+/* ═══════════ CONTENT SLIDE ═══════════ */
+.slide-content,
+.slide-twocol,
+.slide-imagetext {
+  align-items: flex-start;
+}
+
+.slide-content-inner {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.slide-content-header {
+  display: flex;
+  flex-direction: column;
+}
+
+.slide-section-title {
+  font-family: 'Outfit', sans-serif;
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.slide-bullets {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slide-bullet-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 14px;
+  font-weight: 400;
+  transition: all 0.2s;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.bullet-dot {
+  margin-top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ═══════════ TWO COLUMN SLIDE ═══════════ */
+.slide-twocol-inner {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.slide-twocol-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.slide-col-card {
+  border-radius: 12px;
+  border: 1px solid;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.slide-col-heading {
+  font-family: 'Outfit', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.slide-col-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.slide-col-list li {
+  display: flex;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+/* ═══════════ IMAGE + TEXT SLIDE ═══════════ */
+.slide-imagetext-inner {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 40px;
+  align-items: center;
+}
+
+.slide-image-box {
+  border-radius: 16px;
+  border: 1px solid;
+  aspect-ratio: 4/3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.slide-image-emoji {
+  font-size: 72px;
+  line-height: 1;
+}
+
+.slide-image-caption {
+  font-family: 'Outfit', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.slide-imagetext-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.slide-body-text {
+  font-size: 14px;
+  line-height: 1.75;
+  font-weight: 400;
+}
+
+/* ═══════════ QUOTE SLIDE ═══════════ */
+.slide-quote-inner {
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 20px;
+}
+
+.slide-quote-mark {
+  font-family: 'Outfit', sans-serif;
+  font-size: 120px;
+  line-height: 0.8;
+  font-weight: 900;
+  opacity: 0.8;
+  margin-bottom: -16px;
+}
+
+.slide-quote-text {
+  font-family: 'Outfit', sans-serif;
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.55;
+  font-style: italic;
+}
+
+.slide-quote-divider {
+  height: 3px;
+  width: 60px;
+  border-radius: 999px;
+}
+
+.slide-quote-author {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.slide-quote-name {
+  font-family: 'Outfit', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.slide-quote-role {
+  font-size: 13px;
+  opacity: 0.6;
+}
+
+/* ═══════════ THANK YOU SLIDE ═══════════ */
+.slide-thankyou-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 20px;
+  max-width: 600px;
+}
+
+.slide-ty-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 1px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+}
+
+.slide-ty-contact {
+  padding: 10px 28px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid;
+}
+
+/* =============================================================================
+   TEMPLATE-SPECIFIC LAYOUT VARIATIONS (ALIGNMENT & STRUCTURE)
+   ============================================================================= */
+
+/* ─── 1. LEFT ALIGNMENT FOR MODERN-DARK, BLUE-PLANET, TECH-PURPLE, PLAYFUL-YELLOW, NATURE-GREEN ─── */
+.slide-renderer-root[data-theme="modern-dark"] .slide-title-content,
+.slide-renderer-root[data-theme="blue-planet"] .slide-title-content,
+.slide-renderer-root[data-theme="tech-purple"] .slide-title-content,
+.slide-renderer-root[data-theme="nature-green"] .slide-title-content,
+.slide-renderer-root[data-theme="playful-yellow"] .slide-title-content {
+  align-items: flex-start;
+  text-align: left;
+}
+
+/* Restrict text width in blue-planet to prevent overlap with the glowing planet at bottom-right */
+.slide-renderer-root[data-theme="blue-planet"] .slide-title-content {
+  max-width: 530px;
+}
+
+/* ─── 2. GRID LAYOUT FOR BULLET POINTS IN TECH-PURPLE ─── */
+.slide-renderer-root[data-theme="tech-purple"] .slide-bullets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Bracket styling for tech-purple main title */
+.slide-renderer-root[data-theme="tech-purple"] .slide-main-title::before {
+  content: "[ ";
+  color: #e056fd;
+}
+.slide-renderer-root[data-theme="tech-purple"] .slide-main-title::after {
+  content: " ]";
+  color: #e056fd;
+}
+
+/* Custom bullet icon for nature-green and tech-purple */
+.slide-renderer-root[data-theme="nature-green"] .bullet-dot {
+  border-radius: 50% 0 50% 0; /* Leaf-like shape */
+  transform: rotate(-15deg);
+}
+
+.slide-renderer-root[data-theme="tech-purple"] .bullet-dot {
+  border-radius: 0%; /* Tech square dot */
+}
+
+/* ─── 3. ASYMMETRIC / SKEWED COLUMNS FOR TWO-COLUMN ─── */
+.slide-renderer-root[data-theme="modern-dark"] .slide-col-card:nth-child(2),
+.slide-renderer-root[data-theme="tech-purple"] .slide-col-card:nth-child(2) {
+  transform: translateY(18px);
+}
+
+.slide-renderer-root[data-theme="nature-green"] .slide-col-card:nth-child(1) {
+  background: rgba(39, 174, 96, 0.12) !important;
+}
+.slide-renderer-root[data-theme="nature-green"] .slide-col-card:nth-child(2) {
+  background: rgba(46, 204, 113, 0.05) !important;
+}
+
+/* ─── 4. IMAGE-TEXT SWAP & CUSTOM STYLING ─── */
+
+/* Swap position (Image on Right, Text on Left) for modern-dark, blue-planet, tech-purple */
+.slide-renderer-root[data-theme="modern-dark"] .slide-imagetext-inner,
+.slide-renderer-root[data-theme="blue-planet"] .slide-imagetext-inner,
+.slide-renderer-root[data-theme="tech-purple"] .slide-imagetext-inner {
+  grid-template-columns: 1.4fr 1fr;
+}
+.slide-renderer-root[data-theme="modern-dark"] .slide-image-box,
+.slide-renderer-root[data-theme="blue-planet"] .slide-image-box,
+.slide-renderer-root[data-theme="tech-purple"] .slide-image-box {
+  order: 2;
+}
+
+/* Leaf-shaped image wrapper for nature-green */
+.slide-renderer-root[data-theme="nature-green"] .slide-image-box {
+  border-radius: 60% 40% 60% 40% / 50% 50% 50% 50% !important;
+  background: rgba(39, 174, 96, 0.08) !important;
+}
+
+/* Playful offset shadow styling for playful-yellow image card */
+.slide-renderer-root[data-theme="playful-yellow"] .slide-image-box {
+  transform: rotate(-1deg);
+  box-shadow: 6px 6px 0px rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.4) !important;
+}
+
+/* Technical frame bounds for tech-purple image box */
+.slide-renderer-root[data-theme="tech-purple"] .slide-image-box {
+  border: 1px dashed #e056fd !important;
+  border-radius: 4px;
+}
+
+/* ─── 5. QUOTE SLIDE LAYOUT STYLES ─── */
+
+/* Floating left-aligned glass card layout for modern-dark and blue-planet */
+.slide-renderer-root[data-theme="modern-dark"] .slide-quote-inner,
+.slide-renderer-root[data-theme="blue-planet"] .slide-quote-inner {
+  align-items: flex-start;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  padding: 32px;
+  border-radius: 16px;
+  max-width: 580px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+}
+.slide-renderer-root[data-theme="modern-dark"] .slide-quote-text,
+.slide-renderer-root[data-theme="blue-planet"] .slide-quote-text {
+  text-align: left;
+  padding: 0;
+}
+
+/* Speech bubble styled quote card for playful-yellow */
+.slide-renderer-root[data-theme="playful-yellow"] .slide-quote-inner {
+  background: rgba(245, 158, 11, 0.05);
+  border: 2px solid rgba(245, 158, 11, 0.15);
+  border-radius: 24px;
+  padding: 24px 32px;
+  max-width: 580px;
+}
+
+/* ─── 6. SOFT BLUE & ROYAL PURPLE TEMPLATE LAYOUTS (SLIDESPEAK STYLE) ─── */
+
+/* Left align all title slides for soft-blue and royal-purple */
+.slide-renderer-root[data-theme="soft-blue"] .slide-title-content,
+.slide-renderer-root[data-theme="royal-purple"] .slide-title-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-title-content .slide-title-badge,
+.slide-renderer-root[data-theme="royal-purple"] .slide-title-content .slide-title-badge {
+  position: absolute;
+  left: 64px;
+  top: 110px;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-title-content .slide-main-title,
+.slide-renderer-root[data-theme="royal-purple"] .slide-title-content .slide-main-title {
+  position: absolute;
+  left: 64px;
+  top: 154px;
+  width: 620px;
+  text-align: left;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-title-content .slide-subtitle,
+.slide-renderer-root[data-theme="royal-purple"] .slide-title-content .slide-subtitle {
+  position: absolute;
+  left: 64px;
+  top: 290px;
+  width: 520px;
+  text-align: left;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-title-content .slide-title-divider,
+.slide-renderer-root[data-theme="royal-purple"] .slide-title-content .slide-title-divider {
+  position: absolute;
+  left: 64px;
+  top: 380px;
+}
+
+/* Slide Page Number Card like SlideSpeak */
+.slide-renderer-root[data-theme="soft-blue"] .slide-slide-number,
+.slide-renderer-root[data-theme="royal-purple"] .slide-slide-number {
+  position: absolute !important;
+  bottom: 24px !important;
+  right: 32px !important;
+  background: #ffffff !important;
+  border: 1.5px solid #e1effa !important;
+  border-radius: 8px !important;
+  padding: 6px 14px !important;
+  font-size: 20px !important;
+  font-weight: 800 !important;
+  color: #0f4c81 !important;
+  box-shadow: 0 4px 10px rgba(15, 76, 129, 0.06) !important;
+  font-family: 'Outfit', sans-serif !important;
+  opacity: 1 !important;
+  letter-spacing: 0 !important;
+}
+
+.slide-renderer-root[data-theme="royal-purple"] .slide-slide-number {
+  color: #9948FF !important;
+  border-color: rgba(153, 72, 255, 0.2) !important;
+  box-shadow: 0 4px 10px rgba(153, 72, 255, 0.1) !important;
+}
+
+/* Image+Text layout for soft-blue and royal-purple: exact coordinates matching SlideSpeak */
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext,
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext {
+  position: relative;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext-inner,
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext-inner {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext .slide-image-box,
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext .slide-image-box {
+  position: absolute;
+  left: 480px;
+  top: 102px;
+  width: 410px;
+  height: 310px;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext .slide-accent-bar,
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext .slide-accent-bar {
+  position: absolute;
+  left: -16px;
+  top: 6px;
+  width: 6px;
+  height: 38px;
+  border-radius: 999px;
+  margin-bottom: 0;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext-content,
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext-content {
+  position: absolute;
+  left: 64px;
+  top: 30px;
+  width: 390px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext .slide-section-title,
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext .slide-section-title {
+  position: static !important;
+  width: auto !important;
+  font-size: 34px !important;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext .slide-body-text,
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext .slide-body-text {
+  position: static !important;
+  width: auto !important;
+  height: auto !important;
+  font-size: 16.5px !important;
+  line-height: 1.65 !important;
+}
+
+/* Image+Text specific shapes (circle shape and clover shape backdrop) */
+.slide-renderer-root[data-theme="soft-blue"] .slide-image-box {
+  border-radius: 50% !important;
+  border: none !important;
+  background: #e0f2fe !important;
+  position: relative;
+  overflow: visible !important;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-imagetext .slide-image-box::before {
+  content: "";
+  position: absolute;
+  width: 130%;
+  height: 130%;
+  top: -15%;
+  left: -15%;
+  background-color: #0f4c81;
+  opacity: 0.12;
+  border-radius: 30% 70% 30% 70% / 50% 50% 50% 50%;
+  transform: rotate(45deg);
+  z-index: -1;
+}
+
+.slide-renderer-root[data-theme="royal-purple"] .slide-image-box {
+  border-radius: 50% !important;
+  border: none !important;
+  background: rgba(153, 72, 255, 0.15) !important;
+  position: relative;
+  overflow: visible !important;
+}
+
+.slide-renderer-root[data-theme="royal-purple"] .slide-imagetext .slide-image-box::before {
+  content: "";
+  position: absolute;
+  width: 130%;
+  height: 130%;
+  top: -15%;
+  left: -15%;
+  background-color: #9948FF;
+  opacity: 0.15;
+  border-radius: 30% 70% 30% 70% / 50% 50% 50% 50%;
+  transform: rotate(45deg);
+  z-index: -1;
+}
+
+/* Quote slide for soft-blue and royal-purple: white card floating on blue-grey background */
+.slide-renderer-root[data-theme="soft-blue"] .slide-quote,
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote {
+  background: linear-gradient(135deg, #a5becc 0%, #bdcfda 100%) !important;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-quote-inner,
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote-inner {
+  background: #ffffff !important;
+  border: 1px solid rgba(15, 76, 129, 0.08) !important;
+  box-shadow: 0 15px 35px -5px rgba(15, 76, 129, 0.15) !important;
+  padding: 36px 48px !important;
+  border-radius: 12px !important;
+  max-width: 620px !important;
+  align-items: center !important;
+  text-align: center !important;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-quote-text,
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote-text {
+  font-size: 18px !important;
+  font-weight: 500 !important;
+  color: #1c3d5a !important;
+  text-align: center !important;
+  line-height: 1.65 !important;
+  font-family: 'Outfit', sans-serif !important;
+  padding: 0 !important;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-quote-name,
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote-name {
+  color: #0f4c81 !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  font-family: 'Outfit', sans-serif !important;
+}
+
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote-inner {
+  border-color: rgba(153, 72, 255, 0.25) !important;
+  box-shadow: 0 15px 35px -5px rgba(153, 72, 255, 0.2) !important;
+}
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote-name {
+  color: #9948FF !important;
+}
+
+.slide-renderer-root[data-theme="soft-blue"] .slide-quote-mark,
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote-mark {
+  display: none !important;
+}
+.slide-renderer-root[data-theme="soft-blue"] .slide-quote-divider,
+.slide-renderer-root[data-theme="royal-purple"] .slide-quote-divider {
+  display: none !important;
+}
+
+/* Content slide for soft-blue and royal-purple: exact coordinates */
+.slide-renderer-root[data-theme="soft-blue"] .slide-content,
+.slide-renderer-root[data-theme="royal-purple"] .slide-content {
+  position: relative;
+}
+.slide-renderer-root[data-theme="soft-blue"] .slide-content .slide-accent-bar,
+.slide-renderer-root[data-theme="royal-purple"] .slide-content .slide-accent-bar {
+  position: absolute;
+  left: 48px;
+  top: 50px;
+  width: 6px;
+  height: 38px;
+  border-radius: 999px;
+  margin-bottom: 0;
+}
+.slide-renderer-root[data-theme="soft-blue"] .slide-content .slide-section-title,
+.slide-renderer-root[data-theme="royal-purple"] .slide-content .slide-section-title {
+  position: static !important;
+  width: auto !important;
+  text-align: left;
+}
+
+
+/* ═══════════ SOFT-BLUE TITLE LAYOUT ═══════════ */
+/* Override default flexbox centering for the split layout */
+.sb-title-wrap {
+  display: flex !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Left text column */
+.sb-title-left {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding: 52px 60px;
+  flex: 1;
+  max-width: 580px;
+}
+
+.sb-main-title {
+  font-size: 44px !important;
+  line-height: 1.12 !important;
+  letter-spacing: -0.5px !important;
+}
+
+.sb-subtitle {
+  font-size: 15px !important;
+  line-height: 1.65 !important;
+  max-width: 440px !important;
+}
+
+/* Right decorative blue panel */
+.sb-title-panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 320px;
+  height: 100%;
+  border-radius: 50% 0 0 50% / 50% 0 0 50%;
+  overflow: hidden;
+  z-index: 0;
+}
+
+/* Fix slide-number position inside sb-title-wrap */
+.sb-title-wrap .slide-slide-number {
+  position: absolute !important;
+  bottom: 24px !important;
+  right: 32px !important;
+  z-index: 2 !important;
+}
+

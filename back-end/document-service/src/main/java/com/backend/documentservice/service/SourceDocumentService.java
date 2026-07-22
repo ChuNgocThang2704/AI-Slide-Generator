@@ -73,9 +73,19 @@ public class SourceDocumentService {
             S3Utilities s3Utilities = s3Client.utilities();
             GetUrlRequest request = GetUrlRequest.builder().bucket(bucketName).key(s3Key).build();
             String url = s3Utilities.getUrl(request).toExternalForm();
+
+            SourceDocument saved = sourceDocumentRepository.save(SourceDocument.builder()
+                    .userId(userId)
+                    .fileName(fileName)
+                    .url(url)
+                    .fileSize(file.getSize())
+                    .fileType(determineFileType(fileName))
+                    .build());
             
             Map<String, Object> result = new HashMap<>();
+            result.put("id", saved.getId());
             result.put("url", url);
+            result.put("viewUrl", createPresignedViewUrl(s3Key));
             result.put("fileName", fileName);
             result.put("fileSize", file.getSize());
             return result;
@@ -146,6 +156,19 @@ public class SourceDocumentService {
 
         if (key == null) throw new AppException(ErrorCode.DOCUMENT_NOT_FOUND);
 
+        return createPresignedViewUrl(key);
+    }
+
+    public String generatePresignedViewUrl(String fileUrl, UUID userId) {
+        String key = extractS3KeyFromUrl(fileUrl);
+        String expectedPrefix = "documents/" + userId + "/";
+        if (key == null || !key.startsWith(expectedPrefix)) {
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        }
+        return createPresignedViewUrl(key);
+    }
+
+    private String createPresignedViewUrl(String key) {
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                 .bucket(bucketName.trim())
                 .key(key)
