@@ -241,9 +241,8 @@ def _anchor_phrase(anchors: List[str], top_n: int = 3) -> str:
 
 
 def _max_words_for_model() -> int:
-    """Số lượng từ tối đa (word budget) cho prompt gửi vào SDXL/FLUX."""
-    model_type = (IMAGE_MODEL_TYPE or "").strip().lower()
-    return 50 if model_type == "sdxl" else 60
+    """Số lượng từ tối đa cho prompt gửi vào FLUX."""
+    return 60
 
 
 

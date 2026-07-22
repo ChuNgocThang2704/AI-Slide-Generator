@@ -163,6 +163,12 @@ def fold_revision_text(text: str) -> str:
 
 def revision_prompt_mentions_image(text: str) -> bool:
     folded = fold_revision_text(text)
+    if re.search(
+        r"\b(?:giu|khong\s+doi|khong\s+sua|dung\s+doi|keep|unchanged|do\s+not\s+change)\b.{0,40}"
+        r"\b(?:anh|hinh|visual|picture|photo|image|illustration)\b",
+        folded,
+    ):
+        return False
     return bool(
         re.search(
             r"\b(?:anh|hinh|visual|picture|photo|image|illustration)\b|\bminh\s+hoa\b",
@@ -173,6 +179,11 @@ def revision_prompt_mentions_image(text: str) -> bool:
 
 def revision_prompt_mentions_table(text: str) -> bool:
     folded = fold_revision_text(text)
+    if re.search(
+        r"\b(?:khong|bo|dung|without|no)\s+(?:dung\s+|su\s+dung\s+|co\s+)?(?:bang|table)\b",
+        folded,
+    ):
+        return False
     return bool(
         re.search(
             r"\b(?:bang|table|comparison\s+table)\b|\bdu\s+lieu\s+bang\b|\bso\s+sanh\b",

@@ -7,6 +7,7 @@ bắt buộc số lượng slide chính xác.
 from __future__ import annotations
 
 import html
+import json
 import re
 import unicodedata
 from typing import Any, Dict, List, Optional
@@ -411,7 +412,7 @@ class SlideNormalizerMixin:
                 if not isinstance(slide, dict):
                     continue
                 raw_title = str(slide.get("title") or f"Slide {idx + 1}").strip()
-                title_clean = self._sanitize_title(raw_title)[:120] or f"Slide {idx + 1}"
+                title_clean = self._sanitize_title(raw_title) or f"Slide {idx + 1}"
                 raw_bullets = slide.get("bullets") or slide.get("content") or []
                 if isinstance(raw_bullets, str):
                     bullet_items = [raw_bullets]
@@ -429,8 +430,6 @@ class SlideNormalizerMixin:
                 notes = self._sanitize_inline_markup(
                     str(slide.get("script") or slide.get("speaker_notes") or slide.get("notes") or "").strip()
                 )
-                if not notes or self._speaker_notes_need_fallback(notes):
-                    notes = self._build_default_speaker_notes(title_clean, bullets_clean)
                 out_slide: Dict[str, Any] = {
                     "title": title_clean,
                     "bullets": bullets_clean[:MAX_BULLETS_PER_SLIDE],
@@ -441,7 +440,7 @@ class SlideNormalizerMixin:
                         out_slide[visual_key] = slide.get(visual_key)
                 explicit_slides.append(out_slide)
             return {
-                "title": self._sanitize_title(str(title).strip())[:120],
+                "title": self._sanitize_title(str(title).strip()),
                 "slides": explicit_slides,
                 "_explicit_slide_mode": True,
             }
@@ -449,6 +448,7 @@ class SlideNormalizerMixin:
         def _clean_bullet(text: str, _max_words: int) -> str:
             """Loại bỏ các ký tự thừa, sửa các câu bị cụt, cắt cứng tại _max_words để giữ bullet súc tích."""
             t = (text or "").strip()
+            _max_words = 0  # Let the LLM quality pass shorten content semantically.
             # Loại bỏ các ký tự markdown/tiêu đề vô tình xuất hiện trong bullet
             t = re.sub(r"^\s*#{1,6}\s*", "", t)
             t = re.sub(r"^\s*[-*•]\s*", "", t)
@@ -533,7 +533,7 @@ class SlideNormalizerMixin:
                 bullets_list = []
 
             slide_title = slide.get("title")
-            if _is_generic_title(slide_title):
+            if not str(slide_title or "").strip():
                 slide_title = None
                 if bullets_list:
                     first_b = bullets_list[0].strip()
@@ -624,11 +624,9 @@ class SlideNormalizerMixin:
             if not isinstance(notes, str):
                 notes = str(notes)
             notes = self._sanitize_inline_markup(notes.strip())
-            if not notes or self._speaker_notes_need_fallback(notes):
-                notes = self._build_default_speaker_notes(slide_title, bullets_list)
 
             out_slide = {
-                "title": self._sanitize_title(slide_title.strip())[:120],
+                "title": self._sanitize_title(slide_title.strip()),
                 "bullets": bullets_list,
                 "notes": notes,
             }
@@ -665,8 +663,6 @@ class SlideNormalizerMixin:
                 continue
             slide_notes = str(s.get("speaker_notes") or s.get("notes") or "").strip()
             slide_notes = self._sanitize_inline_markup(slide_notes)
-            if not slide_notes or self._speaker_notes_need_fallback(slide_notes):
-                slide_notes = self._build_default_speaker_notes(str(s.get("title") or ""), s.get("bullets") or [])
             s["notes"] = slide_notes
         title_counts: Dict[str, int] = {}
         for s in slides_out:
@@ -688,15 +684,8 @@ class SlideNormalizerMixin:
                 continue
             current_title = str(s.get("title") or "").strip()
             key = re.sub(r"\W+", " ", current_title.lower()).strip()
-            if " - Ph" in current_title or key in final_seen_titles or self._is_truncated_bullet(current_title):
-                s["title"] = self._derive_slide_title_from_bullets(
-                    s.get("bullets") or [],
-                    fallback=current_title,
-                    max_words=11,
-                )
-                key = re.sub(r"\W+", " ", str(s.get("title") or "").lower()).strip()
             final_seen_titles.add(key)
-        normalized = {"title": self._sanitize_title(title.strip())[:120], "slides": slides_out}
+        normalized = {"title": self._sanitize_title(title.strip()), "slides": slides_out}
         if structured_content.get("_explicit_slide_mode"):
             normalized["_explicit_slide_mode"] = True
         return normalized
@@ -1047,211 +1036,80 @@ class SlideNormalizerMixin:
         if not isinstance(slides, list):
             return structured_content
 
-        # Loại bỏ các slide trống hoặc bị lỗi trước.
-        slides = [s for s in slides if isinstance(s, dict) and (s.get("bullets") or [])]
-        structured_content["slides"] = slides
-
-        original_count = len(slides)
-
-        def _split_one(slides_list: List[Dict[str, Any]]) -> bool:
-            # Chọn slide có nhiều bullet nhất (>1) để tách.
-            candidates = [
-                (idx, len(s.get("bullets") or []))
-                for idx, s in enumerate(slides_list)
-                if isinstance(s, dict) and len(s.get("bullets") or []) > 1
-            ]
-            if not candidates:
-                # Recovery: nếu tất cả slide đều chỉ còn 1 bullet, không muốn lặp slide,
-                # ta thử tách 1 bullet dài thành 2 bullet để tạo thêm slide.
-                single_candidates = [
-                    (idx, len((s.get("bullets") or [None])[0] or ""))
-                    for idx, s in enumerate(slides_list)
-                    if isinstance(s, dict) and len(s.get("bullets") or []) == 1
-                ]
-                if not single_candidates:
-                    return False
-                idx = max(single_candidates, key=lambda x: x[1])[0]
-                slide = slides_list[idx]
-                bullets = list(slide.get("bullets") or [])
-                if len(bullets) != 1:
-                    return False
-                b = (bullets[0] or "").strip()
-                # Need đủ dài để tách
-                if len(b) < 80:
-                    return False
-
-                # Ưu tiên tách theo kết thúc câu.
-                sentences = re.split(r'(?<=[\.!?])\s+', b)
-                sentences = [s.strip() for s in sentences if s.strip()]
-
-                if len(sentences) >= 2:
-                    # Lấy N câu đầu tiên cho đến khi đạt một nửa độ dài
-                    half = len(b) // 2
-                    left_parts: List[str] = []
-                    left_len = 0
-                    for snt in sentences:
-                        if left_len >= half:
-                            break
-                        left_parts.append(snt)
-                        left_len += len(snt) + 1
-                    right_parts = sentences[len(left_parts):]
-                    if not left_parts or not right_parts:
-                        return False
-                    left = " ".join(left_parts).strip()
-                    right = " ".join(right_parts).strip()
-                else:
-                    # Giải pháp dự phòng: tách theo dấu phẩy/dấu chấm phẩy/dấu hai chấm
-                    parts = re.split(r'[,;:]\s+', b, maxsplit=1)
-                    if len(parts) < 2:
-                        return False
-                    left = parts[0].strip()
-                    right = parts[1].strip()
-
-                # Xác thực các phần
-                lw = len(left.split())
-                rw = len(right.split())
-                if lw < 5 or rw < 5:
-                    return False
-
-                slide["bullets"] = [left]
-                new_slide = dict(slide)
-                base_title = re.sub(
-                    r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
-                    "",
-                    str(slide.get("title") or "Nội dung"),
-                    flags=re.IGNORECASE,
-                ).strip() or str(slide.get("title") or "Nội dung")
-                new_slide["title"] = f"{base_title} - Phần 2"
-                new_slide["bullets"] = [right]
-                slides_list.insert(idx + 1, new_slide)
-                return True
-
-            idx = max(candidates, key=lambda x: x[1])[0]
-            slide = slides_list[idx]
-            bullets = list(slide.get("bullets") or [])
-            if len(bullets) <= 1:
-                return False
-            mid = max(1, len(bullets) // 2)
-            left = bullets[:mid]
-            right = bullets[mid:]
-            if not left or not right:
-                return False
-
-            slide["bullets"] = left
-            new_slide = dict(slide)
-            base_title = re.sub(
-                r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
-                "",
-                str(slide.get("title") or "Nội dung"),
-                flags=re.IGNORECASE,
-            ).strip() or str(slide.get("title") or "Nội dung")
-            new_slide["title"] = f"{base_title} - Phần 2"
-            new_slide["bullets"] = right
-            # Chèn sau slide hiện tại.
-            slides_list.insert(idx + 1, new_slide)
-            return True
-
-        # Cắt bớt nếu quá nhiều.
-        if len(slides) > desired_slides:
-            structured_content["slides"] = slides[:desired_slides]
+        valid_slides = [
+            slide
+            for slide in slides
+            if isinstance(slide, dict)
+            and str(slide.get("title") or "").strip()
+            and isinstance(slide.get("bullets"), list)
+            and any(str(value or "").strip() for value in slide.get("bullets") or [])
+        ]
+        if len(valid_slides) == desired_slides and len(valid_slides) == len(slides):
             return structured_content
 
-        # Tách cho đến khi đủ.
-        while len(slides) < desired_slides:
-            ok = _split_one(slides)
-            if not ok:
-                # Nếu không thể tách thêm (hầu hết là slide 1 bullet), đệm thêm bằng cách nhân bản slide cuối.
-                if not slides:
+        if hasattr(self, "_request_json_dict"):
+            current_deck = {
+                "title": str(structured_content.get("title") or "Presentation"),
+                "slides": valid_slides,
+            }
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a senior presentation editor. Recompose the supplied deck into exactly "
+                        f"{desired_slides} coherent slides. Preserve the original topic, language, facts, numbers, "
+                        "requested sections, and narrative order. Merge overlapping slides when reducing the count; "
+                        "create a genuinely distinct missing section from the deck context when increasing it. "
+                        "Never truncate the tail, duplicate a slide, move an unrelated bullet, add generic filler, "
+                        "or invent unsupported numbers. Preserve table/chart/image/layout fields when their slide is kept. "
+                        "Every slide must have a complete title, non-empty bullets, and useful speaker notes. "
+                        "Return strict JSON with title and slides only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "CURRENT DECK JSON:\n" + json.dumps(current_deck, ensure_ascii=False),
+                },
+            ]
+            for attempt in range(2):
+                try:
+                    candidate = await self._request_json_dict(
+                        messages,
+                        target_slides=desired_slides,
+                        fast_mode=False,
+                        compose_mode=True,
+                        structured_output="slide_deck",
+                    )
+                    candidate_slides = candidate.get("slides") if isinstance(candidate, dict) else None
+                    if (
+                        isinstance(candidate_slides, list)
+                        and len(candidate_slides) == desired_slides
+                        and all(
+                            isinstance(slide, dict)
+                            and str(slide.get("title") or "").strip()
+                            and isinstance(slide.get("bullets"), list)
+                            and any(str(value or "").strip() for value in slide.get("bullets") or [])
+                            for slide in candidate_slides
+                        )
+                    ):
+                        print(
+                            f"[slide_normalizer] AI recomposed deck to {desired_slides} slides "
+                            f"(attempt={attempt + 1})"
+                        )
+                        return candidate
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"The previous result did not contain exactly {desired_slides} complete slides. "
+                            "Retry the full deck without duplicate or filler slides."
+                        ),
+                    })
+                except Exception as error:
+                    print(f"[slide_normalizer] AI slide-count compose failed: {error}")
                     break
-                last = dict(slides[-1])
-                base_title = re.sub(
-                    r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
-                    "",
-                    str(last.get("title") or "Nội dung"),
-                    flags=re.IGNORECASE,
-                ).strip() or str(last.get("title") or "Nội dung")
-                last["title"] = f"{base_title} - Phần 2"
-                slides.append(last)
-                break
 
-        if len(slides) > desired_slides:
-            slides = slides[:desired_slides]
-        structured_content["slides"] = slides
-
-        # Hỗ trợ khẩn cấp: nếu slide có <2 bullets thì chuyển 1 bullet từ slide lân cận sang
-        # (giữ nguyên slide count, chỉ "bơm chữ" để tránh 1 slide 1 dòng).
-        try:
-            for i in range(len(slides)):
-                if not isinstance(slides[i], dict):
-                    continue
-                bs = slides[i].get("bullets") or []
-                if not isinstance(bs, list):
-                    continue
-                if len(bs) >= 2:
-                    continue
-
-                # Thử từ slide trước
-                if i - 1 >= 0:
-                    prev = slides[i - 1].get("bullets") or []
-                    if isinstance(prev, list) and len(prev) > 1 and len(bs) < MAX_BULLETS_PER_SLIDE:
-                        # Di chuyển một bullet
-                        bs.insert(0, prev.pop())
-
-                # Thử từ slide tiếp theo
-                if len(bs) < 2 and i + 1 < len(slides):
-                    nxt = slides[i + 1].get("bullets") or []
-                    if isinstance(nxt, list) and len(nxt) > 1 and len(bs) < MAX_BULLETS_PER_SLIDE:
-                        bs.append(nxt.pop(0))
-
-                slides[i]["bullets"] = bs[:MAX_BULLETS_PER_SLIDE]
-        except Exception:
-            pass
-
-        # Nếu số lượng slide thay đổi hoặc có slide "(tiếp)", chạy lại bộ lọc mật độ và chất lượng.
-        has_tiep_slides = any("(tiếp)" in str(s.get("title") or "") or "(continued)" in str(s.get("title") or "").lower() for s in slides)
-        if len(slides) != original_count or has_tiep_slides:
-            try:
-                from config import LLM_FINAL_DENSITY_GATE, LLM_FINAL_QUALITY_GATE
-            except Exception:
-                LLM_FINAL_DENSITY_GATE = True
-                LLM_FINAL_QUALITY_GATE = True
-
-            if LLM_FINAL_DENSITY_GATE and hasattr(self, "_run_final_density_gate"):
-                print(f"[slide_normalizer] re-running density gate on forced deck (count={desired_slides})")
-                structured_content = await self._run_final_density_gate(structured_content)
-
-            if LLM_FINAL_QUALITY_GATE and hasattr(self, "_run_final_quality_gate"):
-                print(f"[slide_normalizer] re-running quality gate on forced deck")
-                structured_content = await self._run_final_quality_gate(structured_content)
-
-        title_counts: Dict[str, int] = {}
-        for slide in structured_content.get("slides") or []:
-            if not isinstance(slide, dict):
-                continue
-            original_title = str(slide.get("title") or "Nội dung").strip()
-            base_title = re.sub(
-                r"\s*\([^)]*(?:tiếp|tiep|continued|cont\.?|tiáº|tiÃ|tiÃ¡)[^)]*\)\s*$",
-                "",
-                original_title,
-                flags=re.IGNORECASE,
-            ).strip() or original_title
-            title_counts[base_title] = title_counts.get(base_title, 0) + 1
-            count = title_counts[base_title]
-            slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
-
-        final_seen_titles: set[str] = set()
-        for slide in structured_content.get("slides") or []:
-            if not isinstance(slide, dict):
-                continue
-            current_title = str(slide.get("title") or "").strip()
-            key = re.sub(r"\W+", " ", current_title.lower()).strip()
-            if " - Ph" in current_title or key in final_seen_titles or self._is_truncated_bullet(current_title):
-                slide["title"] = self._derive_slide_title_from_bullets(
-                    slide.get("bullets") or [],
-                    fallback=current_title,
-                    max_words=11,
-                )
-                key = re.sub(r"\W+", " ", str(slide.get("title") or "").lower()).strip()
-            final_seen_titles.add(key)
-
+        print(
+            f"[slide_normalizer] keeping original deck: unable to safely reach "
+            f"{desired_slides} slides from {len(slides)}"
+        )
         return structured_content

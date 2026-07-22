@@ -8,6 +8,11 @@ services:
       - FREE_CHAR_LIMIT=10000
       - PRO_CHAR_LIMIT=50000
       - ULTRA_CHAR_LIMIT=100000
+      - IMAGE_MODEL_TYPE=flux
+      - IMAGE_GEN_API_BASE_URL=http://host.docker.internal:8080
+      - IMAGE_SENSITIVE_ALLOW_FLUX=true
+      - LLM_MODEL=Qwen3-VL-8B
+      - IMAGE_VLM_JUDGE_MODEL=Qwen3-VL-8B
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
@@ -34,6 +39,11 @@ services:
       - FREE_CHAR_LIMIT=10000
       - PRO_CHAR_LIMIT=50000
       - ULTRA_CHAR_LIMIT=100000
+      - IMAGE_MODEL_TYPE=flux
+      - IMAGE_GEN_API_BASE_URL=http://host.docker.internal:8080
+      - IMAGE_SENSITIVE_ALLOW_FLUX=true
+      - LLM_MODEL=Qwen3-VL-8B
+      - IMAGE_VLM_JUDGE_MODEL=Qwen3-VL-8B
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs

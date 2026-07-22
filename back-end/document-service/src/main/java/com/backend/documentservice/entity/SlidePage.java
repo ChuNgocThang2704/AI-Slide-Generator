@@ -54,6 +54,12 @@ public class SlidePage extends AbstractAuditingEntity {
     @Column(name = "table_data", columnDefinition = "TEXT")
     private String table;
 
+    @Column(name = "rich_text", columnDefinition = "TEXT")
+    private String richText;
+
+    @Column(name = "elements", columnDefinition = "LONGTEXT")
+    private String elements;
+
     @Column(name = "image_url")
     private String imageUrl;
 

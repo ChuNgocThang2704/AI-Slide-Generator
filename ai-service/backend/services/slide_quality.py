@@ -182,6 +182,18 @@ def _heuristic_visual(slide: Dict[str, Any], *, want_images: bool) -> str:
     return "none"
 
 
+def _declared_visual(slide: Dict[str, Any]) -> Optional[str]:
+    """Return only an explicit visual contract already present on the slide."""
+    layout = str(slide.get("layout") or "").strip().lower()
+    if isinstance(slide.get("table"), dict) or "table" in layout:
+        return "table"
+    if isinstance(slide.get("chart"), dict) or slide.get("chart_type") or "chart" in layout:
+        return "chart"
+    if slide.get("image") or slide.get("image_url") or "image" in layout:
+        return "image"
+    return None
+
+
 async def build_visual_plan(
     content_extractor,
     structured: Dict[str, Any],
@@ -249,7 +261,8 @@ async def build_visual_plan(
                 continue
             visual = str(item.get("visual") or "").strip().lower()
             if idx in plan and visual in _VISUAL_VALUES:
-                if fallback.get(idx) in {"chart", "table"} and visual != fallback.get(idx):
+                declared = _declared_visual(slides[idx]) if isinstance(slides[idx], dict) else None
+                if declared in {"chart", "table"} and visual != declared:
                     continue
                 if visual == "image" and not want_images:
                     visual = "none"

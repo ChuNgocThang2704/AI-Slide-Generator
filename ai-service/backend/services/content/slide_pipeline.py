@@ -141,13 +141,35 @@ class SlidePipelineMixin:
 
     async def _group_content_final(self, expanded_text: str) -> List[Dict[str, str]]:
         msgs = self._build_group_messages(expanded_text)
-        data = await self._request_json_dict(
-            msgs,
-            target_slides=10,
-            fast_mode=True,
-            compose_mode=False,
-            structured_output="sections",
-        )
+        try:
+            data = await self._request_json_dict(
+                msgs,
+                target_slides=10,
+                fast_mode=True,
+                compose_mode=False,
+                structured_output="sections",
+            )
+        except Exception as exc:
+            print(
+                "[slide_pipeline] group JSON failed; "
+                f"using heading/paragraph fallback. Error: {exc}"
+            )
+            chunks = self._split_by_headings(expanded_text or "")
+            fallback: List[Dict[str, str]] = []
+            for index, chunk in enumerate(chunks):
+                lines = [line.strip() for line in str(chunk or "").splitlines() if line.strip()]
+                if not lines:
+                    continue
+                first = lines[0]
+                heading = first.lstrip("#").strip()
+                has_heading = first.startswith("#")
+                content_lines = lines[1:] if has_heading else lines
+                content = "\n".join(content_lines).strip() or first
+                title = heading if has_heading else f"Phần {index + 1}"
+                fallback.append({"title": title[:80], "content": content})
+            if fallback:
+                return fallback
+            return [{"title": "Nội dung", "content": str(expanded_text or "").strip()}]
         secs = data.get("sections") if isinstance(data, dict) else None
         if not isinstance(secs, list):
             return []

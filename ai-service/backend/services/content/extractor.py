@@ -191,7 +191,7 @@ class ContentExtractor(
 ):
     """Sử dụng LLM để trích xuất và cấu trúc hóa nội dung thành slides"""
     
-    def __init__(self, model_name: str = "Qwen3-8B"):
+    def __init__(self, model_name: str = "Qwen3-VL-8B"):
         """Khởi tạo với model name trùng `--served-model-name` trên vLLM (OpenAI-compatible)."""
         self.model_name = model_name
         self.vllm_available = bool(VLLM_API_BASE_URL)

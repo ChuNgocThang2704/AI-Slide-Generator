@@ -33,13 +33,13 @@ def _resolve_plan_image_limit(
     plan_norm = (plan or "pro").strip().lower()
     if plan_norm == "free":
         max_limit = max(0, int(FREE_IMAGE_LIMIT))
-        ratio = 0.5
+        ratio = 0.4
     elif plan_norm == "ultra":
         max_limit = max(0, int(ULTRA_IMAGE_LIMIT_MAX))
-        ratio = 0.7
+        ratio = 0.8
     else:
         max_limit = max(0, int(PRO_IMAGE_LIMIT_MAX))
-        ratio = 0.5
+        ratio = 0.6
 
     total = int(slide_count or 10)
     calculated_limit = max(1, round(total * ratio))
@@ -63,10 +63,10 @@ def _task_wants_images(task_data: Dict[str, Any]) -> bool:
     )
     if not enabled:
         return False
-    has_sdxl = bool((IMAGE_GEN_API_BASE_URL or "").strip())
+    has_flux = bool((IMAGE_GEN_API_BASE_URL or "").strip())
     has_gemini = bool(GEMINI_API_KEY)
     has_stock = bool(STOCK_PHOTO_ENABLE and PEXELS_API_KEY)
-    return has_sdxl or has_gemini or has_stock
+    return has_flux or has_gemini or has_stock
 
 
 def exc_to_error_message(exc: BaseException) -> str:
@@ -99,7 +99,7 @@ def exc_to_error_message(exc: BaseException) -> str:
     return f"{name} (no message)"
 
 
-# TTL mặc định: 4 giờ — đủ cho cả task lớn (nhiều slide + ảnh SDXL).
+# TTL mặc định: 4 giờ — đủ cho cả task lớn (nhiều slide + ảnh FLUX).
 _TASK_TTL = 14_400
 
 
@@ -297,11 +297,7 @@ class RedisQueue:
                 return
 
             action = task_data.get("action")
-            if action == "generate_slide_full":
-                await self._process_slide_full(task_id, task_data)
-            elif action == "generate_slide_with_images":
-                await self._process_slide_with_images(task_id, task_data)
-            elif action == "generate_slide_spec":
+            if action == "generate_slide_spec":
                 await self._process_slide_spec(task_id, task_data)
             elif action == "revise_slide_spec":
                 await self._process_revise_slide_spec(task_id, task_data)

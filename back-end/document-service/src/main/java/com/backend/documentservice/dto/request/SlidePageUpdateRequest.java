@@ -18,6 +18,8 @@ public class SlidePageUpdateRequest {
     private String notes;
     private Object chart;
     private Object table;
+    private Object richText;
+    private Object elements;
     private String imageUrl;
     private String layout;
     private String primaryVisual;

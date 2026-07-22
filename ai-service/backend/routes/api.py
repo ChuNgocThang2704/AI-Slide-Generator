@@ -6,6 +6,7 @@ import uuid
 import json
 import httpx
 import re
+import unicodedata
 
 from services.file_processor import FileProcessor
 from services.content_extractor import ContentExtractor, TaskCancelledError
@@ -38,7 +39,6 @@ from services.revision_rules import (
     explicit_chart_type_targets_from_prompt as _explicit_chart_type_targets_from_prompt,
     explicit_slide_instruction_from_prompt as _explicit_slide_instruction_from_prompt,
     explicit_visual_targets_from_prompt as _explicit_visual_targets_from_prompt,
-    fallback_table_from_revision_prompt as _fallback_table_from_revision_prompt,
     fold_revision_text as _fold_revision_text,
     internal_slide_to_spec_row as _internal_slide_to_spec_row,
     parse_revision_target_indices as _parse_revision_target_indices,
@@ -80,6 +80,14 @@ def initialize_api_services(queue: Optional[RedisQueue] = None) -> None:
 def _detect_generate_images_request(text: str) -> bool:
     """Tự động phát hiện xem người dùng có yêu cầu sinh ảnh trong câu lệnh không (ví dụ: 'kèm ảnh', 'có hình', 'sinh ảnh')"""
     if not text:
+        return False
+    folded = unicodedata.normalize("NFD", str(text).lower())
+    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Mn").replace("đ", "d")
+    if re.search(
+        r"\b(?:khong|dung|bo|tat)\s+(?:can\s+|muon\s+|duoc\s+)?(?:sinh\s+|tao\s+|kem\s+|co\s+)?(?:anh|hinh)\b"
+        r"|\b(?:no|without|disable|do\s+not)\s+(?:generated?\s+|create\s+|with\s+)?(?:images?|pictures?|photos?)\b",
+        folded,
+    ):
         return False
     t = text.lower()
     return any(key in t for key in ("kem anh", "kèm ảnh", "co hinh", "có hình", "sinh anh", "sinh ảnh", "generate image", "with image"))
@@ -556,18 +564,8 @@ async def _build_revised_slide_spec_payload(
             revised_slides = [dict(slide) for slide in old_slides if isinstance(slide, dict)]
             for add_idx in range(explicit_add_count):
                 generated = generated_additions[add_idx] if add_idx < len(generated_additions) else None
-                revised_slides.append(
-                    dict(generated) if isinstance(generated, dict) else {
-                        "title": "Loi ich trien khai" if explicit_add_count == 1 else f"Loi ich trien khai {add_idx + 1}",
-                        "bullets": [
-                            "Tang hieu qua van hanh va giam thoi gian xu ly.",
-                            "Cai thien trai nghiem nguoi dung nho du lieu thoi gian thuc.",
-                            "Ho tro nha truong ra quyet dinh dua tren so lieu minh bach.",
-                        ],
-                        "notes": "Slide bo sung theo yeu cau cua nguoi dung.",
-                        "layout": "text_only",
-                    }
-                )
+                if isinstance(generated, dict):
+                    revised_slides.append(dict(generated))
         revised["slides"] = revised_slides
 
     if plan_targets and old_slides and not wants_deck_restructure:
@@ -736,7 +734,12 @@ async def _build_revised_slide_spec_payload(
                     {"slide": revised["slides"][idx], "context": table_context}
                 )
             repaired_spec = normalize_table_spec(repaired_raw)
-            if repaired_spec:
+            if repaired_spec and all(
+                isinstance(row, list)
+                and len(row) == len(repaired_spec.get("headers") or [])
+                and all(str(cell or "").strip() for cell in row)
+                for row in (repaired_spec.get("rows") or [])
+            ):
                 headers = repaired_spec.get("headers") or []
                 for row in repaired_spec.get("rows") or []:
                     criterion = str(row[0] or "tiêu chí này").strip() if row else "tiêu chí này"
@@ -750,11 +753,9 @@ async def _build_revised_slide_spec_payload(
                             else f"Chưa có thông tin cho {header} theo tiêu chí {criterion}."
                         )
                 table_specs[idx] = repaired_spec
-    fallback_table = _fallback_table_from_revision_prompt(revision_prompt)
-    if fallback_table:
-        for idx in forced_table_targets:
-            if idx not in table_specs:
-                table_specs[idx] = fallback_table
+            else:
+                table_specs.pop(idx, None)
+    fallback_table = None
     chart_specs = await build_chart_specs_for_slides(
         content_extractor,
         revised,
@@ -1515,298 +1516,3 @@ async def cancel_task(task_id: str):
         "status": status.get("status", "unknown"),
         "message": "Task cancellation requested",
     }
-
-
-@router.post("/api/generate-slide-full")
-async def generate_slide_full(
-    background_tasks: BackgroundTasks,
-    text: Optional[str] = Form(None),
-    file: UploadFile = File(None),
-    plan: str = Form("pro"),
-    slide_count: Optional[int] = Form(None),
-    image_limit: Optional[int] = Form(None),
-    slide_theme: str = Form("modern"),
-    generate_images: str = Form("true"),
-):
-    try:
-        task_id = str(uuid.uuid4())
-        plan_norm = (plan or "pro").strip().lower()
-        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count)
-        force_exact_slide_count = target_slides_override is not None
-        resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
-        slide_preset = SlideGenerator.normalize_slide_preset(slide_theme) or "modern"
-
-        file_content = ""
-        if file:
-            file_ext = Path(file.filename).suffix.lower()
-            if file_ext not in [".docx", ".pdf", ".txt"]:
-                raise HTTPException(status_code=400, detail="File type not supported")
-            file_path = UPLOAD_DIR / f"{task_id}{file_ext}"
-            with open(file_path, "wb") as f:
-                content = await file.read()
-                f.write(content)
-            file_content = await file_processor.process_file(file_path)
-
-        user_instruction: Optional[str] = None
-        if file_content and text:
-            raw_content = file_content
-            user_instruction = text  # Text là lệnh điều hướng, inject vào system prompt LLM
-        elif file_content:
-            raw_content = file_content
-        elif text:
-            raw_content = text
-        else:
-            raise HTTPException(status_code=400, detail="Either text or file must be provided")
-
-        # Quét số slide từ prompt text của người dùng trước, nếu không có mới dùng content để tính
-        text_for_detection = text or raw_content
-        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=text_for_detection)
-        force_exact_slide_count = target_slides_override is not None
-
-        # Tự động phát hiện yêu cầu sinh ảnh từ prompt text nếu tham số generate_images là false
-        want_images_flag = _form_wants_slide_images(generate_images)
-        if not want_images_flag and text:
-            want_images_flag = _detect_generate_images_request(text)
-
-        resolved_image_limit = _resolve_plan_image_limit(plan_norm, target_slides_override, image_limit)
-
-        doc_title_hint = None
-        if file:
-            doc_title_hint = Path(file.filename).stem
-
-        content_length = len(raw_content)
-        worker_ready = bool(redis_queue.redis_client and await redis_queue.has_active_worker())
-
-        async def _process_in_background(
-            task_id_bg: str,
-            raw_content_bg: str,
-            slide_preset_bg: str,
-            want_images_bg: bool,
-            image_limit_bg: int,
-            doc_title_hint_bg: Optional[str] = None,
-        ):
-            try:
-                await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
-
-                async def should_stop() -> bool:
-                    return await redis_queue.is_task_cancelled(task_id_bg)
-
-                async def on_chunk(done: int, total: int):
-                    if total <= 0:
-                        return
-                    progress = 10 + int(55 * done / total)
-                    await redis_queue.update_task_status(
-                        task_id_bg,
-                        "processing",
-                        progress=progress,
-                        result={"chunks": {"done": done, "total": total}},
-                    )
-
-                structured = await content_extractor.extract_and_structure(
-                    raw_content_bg,
-                    progress_cb=on_chunk,
-                    should_stop=should_stop,
-                    target_slides_override=target_slides_override,
-                    force_exact_slide_count=force_exact_slide_count,
-                    user_instruction=user_instruction,
-                    doc_title_hint=doc_title_hint_bg,
-                )
-
-                if await should_stop():
-                    return
-
-                if not structured.get("_explicit_slide_mode"):
-                    structured = await improve_slide_text_quality(
-                        content_extractor,
-                        structured,
-                        task_id=task_id_bg,
-                        max_refines=8,
-                        source_language=(
-                            content_extractor._detect_output_language_hint(raw_content_bg or "")
-                            if raw_content_bg
-                            else getattr(content_extractor, "_slide_lang_hint", "auto")
-                        ),
-                    )
-
-                if not structured.get("_explicit_slide_mode"):
-                    structured = await improve_deck_source_grounding(
-                        content_extractor,
-                        structured,
-                        raw_content_bg or "",
-                        task_id=task_id_bg,
-                    )
-
-                structured = _enforce_plan_slide_limit(structured, plan_norm)
-                from services.deck_coherence import improve_deck_coherence
-                structured = await improve_deck_coherence(
-                    content_extractor,
-                    structured,
-                    task_id=task_id_bg,
-                )
-                await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
-                visual_plan_bg = await build_visual_plan(
-                    content_extractor,
-                    structured,
-                    raw_content_bg or "",
-                    want_images=want_images_bg,
-                )
-                visual_plan_bg.update(
-                    _explicit_visual_targets_from_prompt(
-                        raw_content_bg or "",
-                        len(structured.get("slides") or []),
-                    )
-                )
-                table_specs_bg = await build_table_specs_for_slides(
-                    content_extractor,
-                    structured,
-                    task_id=task_id_bg,
-                    should_stop=should_stop,
-                    raw_content=raw_content_bg or "",
-                    visual_plan=visual_plan_bg,
-                )
-                chart_specs_bg = await build_chart_specs_for_slides(
-                    content_extractor,
-                    structured,
-                    task_id=task_id_bg,
-                    should_stop=should_stop,
-                    table_indices=set(table_specs_bg.keys()),
-                    raw_content=raw_content_bg or "",
-                    visual_plan=visual_plan_bg,
-                )
-                _apply_explicit_chart_type_targets(
-                    chart_specs_bg,
-                    _explicit_chart_type_targets_from_prompt(
-                        raw_content_bg or "",
-                        len(structured.get("slides") or []),
-                    ),
-                )
-                image_paths_bg = None
-                if want_images_bg:
-                    await redis_queue.update_task_status(
-                        task_id_bg, "processing", progress=68,
-                        result={"images": {"done": 0, "total": 0}},
-                    )
-                    async def on_image_progress(done: int, total: int):
-                        pct = 68 + int(11 * done / total) if total > 0 else 68
-                        await redis_queue.update_task_status(
-                            task_id_bg, "processing", progress=pct,
-                            result={"images": {"done": done, "total": total}},
-                        )
-                    try:
-                        image_paths_bg = await build_image_paths_for_slides(
-                            content_extractor,
-                            structured,
-                            task_id_bg,
-                            chart_specs=chart_specs_bg,
-                            table_specs=table_specs_bg,
-                            image_limit=image_limit_bg,
-                            should_stop=should_stop,
-                            progress_cb=on_image_progress,
-                            plan=plan_norm,
-                            force_target_indices=sorted(
-                                idx
-                                for idx, visual in _explicit_visual_targets_from_prompt(
-                                    raw_content_bg or "",
-                                    len(structured.get("slides") or []),
-                                ).items()
-                                if str(visual or "").strip().lower() == "image"
-                            ),
-                            force_instructions={
-                                idx: _explicit_slide_instruction_from_prompt(raw_content_bg or "", idx)
-                                for idx, visual in _explicit_visual_targets_from_prompt(
-                                    raw_content_bg or "",
-                                    len(structured.get("slides") or []),
-                                ).items()
-                                if str(visual or "").strip().lower() == "image"
-                            },
-                            visual_plan=visual_plan_bg,
-                        )
-                    except Exception as image_error:
-                        print(
-                            f"[generate:bg] image generation failed, continue without images: {image_error!r}"
-                        )
-                        image_paths_bg = None
-
-                if await should_stop():
-                    return
-
-                await redis_queue.update_task_status(task_id_bg, "processing", progress=75)
-                output_bg = pptx_path_for_task(OUTPUT_DIR, structured.get("title", ""), task_id_bg)
-                await slide_generator.create_slide(
-                    structured,
-                    output_bg,
-                    generate_images=bool(image_paths_bg),
-                    image_paths=image_paths_bg,
-                    chart_specs=chart_specs_bg,
-                    table_specs=table_specs_bg,
-                    preset=slide_preset_bg,
-                )
-
-                if await should_stop():
-                    return
-
-                await redis_queue.update_task_status(
-                    task_id_bg,
-                    "completed",
-                    progress=100,
-                    result={
-                        "download_url": f"/outputs/{output_bg.name}",
-                        "view_url": f"/api/view-slide/{task_id_bg}",
-                    },
-                )
-            except TaskCancelledError:
-                await redis_queue.update_task_status(
-                    task_id_bg,
-                    "cancelled",
-                    progress=0,
-                    result={"message": "Task cancelled by user"},
-                )
-            except Exception as e:
-                await redis_queue.update_task_status(
-                    task_id_bg,
-                    "error",
-                    progress=0,
-                    result={"error": exc_to_error_message(e)},
-                )
-
-        if worker_ready and REDIS_OFFLOAD_WHEN_WORKER_ALIVE:
-            task_data = {
-                "action": "generate_slide_full",
-                "raw_content": raw_content,
-                "user_instruction": user_instruction,
-                "plan": plan_norm,
-                "slide_count": target_slides_override,
-                "slide_theme": slide_preset,
-                "generate_images": "true" if want_images_flag else "false",
-                "image_limit": resolved_image_limit,
-                "doc_title_hint": doc_title_hint,
-            }
-            await redis_queue.add_task(task_id, task_data)
-            return {
-                "task_id": task_id,
-                "status": "processing",
-                "message": "Processing via Redis worker (vLLM)...",
-                "check_status_url": f"/api/status/{task_id}",
-            }
-
-        # Luôn chạy bất đồng bộ qua BackgroundTasks nếu không có Redis worker
-        await redis_queue.update_task_status(task_id, "pending", progress=0)
-        background_tasks.add_task(
-            _process_in_background,
-            task_id,
-            raw_content,
-            slide_preset,
-            want_images_flag,
-            resolved_image_limit,
-            doc_title_hint,
-        )
-        return {
-            "task_id": task_id,
-            "status": "processing",
-            "message": "Processing asynchronously in BackgroundTasks.",
-            "check_status_url": f"/api/status/{task_id}",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

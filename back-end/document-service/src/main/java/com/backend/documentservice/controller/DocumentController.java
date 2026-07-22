@@ -197,6 +197,13 @@ public class DocumentController {
                 .build();
     }
 
+    @GetMapping("/source-documents/view-url")
+    public ApiResponse<String> getPresignedViewUrlByStorageUrl(@RequestParam String url) {
+        return ApiResponse.<String>builder()
+                .data(sourceDocumentService.generatePresignedViewUrl(url, currentUserId()))
+                .build();
+    }
+
     @DeleteMapping("/source-documents")
     public ApiResponse<String> deleteDocuments(@RequestBody List<UUID> ids) {
         sourceDocumentService.deleteDocuments(ids, currentUserId());

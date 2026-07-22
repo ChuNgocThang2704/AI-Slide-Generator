@@ -59,6 +59,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 @Service
@@ -321,6 +322,7 @@ public class ProjectService {
 
     @Async
     public void reviseSlidesAsync(UUID projectId, UUID userId, String sourceTaskId, ProjectReviseRequest request, String userRole) {
+        AtomicReference<String> submittedRevisionTaskId = new AtomicReference<>();
         try {
             Project project = projectRepository.findById(projectId)
                     .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
@@ -335,6 +337,7 @@ public class ProjectService {
                     request.getSlideNumber(),
                     request.getImageLimit(),
                     taskId -> {
+                        submittedRevisionTaskId.set(taskId);
                         Project proj = projectRepository.findById(projectId).orElse(project);
                         proj.setAiTaskId(taskId);
                         projectRepository.save(proj);
@@ -358,21 +361,43 @@ public class ProjectService {
             revertRevisionQuota(userId);
             log.error("[document-service] Loi ung dung khi revise slide tu AI cho project ID: {}", projectId, e);
             updateAiTaskLogsFromProgress(projectId, "failed", objectMapper.createObjectNode().put("error", e.getMessage()));
-            Project proj = projectRepository.findById(projectId).orElse(null);
-            if (proj != null) {
-                proj.setStatus(Constants.PROJECT_STATUS.FAILED);
-                projectRepository.save(proj);
-            }
+            restoreRevisionSourceTask(projectId, sourceTaskId, submittedRevisionTaskId.get());
         } catch (Exception e) {
             revertRevisionQuota(userId);
             log.error("[document-service] That bai khi revise slide tu AI cho project ID: {}", projectId, e);
             updateAiTaskLogsFromProgress(projectId, "failed", objectMapper.createObjectNode().put("error", e.getMessage()));
-            Project proj = projectRepository.findById(projectId).orElse(null);
-            if (proj != null) {
-                proj.setStatus(Constants.PROJECT_STATUS.FAILED);
-                projectRepository.save(proj);
-            }
+            restoreRevisionSourceTask(projectId, sourceTaskId, submittedRevisionTaskId.get());
         }
+    }
+
+    private void restoreRevisionSourceTask(UUID projectId, String sourceTaskId, String failedRevisionTaskId) {
+        Project project = projectRepository.findById(projectId).orElse(null);
+        if (project == null) {
+            return;
+        }
+
+        String currentTaskId = project.getAiTaskId();
+        boolean stillOwnsProjectTask = failedRevisionTaskId == null
+                ? sourceTaskId.equals(currentTaskId)
+                : failedRevisionTaskId.equals(currentTaskId);
+        if (!stillOwnsProjectTask) {
+            log.warn(
+                    "[document-service] Skip restoring source task for project {} because a newer task is active: {}",
+                    projectId,
+                    currentTaskId
+            );
+            return;
+        }
+
+        project.setAiTaskId(sourceTaskId);
+        project.setStatus(Constants.PROJECT_STATUS.FAILED);
+        projectRepository.save(project);
+        log.info(
+                "[document-service] Restored last successful AI task {} after revision task {} failed for project {}",
+                sourceTaskId,
+                failedRevisionTaskId,
+                projectId
+        );
     }
 
     private void revertRevisionQuota(UUID userId) {
@@ -729,6 +754,8 @@ public class ProjectService {
                     Object bulletsObj = null;
                     Object chartObj = null;
                     Object tableObj = null;
+                    Object richTextObj = null;
+                    Object elementsObj = null;
                     
                     try {
                         if (page.getBullets() != null && !page.getBullets().isEmpty()) {
@@ -739,6 +766,12 @@ public class ProjectService {
                         }
                         if (page.getTable() != null && !page.getTable().isEmpty()) {
                             tableObj = objectMapper.readTree(page.getTable());
+                        }
+                        if (page.getRichText() != null && !page.getRichText().isEmpty()) {
+                            richTextObj = objectMapper.readTree(page.getRichText());
+                        }
+                        if (page.getElements() != null && !page.getElements().isEmpty()) {
+                            elementsObj = objectMapper.readTree(page.getElements());
                         }
                     } catch (Exception e) {
                         log.error("Lỗi khi parse các thuộc tính cho slide ID: {}", page.getId(), e);
@@ -753,6 +786,8 @@ public class ProjectService {
                             .notes(page.getNotes())
                             .chart(chartObj)
                             .table(tableObj)
+                            .richText(richTextObj)
+                            .elements(elementsObj)
                             .imageUrl(page.getImageUrl())
                             .layout(page.getLayout())
                             .primaryVisual(page.getPrimaryVisual())
@@ -793,8 +828,15 @@ public class ProjectService {
             if (request.getTable() != null) {
                 page.setTable(objectMapper.writeValueAsString(request.getTable()));
             }
+            if (request.getRichText() != null) {
+                page.setRichText(objectMapper.writeValueAsString(request.getRichText()));
+            }
+            if (request.getElements() != null) {
+                page.setElements(objectMapper.writeValueAsString(request.getElements()));
+            }
         } catch (Exception e) {
             log.error("Lỗi khi chuyển đổi các thuộc tính JSON sang chuỗi DB trong updateSlidePage", e);
+            throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION, "Không thể lưu dữ liệu chỉnh sửa slide");
         }
 
         page = slidePageRepository.save(page);
@@ -802,6 +844,8 @@ public class ProjectService {
         Object bulletsObj = null;
         Object chartObj = null;
         Object tableObj = null;
+        Object richTextObj = null;
+        Object elementsObj = null;
         try {
             if (page.getBullets() != null && !page.getBullets().isEmpty()) {
                 bulletsObj = objectMapper.readTree(page.getBullets());
@@ -811,6 +855,12 @@ public class ProjectService {
             }
             if (page.getTable() != null && !page.getTable().isEmpty()) {
                 tableObj = objectMapper.readTree(page.getTable());
+            }
+            if (page.getRichText() != null && !page.getRichText().isEmpty()) {
+                richTextObj = objectMapper.readTree(page.getRichText());
+            }
+            if (page.getElements() != null && !page.getElements().isEmpty()) {
+                elementsObj = objectMapper.readTree(page.getElements());
             }
         } catch (Exception e) {
             log.error("Lỗi khi parse các thuộc tính JSON cho response", e);
@@ -825,6 +875,8 @@ public class ProjectService {
                 .notes(page.getNotes())
                 .chart(chartObj)
                 .table(tableObj)
+                .richText(richTextObj)
+                .elements(elementsObj)
                 .imageUrl(page.getImageUrl())
                 .layout(page.getLayout())
                 .primaryVisual(page.getPrimaryVisual())
@@ -863,6 +915,8 @@ public class ProjectService {
             String bulletsJson = null;
             String chartJson = null;
             String tableJson = null;
+            String richTextJson = null;
+            String elementsJson = null;
             String imageUrl = null;
             
             try {
@@ -875,11 +929,18 @@ public class ProjectService {
                 if (req.getTable() != null) {
                     tableJson = objectMapper.writeValueAsString(req.getTable());
                 }
+                if (req.getRichText() != null) {
+                    richTextJson = objectMapper.writeValueAsString(req.getRichText());
+                }
+                if (req.getElements() != null) {
+                    elementsJson = objectMapper.writeValueAsString(req.getElements());
+                }
                 if (req.getImageUrl() != null) {
                     imageUrl = req.getImageUrl();
                 }
             } catch (Exception e) {
                 log.error("Lỗi khi serialize thuộc tính JSON trong syncSlidePages", e);
+                throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION, "Không thể lưu dữ liệu chỉnh sửa slide");
             }
 
             if (req.getId() != null && currentPagesMap.containsKey(req.getId())) {
@@ -889,6 +950,8 @@ public class ProjectService {
                 page.setNotes(req.getNotes());
                 page.setChart(chartJson);
                 page.setTable(tableJson);
+                page.setRichText(richTextJson);
+                page.setElements(elementsJson);
                 if (req.getImageUrl() != null) {
                     page.setImageUrl(imageUrl);
                 }
@@ -904,6 +967,8 @@ public class ProjectService {
                         .notes(req.getNotes())
                         .chart(chartJson)
                         .table(tableJson)
+                        .richText(richTextJson)
+                        .elements(elementsJson)
                         .imageUrl(imageUrl)
                         .layout(req.getLayout())
                         .primaryVisual(req.getPrimaryVisual())
@@ -920,6 +985,8 @@ public class ProjectService {
             Object bulletsObj = null;
             Object chartObj = null;
             Object tableObj = null;
+            Object richTextObj = null;
+            Object elementsObj = null;
             try {
                 if (page.getBullets() != null && !page.getBullets().isEmpty()) {
                     bulletsObj = objectMapper.readTree(page.getBullets());
@@ -929,6 +996,12 @@ public class ProjectService {
                 }
                 if (page.getTable() != null && !page.getTable().isEmpty()) {
                     tableObj = objectMapper.readTree(page.getTable());
+                }
+                if (page.getRichText() != null && !page.getRichText().isEmpty()) {
+                    richTextObj = objectMapper.readTree(page.getRichText());
+                }
+                if (page.getElements() != null && !page.getElements().isEmpty()) {
+                    elementsObj = objectMapper.readTree(page.getElements());
                 }
             } catch (Exception e) {
                 log.error("Lỗi khi parse JSON content cho response đồng bộ", e);
@@ -943,6 +1016,8 @@ public class ProjectService {
                     .notes(page.getNotes())
                     .chart(chartObj)
                     .table(tableObj)
+                    .richText(richTextObj)
+                    .elements(elementsObj)
                     .imageUrl(page.getImageUrl())
                     .layout(page.getLayout())
                     .primaryVisual(page.getPrimaryVisual())

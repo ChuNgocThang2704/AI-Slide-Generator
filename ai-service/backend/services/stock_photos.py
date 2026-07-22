@@ -1,4 +1,4 @@
-"""Tải hình ảnh tham chiếu/kho ảnh (stock) bên ngoài làm phương án dự phòng khi SDXL thất bại."""
+"""Tải hình ảnh tham chiếu/kho ảnh làm phương án dự phòng khi FLUX thất bại."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Callable, Awaitable

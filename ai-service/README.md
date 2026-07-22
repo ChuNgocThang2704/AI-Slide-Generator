@@ -7,7 +7,7 @@ Hệ thống web cho phép người dùng nhập text, upload file (docx, pdf) v
 - ✅ Upload file (docx, pdf, txt) hoặc nhập text trực tiếp
 - ✅ Trích xuất và cấu trúc hóa nội dung sử dụng LLM (Ollama/Qwen)
 - ✅ Tạo slide PowerPoint (PPTX) tự động
-- ✅ Sinh ảnh minh họa cho slide sử dụng SDXL/FLUX
+- ✅ Sinh ảnh minh họa cho slide sử dụng FLUX
 - ✅ Xem và tải slide đã tạo
 - ✅ Xử lý bất đồng bộ với Redis queue
 
@@ -17,7 +17,7 @@ Hệ thống web cho phép người dùng nhập text, upload file (docx, pdf) v
 - **FastAPI**: Framework web API
 - **Python**: Ngôn ngữ lập trình
 - **Ollama**: LLM để trích xuất nội dung (Qwen, Llama, etc.)
-- **Diffusers**: Sinh ảnh với SDXL hoặc FLUX
+- **Diffusers**: Sinh ảnh với FLUX
 - **Redis**: Queue bất đồng bộ
 - **python-pptx**: Tạo file PowerPoint
 - **python-docx, pdfplumber**: Xử lý file input
@@ -61,7 +61,7 @@ Slide text dùng API OpenAI-compatible (`httpx` đã có trong `requirements.txt
 
 ```bash
 set VLLM_API_BASE_URL=https://your-vllm-host:port   # gốc HTTP(S), không thêm /v1 (app tự nối /v1/...)
-set LLM_MODEL=Qwen3-8B   # trùng --served-model-name trên vLLM
+set LLM_MODEL=Qwen3-VL-8B   # trùng --served-model-name trên vLLM
 ```
 
 Nếu proxy có Basic Auth: `VLLM_BASIC_AUTH_USER`, `VLLM_BASIC_AUTH_PASS`.
@@ -76,7 +76,7 @@ docker run -d -p 6379:6379 redis:latest
 
 ### Bước 4: Cấu hình model sinh ảnh (optional)
 
-Model SDXL sẽ tự động download khi chạy lần đầu. Nếu muốn dùng FLUX:
+Model FLUX sẽ tự động download khi chạy lần đầu:
 
 ```python
 # Trong config.py hoặc environment variable
@@ -145,7 +145,7 @@ Form data:
 
 ### 5. API tổng hợp (khuyến nghị)
 ```
-POST /api/generate-slide-full
+POST /api/generate-slide-spec
 Form data:
   - text=<nội dung> (optional)
   - file=<file> (optional)
@@ -188,7 +188,7 @@ DemoDoan/
 
 ## Lưu ý
 
-1. **Model sinh ảnh**: SDXL/FLUX cần GPU để chạy nhanh. Nếu không có GPU, có thể bỏ qua phần sinh ảnh (set `generate_images=false`).
+1. **Model sinh ảnh**: FLUX cần GPU để chạy nhanh. Nếu không có GPU, có thể bỏ qua phần sinh ảnh (set `generate_images=false`).
 
    Giới hạn ảnh: `FREE_IMAGE_LIMIT` mặc định 5 ảnh cho gói Free; `PRO_IMAGE_LIMIT_MAX` mặc định 20 ảnh cho gói Pro. Backend vẫn clamp theo `IMAGE_MAX_SLIDES_WITH_IMAGES`.
 
@@ -220,11 +220,11 @@ python worker.py
 
 Worker xử lý tác vụ dài: trích xuất nội dung, sinh chart/image, tạo PPTX.
 
-### 3) Chạy image server SDXL/FLUX (máy GPU)
+### 3) Chạy image server FLUX (máy GPU)
 
 ```bash
 cd scripts
-python sdxl_api_server.py
+python flux_api_server.py
 ```
 
 Hoặc chỉ định host/port:
@@ -232,17 +232,17 @@ Hoặc chỉ định host/port:
 Windows:
 
 ```bash
-set SDXL_HOST=0.0.0.0
-set SDXL_PORT=8080
-python sdxl_api_server.py
+set FLUX_HOST=0.0.0.0
+set FLUX_PORT=8080
+python flux_api_server.py
 ```
 
 Linux/macOS:
 
 ```bash
-export SDXL_HOST=0.0.0.0
-export SDXL_PORT=8080
-python sdxl_api_server.py
+export FLUX_HOST=0.0.0.0
+export FLUX_PORT=8080
+python flux_api_server.py
 ```
 
 ### 4) Deploy image server lên máy GPU bằng SCP (khuyến nghị)
@@ -266,17 +266,17 @@ scp -r ./scripts <GPU_USER>@<GPU_SERVER_IP>:/home/<GPU_USER>/DemoDoan/
 ```bash
 ssh <GPU_USER>@<GPU_SERVER_IP>
 cd /home/<GPU_USER>/DemoDoan/scripts
-export SDXL_HOST=0.0.0.0
-export SDXL_PORT=8080
-python sdxl_api_server.py
+export FLUX_HOST=0.0.0.0
+export FLUX_PORT=8080
+python flux_api_server.py
 ```
 
 Nếu dùng `screen` để chạy nền:
 
 ```bash
-screen -S sdxl
+screen -S flux
 cd /home/<GPU_USER>/DemoDoan/scripts
-python sdxl_api_server.py
+python flux_api_server.py
 # Ctrl+A, D để detach
 ```
 
@@ -286,14 +286,14 @@ python sdxl_api_server.py
 
 ```bash
 set IMAGE_GEN_API_BASE_URL=http://<GPU_SERVER_IP>:8080
-set IMAGE_MODEL_TYPE=sdxl
+set IMAGE_MODEL_TYPE=flux
 ```
 
 Ví dụ:
 
 ```bash
 set IMAGE_GEN_API_BASE_URL=http://127.0.0.1:8080
-set IMAGE_MODEL_TYPE=sdxl
+set IMAGE_MODEL_TYPE=flux
 ```
 
 Sau khi đổi IP/port, restart `main.py` và `worker.py`.
@@ -314,35 +314,7 @@ curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/health
 
 ### 7) Trình tự chạy khuyến nghị
 
-1. Máy GPU: chạy `scripts/sdxl_api_server.py`.
-2. Máy backend: set `IMAGE_GEN_API_BASE_URL`.
-3. Chạy `backend/main.py`.
-4. Chạy `backend/worker.py`.
-5. Gọi API với `generate_images=true`.
-
-## Phát triển tiếp
-
-Các chức năng quản lý web sẽ được triển khai sau:
-
-Sau khi đổi IP/port, restart `main.py` và `worker.py`.
-
-### 6) Kiểm tra image server trước khi gọi từ backend
-
-```bash
-curl http://<GPU_SERVER_IP>:8080/ping
-curl http://<GPU_SERVER_IP>:8080/health
-```
-
-Windows (tránh proxy):
-
-```bash
-curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/ping
-curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/health
-```
-
-### 7) Trình tự chạy khuyến nghị
-
-1. Máy GPU: chạy `scripts/sdxl_api_server.py`.
+1. Máy GPU: chạy `scripts/flux_api_server.py`.
 2. Máy backend: set `IMAGE_GEN_API_BASE_URL`.
 3. Chạy `backend/main.py`.
 4. Chạy `backend/worker.py`.
@@ -356,19 +328,45 @@ Các chức năng quản lý web sẽ được triển khai sau:
 - Chức năng dùng thử
 - Thanh toán trả phí
 
+## Cấu hình Gói Dịch Vụ & Giới Hạn (Subscription Tiers & Plan Limits)
+
+Hệ thống quản lý giới hạn tài nguyên (số slide, số ảnh minh họa, số ký tự đầu vào) động dựa trên gói tài khoản (`free`, `pro`, `ultra`) truyền từ API Gateway lên:
+
+### 1. Giới hạn cơ bản của từng gói (Cấu hình trong `.env`)
+- **Gói FREE (`plan=free`)**:
+  - Giới hạn slide tối đa: **10 slide** (`FREE_SLIDE_LIMIT`)
+  - Giới hạn ký tự đầu vào: **10,000 ký tự** (`FREE_CHAR_LIMIT`)
+  - Giới hạn số ảnh tối đa: **5 ảnh** (`FREE_IMAGE_LIMIT`)
+- **Gói PRO (`plan=pro` - Mặc định)**:
+  - Giới hạn slide tối đa: **30 slide** (`PRO_SLIDE_LIMIT_MAX`)
+  - Giới hạn ký tự đầu vào: **50,000 ký tự** (`PRO_CHAR_LIMIT`)
+  - Giới hạn số ảnh tối đa: **15 ảnh** (`PRO_IMAGE_LIMIT_MAX`)
+- **Gói ULTRA (`plan=ultra`)**:
+  - Giới hạn slide tối đa: **50 slide** (`ULTRA_SLIDE_LIMIT_MAX`)
+  - Giới hạn ký tự đầu vào: **100,000 ký tự** (`ULTRA_CHAR_LIMIT`)
+  - Giới hạn số ảnh tối đa: **35 ảnh** (`ULTRA_IMAGE_LIMIT_MAX`)
+
+### 2. Tỉ lệ phân bổ ảnh minh họa tối đa trên tổng số slide
+Để tối ưu hóa tài nguyên GPU và đạt chất lượng bố cục slide chuyên nghiệp nhất, hệ thống tự động tính toán giới hạn ảnh theo tỉ lệ của từng gói:
+- **Gói FREE**: Tối đa **40%** số slide có ảnh (ví dụ: deck 10 slide -> tối đa 4 slide có ảnh).
+- **Gói PRO**: Tối đa **60%** số slide có ảnh (ví dụ: deck 15 slide -> tối đa 9 slide có ảnh).
+- **Gói ULTRA**: Tối đa **80%** số slide có ảnh (ví dụ: deck 20 slide -> tối đa 16 slide có ảnh).
+
+Số lượng ảnh thực tế của mỗi bài thuyết trình sẽ là giá trị nhỏ nhất giữa: `Số slide * Tỉ lệ gói` và `Giới hạn ảnh tối đa của gói`.
+
 ## Hướng dẫn tự Host vLLM Server (Text Model)
 
 Nếu tự thuê server GPU để chạy mô hình ngôn ngữ lớn (LLM), bạn có thể dùng lệnh sau để chạy **vLLM** phục vụ cho API trích xuất slide:
 
 ```bash
-vllm serve Qwen/Qwen3-8B \
+vllm serve Qwen/Qwen3-VL-8B-Instruct \
   --host 0.0.0.0 \
   --port 8000 \
   --dtype auto \
   --gpu-memory-utilization 0.90 \
   --max-model-len 16384 \
   --max-num-seqs 8 \
-  --served-model-name Qwen3-8B \
+  --served-model-name Qwen3-VL-8B \
   --enable-prefix-caching
 ```
 
@@ -383,11 +381,11 @@ vllm serve Qwen/Qwen3-VL-8B-Instruct \
   --dtype auto \
   --gpu-memory-utilization 0.90 \
   --max-model-len 16384 \
-  --served-model-name Qwen3-8B \
+  --served-model-name Qwen3-VL-8B \
   --enable-prefix-caching \
   --limit-mm-per-prompt image=1
 ```
-*(Giữ nguyên `--served-model-name Qwen3-8B` để không phải sửa lại file cấu hình `.env` của backend).*
+*Đặt `--served-model-name Qwen3-VL-8B` và dùng cùng tên trong `LLM_MODEL` của backend.*
 
 ## JSON Spec API For BE/FE
 

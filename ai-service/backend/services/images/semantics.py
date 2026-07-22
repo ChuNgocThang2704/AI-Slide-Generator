@@ -24,7 +24,7 @@ _ABSTRACT_CONCEPT_KEYS_SORTED: Optional[List[str]] = None
 
 
 def _is_mostly_ascii(text: str) -> bool:
-    """SDXL/CLIP chỉ hiểu tốt các token chữ Latinh; từ chối bất kỳ chuỗi nào
+    """Bộ chấm CLIP hiểu tốt nhất các token chữ Latinh; từ chối bất kỳ chuỗi nào
     chứa dấu tiếng Việt hoặc các chữ cái không thuộc bảng mã ASCII khác.
 
     Chữ số, khoảng trắng, dấu gạch ngang và một số ký tự dấu câu phổ biến được phép dùng
@@ -43,7 +43,7 @@ def _is_mostly_ascii(text: str) -> bool:
 def _vlm_has_severe_failure(reasons: List[str]) -> bool:
     """Trả về true đối với các lỗi nghiêm trọng làm bác bỏ cả những hình ảnh có độ liên quan cao.
 
-    Gemini thường đánh giá điểm artifact cao cho các lỗi nhỏ của SDXL như ngón tay
+    VLM thường đánh giá điểm artifact cao cho các lỗi nhỏ như ngón tay
     hoặc bàn phím ảo trong khi vẫn nhận định hình ảnh phù hợp. Những lỗi đó không nên ép
     phải dùng ảnh dự phòng. Các trường hợp không khớp nội dung nghiêm trọng, hình ảnh quá nhiều chữ,
     giải phẫu bị lỗi, và các kết quả đầu ra không thể đọc được/bị hỏng vẫn sẽ bị từ chối.
@@ -208,7 +208,7 @@ def _looks_like_person_reference(text: str) -> bool:
 # Định tuyến, xử lý rủi ro và bối cảnh lịch sử.
 
 def _classify_risk(slide: Dict[str, Any], semantic: Dict[str, Any], content_type: str) -> Optional[str]:
-    """Phân loại xem nội dung slide có rủi ro đối với đầu ra tả thực của SDXL hay không.
+    """Phân loại xem nội dung slide có rủi ro đối với đầu ra tả thực của FLUX hay không.
 
     Trả về thẻ rủi ro (khóa trong _RISK_STYLE_OVERRIDES) hoặc None nếu không có rủi ro.
     Thứ tự rất quan trọng: slide lịch sử có chứa người -> person_protected, ngược lại là historical.
@@ -789,7 +789,7 @@ def _semantic_anchors(semantic: Dict[str, Any], slide: Dict[str, Any]) -> List[s
 
 
 def _scoreable_anchors(anchors: List[str]) -> List[str]:
-    """Kiểm tra độ bao phủ (coverage check) chỉ nên xem xét các neo mà SDXL có thể đọc (tiếng Anh/ASCII).
+    """Kiểm tra độ bao phủ chỉ với các neo tiếng Anh/ASCII mà model ảnh đọc ổn định.
 
     Các neo tiếng Việt được cố ý loại trừ khỏi việc chấm điểm prompt vì chúng không thể tồn tại
     trong prompt (chúng tôi lọc bỏ các token tiếng Việt khỏi bản thân prompt) và sẽ tạo ra

@@ -48,9 +48,9 @@ REDIS_OFFLOAD_WHEN_WORKER_ALIVE = os.getenv(
 ).lower() in ("1", "true", "yes")
 REDIS_QUEUE_MIN_CHARS = int(os.getenv("REDIS_QUEUE_MIN_CHARS", "10000"))
 
-# LLM config — mặc định Qwen3-8B (vLLM: khớp --served-model-name, thường là Qwen3-8B).
-# Nếu server không đặt served-model-name, dùng đúng repo HF: LLM_MODEL=Qwen/Qwen3-8B
-LLM_MODEL = os.getenv("LLM_MODEL", "Qwen3-8B")
+# Qwen3-VL handles both slide text and image-quality review through vLLM.
+# This must match the server's --served-model-name.
+LLM_MODEL = os.getenv("LLM_MODEL", "Qwen3-VL-8B")
 # vLLM (OpenAI-compatible). Bắt buộc cho extract slide (không còn Ollama local).
 VLLM_API_BASE_URL = os.getenv("VLLM_API_BASE_URL", "http://45.83.205.200:46627")
 # Structured output: guided_json (cần vLLM + backend outlines/lm-format-enforcer...). Lỗ HTTP 400 → client tự thử lại không guided.
@@ -121,12 +121,12 @@ LLM_FINAL_DENSITY_MAX_REWRITES = int(os.getenv("LLM_FINAL_DENSITY_MAX_REWRITES",
 # Luồng slide thống nhất trong code: sau merge/summary → expand → group → generate → refine
 # (xem `ContentExtractor._expand_group_generate_refine_pipeline` trong content_extractor.py).
 
-# Image generation (SDXL) — máy/host KHÁC với API tạo slide (FastAPI /generate).
-# Chỉ set khi đã có service sinh ảnh (vd. scripts/sdxl_api_server.py trên GPU).
+# Image generation (FLUX) — máy/host KHÁC với API tạo slide (FastAPI /generate).
+# Chỉ set khi đã có service sinh ảnh (vd. scripts/flux_api_server.py trên GPU).
 # Ví dụ map: ngoài :26229 -> trong :8080 thì URL đầy đủ là http://IP:26229 (không phải port API slide).
-# Để trống = tắt ảnh. Mặc định trỏ server SDXL (đổi bằng env khi deploy khác).
+# Để trống = tắt ảnh. Mặc định trỏ server FLUX (đổi bằng env khi deploy khác).
 IMAGE_GEN_API_BASE_URL = os.getenv(
-    "IMAGE_GEN_API_BASE_URL", "http://104.188.118.187:49381"
+    "IMAGE_GEN_API_BASE_URL", "http://127.0.0.1:8080"
 ).strip().rstrip("/")
 IMAGE_GEN_API_KEY = os.getenv("IMAGE_GEN_API_KEY", "").strip()
 IMAGE_GEN_TIMEOUT_SEC = float(os.getenv("IMAGE_GEN_TIMEOUT_SEC", "600"))
@@ -142,7 +142,7 @@ IMAGE_FALLBACK_TIMEOUT_SEC = float(os.getenv("IMAGE_FALLBACK_TIMEOUT_SEC", "60")
 IMAGE_FALLBACK_MODEL = os.getenv(
     "IMAGE_FALLBACK_MODEL", "imagen-4.0-generate-001"
 ).strip()
-# Giới hạn số slide có ảnh (mỗi ảnh một gọi SDXL — có thể lâu).
+# Giới hạn số slide có ảnh (mỗi ảnh một gọi FLUX — có thể lâu).
 IMAGE_MAX_SLIDES_WITH_IMAGES = int(os.getenv("IMAGE_MAX_SLIDES_WITH_IMAGES", "35"))
 
 # Giới hạn Slide
@@ -178,7 +178,7 @@ IMAGE_NEGATIVE_PROMPT = os.getenv(
     "blurry, low quality, distorted, ugly, bad anatomy, nsfw",
 )
 
-# Style khóa chung cả deck — dùng STOCK PHOTO để thoát prior infographic của SDXL.
+# Style khóa chung cả deck — dùng STOCK PHOTO để thoát prior infographic của model.
 IMAGE_STYLE_LOCKED = os.getenv(
     "IMAGE_STYLE_LOCKED",
     "professional stock photography, shallow depth of field, soft natural light, "
@@ -191,15 +191,15 @@ IMAGE_PROMPT_SUFFIX = os.getenv(
     ", no text, no signs, no screens with writing, no whiteboard, no diagrams",
 )
 
-IMAGE_MODEL_TYPE = os.getenv("IMAGE_MODEL_TYPE", "sdxl").strip().lower()  # "sdxl" or "flux"
-IMAGE_SENSITIVE_ALLOW_SDXL = os.getenv("IMAGE_SENSITIVE_ALLOW_SDXL", "false").lower() in ("1", "true", "yes")
-# 1024² ổn với nhiều service SDXL; tăng từ 896×672 để ổn định layout khi cắt vào slide.
+IMAGE_MODEL_TYPE = "flux"
+IMAGE_SENSITIVE_ALLOW_FLUX = os.getenv("IMAGE_SENSITIVE_ALLOW_FLUX", "true").lower() in ("1", "true", "yes")
+# 1024² giữ chi tiết và ổn định layout khi cắt vào slide.
 IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "1024"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "1024"))
-_IMAGE_DEFAULT_STEPS = "4" if IMAGE_MODEL_TYPE == "flux" else "35"
-_IMAGE_DEFAULT_GUIDANCE = "0.0" if IMAGE_MODEL_TYPE == "flux" else "8.0"
+_IMAGE_DEFAULT_STEPS = "4"
+_IMAGE_DEFAULT_GUIDANCE = "0.0"
 IMAGE_STEPS = int(os.getenv("IMAGE_STEPS", _IMAGE_DEFAULT_STEPS))
-# FLUX.1-schnell thường dùng guidance 0; SDXL realistic bám prompt tốt hơn với CFG cao hơn.
+# FLUX.1-schnell thường dùng guidance 0.
 IMAGE_GUIDANCE_SCALE = float(os.getenv("IMAGE_GUIDANCE_SCALE", _IMAGE_DEFAULT_GUIDANCE))
 
 # External image fallback. Wikimedia works without key; Pexels is optional.
@@ -216,7 +216,7 @@ IMAGE_CLIP_SCORE_TIMEOUT_SEC = float(os.getenv("IMAGE_CLIP_SCORE_TIMEOUT_SEC", "
 # Multimodal quality/fidelity judge (Gemini vision).
 IMAGE_VLM_JUDGE_ENABLE = os.getenv("IMAGE_VLM_JUDGE_ENABLE", "true").lower() in ("1", "true", "yes")
 # Default to GEMINI_MODEL so text/chart fallback and image judge stay aligned.
-IMAGE_VLM_JUDGE_MODEL = os.getenv("IMAGE_VLM_JUDGE_MODEL", GEMINI_MODEL).strip()
+IMAGE_VLM_JUDGE_MODEL = os.getenv("IMAGE_VLM_JUDGE_MODEL", LLM_MODEL).strip()
 IMAGE_VLM_JUDGE_MIN_RELEVANCE = float(os.getenv("IMAGE_VLM_JUDGE_MIN_RELEVANCE", "0.60"))
 IMAGE_VLM_JUDGE_MAX_ARTIFACT = float(os.getenv("IMAGE_VLM_JUDGE_MAX_ARTIFACT", "0.45"))
 IMAGE_VLM_JUDGE_MIN_STYLE = float(os.getenv("IMAGE_VLM_JUDGE_MIN_STYLE", "0.75"))
