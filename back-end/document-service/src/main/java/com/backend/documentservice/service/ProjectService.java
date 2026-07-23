@@ -42,10 +42,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.web.client.RestTemplate;
 
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
@@ -56,8 +60,10 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Iterator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -77,9 +83,131 @@ public class ProjectService {
     private final AiService aiService;
     private final ObjectMapper objectMapper;
     private final SubscriptionClient subscriptionClient;
+    private final RestTemplate imageProxyClient = new RestTemplate();
 
     @Value("${app.ai.url}")
     private String aiUrl;
+
+    public record ProxiedImage(byte[] bytes, MediaType contentType) {}
+
+    public ProxiedImage proxyProjectImage(UUID projectId, UUID userId, String requestedUrl) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
+        if (!project.getOwnerId().equals(userId)) {
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        }
+
+        String normalizedRequestedUrl = normalizeImageUrl(requestedUrl);
+        if (normalizedRequestedUrl == null) {
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        }
+
+        Set<String> allowedUrls = new HashSet<>();
+        for (SlidePage page : slidePageRepository.findByProjectIdOrderByPageIndexAsc(projectId)) {
+            addAllowedImageUrl(allowedUrls, page.getImageUrl());
+            collectImageUrls(allowedUrls, page.getElements());
+        }
+        if (!allowedUrls.contains(normalizedRequestedUrl)) {
+            throw new AppException(ErrorCode.ACCESS_DENIED);
+        }
+
+        URI proxyTarget = resolveImageProxyTarget(requestedUrl);
+        ResponseEntity<byte[]> response = imageProxyClient.getForEntity(proxyTarget, byte[].class);
+        byte[] body = response.getBody();
+        if (!response.getStatusCode().is2xxSuccessful() || body == null || body.length == 0) {
+            throw new AppException(ErrorCode.DOCUMENT_NOT_FOUND);
+        }
+        MediaType contentType = response.getHeaders().getContentType();
+        if (contentType == null || !"image".equalsIgnoreCase(contentType.getType())) {
+            contentType = MediaType.APPLICATION_OCTET_STREAM;
+        }
+        return new ProxiedImage(body, contentType);
+    }
+
+    private URI resolveImageProxyTarget(String requestedUrl) {
+        URI requested = URI.create(requestedUrl);
+        String host = requested.getHost();
+        boolean localAiAlias = host != null
+                && ("localhost".equalsIgnoreCase(host)
+                || "127.0.0.1".equals(host)
+                || "host.docker.internal".equalsIgnoreCase(host))
+                && (requested.getPort() == 8000 || requested.getPort() == -1);
+        if (!localAiAlias) return requested;
+
+        URI configuredAi = URI.create(aiUrl);
+        String basePath = configuredAi.getPath() == null ? "" : configuredAi.getPath().replaceAll("/+$", "");
+        String requestedPath = requested.getRawPath() == null ? "" : requested.getRawPath();
+        return URI.create(new StringBuilder()
+                .append(configuredAi.getScheme())
+                .append("://")
+                .append(configuredAi.getRawAuthority())
+                .append(basePath)
+                .append(requestedPath)
+                .append(requested.getRawQuery() == null ? "" : "?" + requested.getRawQuery())
+                .toString());
+    }
+
+    private void collectImageUrls(Set<String> urls, String elementsJson) {
+        if (elementsJson == null || elementsJson.isBlank()) return;
+        try {
+            collectImageUrls(urls, objectMapper.readTree(elementsJson));
+        } catch (Exception exception) {
+            log.warn("Khong the doc elements khi proxy anh", exception);
+        }
+    }
+
+    private void collectImageUrls(Set<String> urls, JsonNode node) {
+        if (node == null || node.isNull()) return;
+        if (node.isObject()) {
+            node.fields().forEachRemaining(entry -> {
+                String key = entry.getKey();
+                JsonNode value = entry.getValue();
+                if (value.isTextual() && ("src".equals(key) || "storageUrl".equals(key) || "imageUrl".equals(key))) {
+                    addAllowedImageUrl(urls, value.asText());
+                } else {
+                    collectImageUrls(urls, value);
+                }
+            });
+        } else if (node.isArray()) {
+            node.forEach(child -> collectImageUrls(urls, child));
+        }
+    }
+
+    private void addAllowedImageUrl(Set<String> urls, String url) {
+        String normalized = normalizeImageUrl(url);
+        if (normalized == null && url != null && url.startsWith("/")) {
+            normalized = normalizeImageUrl(aiUrl.replaceAll("/+$", "") + url);
+        }
+        if (normalized != null) urls.add(normalized);
+    }
+
+    private String normalizeImageUrl(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            URI uri = URI.create(value);
+            if (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme())) return null;
+            if (uri.getHost() == null) return null;
+            String host = uri.getHost();
+            boolean localAiAlias = ("localhost".equalsIgnoreCase(host)
+                    || "127.0.0.1".equals(host)
+                    || "host.docker.internal".equalsIgnoreCase(host))
+                    && (uri.getPort() == 8000 || uri.getPort() == -1);
+            if (localAiAlias) {
+                uri = resolveImageProxyTarget(value);
+            }
+            return new URI(
+                    uri.getScheme().toLowerCase(),
+                    uri.getUserInfo(),
+                    uri.getHost().toLowerCase(),
+                    uri.getPort(),
+                    uri.getPath(),
+                    null,
+                    null
+            ).toString();
+        } catch (Exception exception) {
+            return null;
+        }
+    }
 
     @Transactional
     @CacheEvict(allEntries = true)

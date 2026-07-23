@@ -1,21 +1,50 @@
 const id = () => `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+const THEME_TEXT = {
+  'soft-blue': { title: "'Nunito', sans-serif", body: "'Inter', sans-serif", text: '#0b2e4a', sub: '#4a6a85' },
+  'royal-purple': { title: "'Playfair Display', serif", body: "'Inter', sans-serif", text: '#ffffff', sub: '#c0a8e0' },
+  'clean-white': { title: "'Playfair Display', serif", body: "'Inter', sans-serif", text: '#1a1a1a', sub: '#555555' },
+  'modern-dark': { title: "'Space Grotesk', sans-serif", body: "'Inter', sans-serif", text: '#ffffff', sub: 'rgba(255,255,255,0.65)' },
+  'playful-yellow': { title: "'Fredoka One', cursive", body: "'Inter', sans-serif", text: '#2e1e0a', sub: 'rgba(46,30,10,0.72)' },
+  'gradient-border': { title: "'Plus Jakarta Sans', sans-serif", body: "'Inter', sans-serif", text: '#0f172a', sub: '#475569' },
+  'blue-planet': { title: "'Exo 2', sans-serif", body: "'Inter', sans-serif", text: '#ffffff', sub: 'rgba(255,255,255,0.65)' },
+  'nature-green': { title: "'Merriweather', serif", body: "'Inter', sans-serif", text: '#e8f5e2', sub: 'rgba(232,245,226,0.75)' },
+  'tech-purple': { title: "'Rajdhani', sans-serif", body: "'Inter', sans-serif", text: '#ffffff', sub: 'rgba(255,255,255,0.65)' },
+};
+
 const textElement = (role, content, x, y, width, height, style = {}) => ({
   id: id(), type: 'text', role, x, y, width, height, rotation: 0,
   content: content || '',
   style: { fontFamily: 'Inter, sans-serif', fontSize: 22, color: '#1a1a1a', textAlign: 'left', fontWeight: 400, ...style },
 });
 
-export function createElementsFromSlide(slide) {
+export function createElementsFromSlide(slide, theme = 'clean-white') {
   if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
+  const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
-  elements.push(textElement('title', slide?.richText?.title || slide?.title, 64, 48, 832, 72, { fontSize: 36, fontWeight: 700 }));
+  elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 58, {
+    fontFamily: colors.title, fontSize: 34, color: colors.text, fontWeight: 700, lineHeight: 1.2,
+  }));
 
-  const body = slide?.richText?.bullets || slide?.richText?.text ||
-    (Array.isArray(slide?.bullets) ? `<ul>${slide.bullets.map((item) => `<li>${item}</li>`).join('')}</ul>` : slide?.text || slide?.subtitle || '');
-  if (body) elements.push(textElement('body', body, 70, 140, slide?.imageUrl ? 430 : 820, 320, { fontSize: 20, color: '#374151' }));
+  const body = Array.isArray(slide?.bullets) && slide.bullets.length
+    ? `<ul>${slide.bullets.map((item) => `<li>${item}</li>`).join('')}</ul>`
+    : slide?.text || slide?.subtitle || slide?.richText?.bullets || slide?.richText?.text || '';
+  if (body && !slide?.table && !slide?.chart) elements.push(textElement('body', body, 64, 112, slide?.imageUrl ? 430 : 832, 350, {
+    fontFamily: colors.body, fontSize: 16.5, color: colors.sub, lineHeight: 1.55,
+  }));
   if (slide?.imageUrl) {
     elements.push({ id: id(), type: 'image', role: 'image', x: 540, y: 135, width: 350, height: 300, rotation: 0, src: slide.imageUrl });
+  }
+  if (slide?.table) {
+    elements.push({
+      id: id(), type: 'table', role: 'visual', x: 64, y: 120,
+      width: 832, height: 350, rotation: 0, data: slide.table,
+    });
+  } else if (slide?.chart) {
+    elements.push({
+      id: id(), type: 'chart', role: 'visual', x: 64, y: 120,
+      width: 832, height: 350, rotation: 0, data: slide.chart,
+    });
   }
   return elements;
 }

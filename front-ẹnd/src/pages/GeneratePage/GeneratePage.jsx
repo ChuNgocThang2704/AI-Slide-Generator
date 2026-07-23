@@ -27,7 +27,7 @@ const PROMPT_SUGGESTIONS = [
 
 
 export default function GeneratePage() {
-  const { addProject } = useProjectStore();
+  const { addProject, updateProject } = useProjectStore();
   const { addToast } = useUIStore();
   const navigate = useNavigate();
   const location = useLocation();
@@ -188,6 +188,7 @@ export default function GeneratePage() {
           if (res.projectStatus === 1) {
             clearInterval(intervalId);
             setPollingIntervalId(null);
+            updateProject(project.id, { status: 1 });
             setShowProgress(false);
             setLoading(false);
             addToast('🎉 Tạo slide thành công!', 'success');

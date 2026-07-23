@@ -59,7 +59,9 @@ def detect_requested_slide_count(text: str) -> Optional[int]:
     if not text:
         return None
     # Tìm kiếm các mẫu như: "15 slide", "12 trang", "10 pages", "12 slides"
-    matches = re.findall(r"\b(\d+)\s*(?:slide|trang|page)s?\b", text.lower())
+    # Keep the number and unit on one line. Using \s here would incorrectly
+    # combine e.g. "score: 86\nSlide 7" into a request for 86 slides.
+    matches = re.findall(r"\b(\d+)[ \t]*(?:slide|trang|page)s?\b", text.lower())
     if matches:
         try:
             return int(matches[-1]) # Lấy giá trị khớp cuối cùng

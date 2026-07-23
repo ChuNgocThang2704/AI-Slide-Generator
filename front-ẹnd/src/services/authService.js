@@ -24,11 +24,13 @@ const buildAvatarUrl = (name) => {
 const mapUser = (userResponse) => {
   if (!userResponse) return null;
 
-  const roleNames = (userResponse.roles || []).map((role) => role.name);
-  const plan = roleNames.includes('USER_PRO')
-    ? 'pro'
-    : roleNames.includes('USER_EXTRA')
-      ? 'ultra'
+  const roleNames = (userResponse.roles || [])
+    .map((role) => role?.name || role?.code || role)
+    .filter(Boolean);
+  const plan = roleNames.includes('USER_ULTRA')
+    ? 'ultra'
+    : roleNames.includes('USER_PRO')
+      ? 'pro'
       : 'free';
 
   const name = userResponse.profile?.fullName || userResponse.username || userResponse.email?.split('@')[0] || 'User';

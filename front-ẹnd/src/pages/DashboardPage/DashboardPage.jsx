@@ -45,9 +45,9 @@ export default function DashboardPage() {
     loadProjects();
   }, []);
 
-  const loadProjects = async () => {
+  const loadProjects = async ({ silent = false } = {}) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await projectService.getAll(0, 100, '');
       console.log('Projects loaded:', data);
       if (data.items) {
@@ -55,17 +55,38 @@ export default function DashboardPage() {
       }
     } catch (err) {
       console.error('Load projects error:', err);
+      if (silent) return;
       addToast(err.message || 'Không thể tải projects', 'error');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  const hasProcessingProjects = projects.some((project) => {
+    const status = typeof project.status === 'string' ? project.status.toUpperCase() : project.status;
+    return status === 0 || status === 'CREATE' || status === 'PROCESSING';
+  });
+
+  useEffect(() => {
+    if (!hasProcessingProjects) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      loadProjects({ silent: true });
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hasProcessingProjects]);
 
   const filtered = projects.filter((p) =>
     p.name?.toLowerCase().includes(search.toLowerCase())
   );
 
   const planInfo = PLAN_INFO[user?.plan || 'free'];
+  const upgradeInfo = user?.plan === 'ultra'
+    ? { title: 'Đã mở khóa Ultra', description: 'Toàn bộ tính năng cao cấp', clickable: false }
+    : user?.plan === 'pro'
+      ? { title: 'Nâng cấp Ultra', description: 'Giới hạn cao nhất + ảnh chất lượng cao', clickable: true }
+      : { title: 'Nâng cấp Pro', description: '20 slides/ngày + HD images', clickable: true };
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
@@ -140,14 +161,18 @@ export default function DashboardPage() {
               <div className="dsc-label">Gói hiện tại – {planInfo.price}</div>
             </div>
           </div>
-          <div className="dash-stat-card upgrade-card" onClick={() => navigate('/pricing')} style={{ cursor: 'pointer' }}>
+          <div
+            className={`dash-stat-card upgrade-card ${upgradeInfo.clickable ? '' : 'is-current-plan'}`}
+            onClick={upgradeInfo.clickable ? () => navigate('/pricing') : undefined}
+            style={{ cursor: upgradeInfo.clickable ? 'pointer' : 'default' }}
+          >
             <div className="upgrade-glow" />
             <div className="dsc-icon" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
               <Sparkles size={20} />
             </div>
             <div>
-              <div className="dsc-value" style={{ color: '#fbbf24' }}>Nâng cấp Pro</div>
-              <div className="dsc-label">20 slides/ngày + HD images</div>
+              <div className="dsc-value" style={{ color: '#fbbf24' }}>{upgradeInfo.title}</div>
+              <div className="dsc-label">{upgradeInfo.description}</div>
             </div>
           </div>
         </div>

@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 
 # pyrefly: ignore [missing-import]
 import httpx
+from services.provider_health import mark_vllm_unavailable, vllm_circuit_open
 
 from config import (
     GEMINI_TIMEOUT_SEC,
@@ -40,6 +41,8 @@ class LLMClientMixin:
     ) -> str:
         """Thực hiện một lượt hoàn thành trò chuyện (chat completion) và trả về văn bản thuần túy."""
         provider = (provider or "auto").strip().lower()
+        if vllm_circuit_open():
+            self.vllm_available = False
         if provider == "gemini":
             return await self._gemini_completion_plain_text(
                 messages,
@@ -89,9 +92,10 @@ class LLMClientMixin:
                 if is_connection_error:
                     print(f"[LLMClient] vLLM connection failed: {e}. Disabling vLLM for this session.")
                     self.vllm_available = False
+                    mark_vllm_unavailable()
                 
                 # Dự phòng (fallback) sang Gemini nếu có sẵn
-                if provider == "auto" and self.gemini_available:
+                if provider in {"auto", "vllm"} and self.gemini_available:
                     print("Falling back to Gemini plain text completion.")
                     return await self._gemini_completion_plain_text(
                         messages,
@@ -101,6 +105,14 @@ class LLMClientMixin:
                     )
                 raise
 
+        if provider == "vllm" and self.gemini_available:
+            print("[LLMClient] vLLM unavailable; using Gemini for the requested review pass.")
+            return await self._gemini_completion_plain_text(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                json_mode=json_mode,
+            )
         if provider == "vllm":
             raise RuntimeError("vLLM is not available for the requested review pass.")
         if self.gemini_available:

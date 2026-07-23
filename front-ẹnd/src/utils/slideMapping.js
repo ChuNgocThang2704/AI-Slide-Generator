@@ -23,8 +23,9 @@ export function backendLayoutToFrontend(page) {
   if (['twocolumn', 'two_column', 'split_columns'].includes(layout)) return 'twoColumn';
   if (['quote', 'big_quote'].includes(layout)) return 'quote';
   if (['thankyou', 'thank_you'].includes(layout)) return 'thankyou';
-  if (layout === 'text_table') return 'table';
-  if (layout === 'text_chart') return 'chart';
+  // Never render an empty visual frame when the structured payload is absent.
+  if (layout === 'text_table') return page?.table ? 'table' : 'content';
+  if (layout === 'text_chart') return page?.chart ? 'chart' : 'content';
   return page?.pageIndex === 0 && !layout ? 'title' : 'content';
 }
 
@@ -44,6 +45,40 @@ export function frontendLayoutToBackend(slide) {
 
 function splitText(value) {
   return String(value || '').split(/\r?\n+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeElementText(value) {
+  return String(value || '')
+    .replace(/<\/li>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase('vi');
+}
+
+function currentElements(page, bullets) {
+  const elements = Array.isArray(page?.elements) ? page.elements : [];
+  if (!elements.length) return [];
+
+  const titleElement = elements.find((element) => element?.type === 'text' && element?.role === 'title');
+  const bodyElement = elements.find((element) => element?.type === 'text' && element?.role === 'body');
+  const legacyDefaultLayout = titleElement
+    && Number(titleElement?.style?.fontSize) === 36
+    && titleElement.x === 64
+    && titleElement.y === 48
+    && (!bodyElement || (Number(bodyElement?.style?.fontSize) === 20 && bodyElement.y === 140));
+  if (legacyDefaultLayout) return [];
+  const expectedTitle = normalizeElementText(page?.title);
+  const expectedBody = normalizeElementText(bullets.join(' '));
+
+  // AI revision updates semantic fields first. Do not let persisted editor
+  // elements from the previous revision hide that newer content.
+  if (titleElement && expectedTitle && normalizeElementText(titleElement.content) !== expectedTitle) return [];
+  if (bodyElement && expectedBody && normalizeElementText(bodyElement.content) !== expectedBody) return [];
+  return elements;
 }
 
 function parseTwoColumns(bullets) {
@@ -111,7 +146,7 @@ export function formatSlidePage(page) {
     chart: page.chart || null,
     table: page.table || null,
     richText: page.richText || {},
-    elements: Array.isArray(page.elements) ? page.elements : [],
+    elements: currentElements(page, bullets),
     notes: page.notes || '',
     primaryVisual: page.primaryVisual || '',
     likelyMultiPptxSlides: page.likelyMultiPptxSlides || false,

@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import FloatingTextToolbar from './FloatingTextToolbar';
 import './FloatingTextToolbar.css';
 
@@ -14,12 +14,25 @@ export function TiptapInlineEditor({
   placeholder = '',
   editable = true,
   selected = false,
+  elementKey,
   onExitEdit,
+  autoFit = false,
+  minFontSize = 8,
+  autoFitBaseFontSize,
+  boxStyle,
+  onBoxStyleChange,
+  onPointerDown,
+  onPointerEnter,
+  batchMode = false,
 }) {
   const editorRef = useRef(null);
+  const selectionIdRef = useRef(Symbol('slide-text-box'));
   const selectionRangeRef = useRef(null);
+  const [selectedInternal, setSelectedInternal] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [toolbarVisible, setToolbarVisible] = useState(false);
   const [toolbarPos, setToolbarPos] = useState({ x: 0, y: 0 });
+  const isSelected = selected || selectedInternal;
 
   // ── Compute toolbar position ─────────────────────────────────────────────
   const computePosition = useCallback(() => {
@@ -77,6 +90,27 @@ export function TiptapInlineEditor({
     return () => document.removeEventListener('selectionchange', handleSelectionChange);
   }, [handleSelectionChange]);
 
+  useEffect(() => {
+    const handleBoxSelection = (event) => {
+      if (event.detail !== selectionIdRef.current) {
+        setSelectedInternal(false);
+        setEditing(false);
+        setToolbarVisible(false);
+      }
+    };
+    const handleOutsidePointer = (event) => {
+      if (editorRef.current?.contains(event.target) || event.target.closest?.('.floating-toolbar')) return;
+      setSelectedInternal(false);
+      setEditing(false);
+    };
+    document.addEventListener('slide-text-box-selected', handleBoxSelection);
+    document.addEventListener('pointerdown', handleOutsidePointer);
+    return () => {
+      document.removeEventListener('slide-text-box-selected', handleBoxSelection);
+      document.removeEventListener('pointerdown', handleOutsidePointer);
+    };
+  }, []);
+
   // ── Hide toolbar when focus leaves editor area ────────────────────────────
   const handleBlur = useCallback(() => {
     // Commit before the following click/navigation event reads slide state.
@@ -105,8 +139,40 @@ export function TiptapInlineEditor({
     }
   }, [value]);
 
+  useLayoutEffect(() => {
+    if (!autoFit || !editorRef.current) return undefined;
+    const element = editorRef.current;
+    const fit = () => {
+      element.style.removeProperty('font-size');
+      let size = Number(autoFitBaseFontSize)
+        || Number.parseFloat(window.getComputedStyle(element).fontSize)
+        || 16;
+      element.style.setProperty('font-size', `${size}px`, 'important');
+      let attempts = 0;
+      while (
+        (element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1)
+        && size > minFontSize
+        && attempts < 120
+      ) {
+        size = Math.max(minFontSize, size - 0.5);
+        element.style.setProperty('font-size', `${size}px`, 'important');
+        attempts += 1;
+      }
+    };
+    const frame = window.requestAnimationFrame(fit);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
+    observer?.observe(element);
+    if (element.parentElement) observer?.observe(element.parentElement);
+    window.addEventListener('resize', fit);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener('resize', fit);
+    };
+  }, [autoFit, autoFitBaseFontSize, minFontSize, value]);
+
   useEffect(() => {
-    if (!editable || !editorRef.current) return;
+    if (!editable || !editing || !editorRef.current) return;
     editorRef.current.focus();
     const selection = window.getSelection();
     const range = document.createRange();
@@ -114,7 +180,7 @@ export function TiptapInlineEditor({
     range.collapse(false);
     selection?.removeAllRanges();
     selection?.addRange(range);
-  }, [editable]);
+  }, [editable, editing]);
 
   useEffect(() => {
     const showToolbar = () => {
@@ -125,14 +191,32 @@ export function TiptapInlineEditor({
       }
     };
     let timeout;
-    if (!selected) {
+    if (!isSelected) {
       if (!editable) timeout = window.setTimeout(() => setToolbarVisible(false), 0);
+      else timeout = window.setTimeout(() => setToolbarVisible(false), 0);
       return () => window.clearTimeout(timeout);
     }
-    if (!editable) selectionRangeRef.current = null;
+    if (editorRef.current && !editing) {
+      const range = document.createRange();
+      range.selectNodeContents(editorRef.current);
+      selectionRangeRef.current = range;
+    }
     timeout = window.setTimeout(showToolbar, 0);
     return () => window.clearTimeout(timeout);
-  }, [computePosition, editable, selected]);
+  }, [computePosition, editable, editing, isSelected]);
+
+  const selectBox = useCallback(() => {
+    if (!editable) return;
+    setSelectedInternal(true);
+    document.dispatchEvent(new CustomEvent('slide-text-box-selected', { detail: selectionIdRef.current }));
+    editorRef.current?.focus({ preventScroll: true });
+  }, [editable]);
+
+  const enterEditMode = useCallback(() => {
+    if (!editable) return;
+    selectBox();
+    setEditing(true);
+  }, [editable, selectBox]);
 
   return (
     <>
@@ -141,29 +225,42 @@ export function TiptapInlineEditor({
         selectionRangeRef={selectionRangeRef}
         visible={toolbarVisible}
         position={toolbarPos}
+        boxStyle={boxStyle}
+        onBoxStyleChange={onBoxStyleChange}
+        batchMode={batchMode}
         onFormatChange={() => onSave?.(editorRef.current?.innerHTML || '')}
       />
       <div
         ref={editorRef}
-        className={`tiptap-editor-wrapper ${className}`}
+        data-slide-element={elementKey || undefined}
+        className={`tiptap-editor-wrapper ${isSelected ? 'is-selected' : ''} ${editing ? 'is-editing' : ''} ${className}`}
         style={style}
-        contentEditable={editable || selected}
+        contentEditable={editable && editing}
         tabIndex={editable ? 0 : -1}
         suppressContentEditableWarning
         data-placeholder={placeholder}
-        onFocus={editable ? handleFocus : undefined}
-        onClick={editable ? handleFocus : undefined}
+        onFocus={editing ? handleFocus : undefined}
+        onClick={editable ? selectBox : undefined}
+        onDoubleClick={editable ? enterEditMode : undefined}
+        onPointerDown={onPointerDown}
+        onPointerEnter={onPointerEnter}
         onMouseDown={(event) => {
-          if (!editable) event.preventDefault();
+          if (!editable || !editing) event.preventDefault();
         }}
         onBlur={(event) => {
           handleBlur(event);
+          setEditing(false);
           onExitEdit?.();
         }}
         onKeyDown={(event) => {
-          if (event.key !== 'Escape') return;
-          event.preventDefault();
-          editorRef.current?.blur();
+          if (event.key === 'Enter' && !editing) {
+            event.preventDefault();
+            enterEditMode();
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            editorRef.current?.blur();
+            setEditing(false);
+          }
         }}
       />
     </>

@@ -16,6 +16,7 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
+      - ./backend/service-account.json:/app/service-account.json:ro
     depends_on:
       - redis
 
@@ -47,6 +48,7 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
+      - ./backend/service-account.json:/app/service-account.json:ro
     depends_on:
       - redis
 

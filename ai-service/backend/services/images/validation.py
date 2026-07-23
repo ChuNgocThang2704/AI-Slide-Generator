@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 import httpx
+from services.provider_health import mark_vllm_unavailable, vllm_circuit_open
 from pathlib import Path
 import io
 from PIL import Image, ImageChops, ImageFilter, ImageStat
@@ -255,16 +256,23 @@ async def _vlm_judge_image(
     if not IMAGE_VLM_JUDGE_ENABLE:
         return None
     model = (model_override or IMAGE_VLM_JUDGE_MODEL or "").strip()
-    use_vllm = bool(VLLM_API_BASE_URL and model and not model.lower().startswith("gemini"))
+    if vllm_circuit_open() and model and not model.lower().startswith("gemini"):
+        model = (GEMINI_MODEL or "").strip()
+    use_vllm = bool(
+        VLLM_API_BASE_URL
+        and model
+        and not model.lower().startswith("gemini")
+        and not vllm_circuit_open()
+    )
     use_vertex = bool(GCP_VERTEX_AI_ENABLE and GCP_PROJECT_ID and not use_vllm)
     if not use_vertex and not use_vllm and not GEMINI_API_KEY:
         return None
-    model = (model_override or IMAGE_VLM_JUDGE_MODEL or "").strip()
-    if not model:
-        return None
-
     async def _escalate_to_gemini(reason: str) -> Optional[Dict[str, Any]]:
-        if not (allow_escalation and use_vllm and GEMINI_API_KEY and GEMINI_MODEL):
+        gemini_ready = bool(
+            GEMINI_MODEL
+            and (GEMINI_API_KEY or (GCP_VERTEX_AI_ENABLE and GCP_PROJECT_ID))
+        )
+        if not (allow_escalation and use_vllm and gemini_ready):
             return None
         print(f"[vlm_judge] escalating Qwen review to Gemini: {reason}")
         result = await _vlm_judge_image(
@@ -584,9 +592,12 @@ async def _vlm_judge_image(
                 return escalated
         return result
     except Exception as e:
-        import traceback
-        print(f"[vlm_judge] Exception in VLM Judge: {e}")
-        traceback.print_exc()
+        is_connection_error = isinstance(e, httpx.RequestError) or "connection" in str(e).lower() or "timeout" in str(e).lower()
+        if use_vllm and is_connection_error:
+            mark_vllm_unavailable()
+            print(f"[vlm_judge] vLLM unavailable; circuit opened and Gemini fallback selected: {e}")
+        else:
+            print(f"[vlm_judge] Exception in VLM Judge: {e}")
         return await _escalate_to_gemini(type(e).__name__)
 
 

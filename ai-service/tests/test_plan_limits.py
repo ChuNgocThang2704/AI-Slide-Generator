@@ -2,10 +2,23 @@ import unittest
 
 from fastapi import HTTPException
 
-from services.plan_limits import enforce_plan_slide_limit, resolve_plan_image_limit, validate_plan_limits
+from services.plan_limits import (
+    detect_requested_slide_count,
+    enforce_plan_slide_limit,
+    resolve_plan_image_limit,
+    validate_plan_limits,
+)
 
 
 class PlanLimitsTest(unittest.TestCase):
+    def test_slide_count_does_not_join_number_from_previous_line(self):
+        prompt = (
+            "Tao bai thuyet trinh 7 slide bang tieng Viet.\n"
+            "De quan ly: 86\n\n"
+            "Slide 7: Ket luan."
+        )
+        self.assertEqual(detect_requested_slide_count(prompt), 7)
+
     def test_free_without_count_uses_automatic_length(self):
         target, resolved = validate_plan_limits("free", None, "short input")
         self.assertEqual((target, resolved), (None, None))
