@@ -91,7 +91,7 @@ export default function AuthPage({ mode = 'login' }) {
           <Link to="/" className="auth-logo">
             <div className="logo-icon"><Sparkles size={20} /></div>
             <span style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.3rem' }}>
-              GenSlide<span className="gradient-text">AI</span>
+              PSlide<span className="gradient-text">AI</span>
             </span>
           </Link>
 

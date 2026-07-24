@@ -240,7 +240,7 @@ export default function LandingPage() {
               <div className="navbar-logo" style={{display:'flex',alignItems:'center',gap:10}}>
                 <div className="logo-icon"><Sparkles size={16}/></div>
                 <span style={{fontFamily:'Outfit',fontWeight:800,fontSize:'1.1rem',color:'white'}}>
-                  GenSlide<span className="gradient-text">AI</span>
+                  PSlide<span className="gradient-text">AI</span>
                 </span>
               </div>
               <p style={{color:'rgba(255,255,255,0.45)',fontSize:'0.875rem',maxWidth:240,marginTop:12}}>
@@ -263,7 +263,7 @@ export default function LandingPage() {
             </div>
           </div>
           <div className="footer-bottom">
-            <span>© 2025 GenSlideAI. All rights reserved.</span>
+            <span>© 2026 PSlideAI. Developed at PTIT.</span>
             <div className="flex gap-4">
               <a href="#">Điều khoản</a>
               <a href="#">Bảo mật</a>

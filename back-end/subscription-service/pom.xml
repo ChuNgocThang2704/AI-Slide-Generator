@@ -12,7 +12,7 @@
 	<artifactId>subscription-service</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>subscription-service</name>
-	<description>Subscription Service for AI Slide Generator</description>
+	<description>Subscription Service for PSlideAI</description>
 	
 	<properties>
 		<java.version>21</java.version>

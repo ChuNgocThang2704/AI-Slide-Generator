@@ -1568,7 +1568,7 @@ function getMockSlides(topic) {
       type: 'thankyou',
       title: 'Cảm ơn!',
       subtitle: 'Rất mong nhận được câu hỏi và đóng góp ý kiến.',
-      contact: 'contact@genslideauto.com',
+      contact: 'contact@pslideai.com',
       imagePrompt: 'A simple thank you card',
       imageUrl: '',
       pageIndex: 4

@@ -6,11 +6,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.thymeleaf.context.Context;
 import org.thymeleaf.spring6.SpringTemplateEngine;
 
 import java.util.Map;
+import java.io.UnsupportedEncodingException;
 
 @Service
 @RequiredArgsConstructor
@@ -18,6 +20,12 @@ import java.util.Map;
 public class MailService {
     private final JavaMailSender mailSender;
     private final SpringTemplateEngine templateEngine;
+
+    @Value("${spring.mail.username}")
+    private String fromAddress;
+
+    @Value("${app.mail.from-name:PSlideAI}")
+    private String fromName;
 
     public void sendHtmlMail(String to, String subject, String templateName, Map<String, Object> contextData) {
         log.info("[notification-service] gửi email tới: {}, template: {}", to, templateName);
@@ -30,12 +38,13 @@ public class MailService {
             String htmlContent = templateEngine.process(templateName, context);
 
             helper.setTo(to);
+            helper.setFrom(fromAddress, fromName);
             helper.setSubject(subject);
             helper.setText(htmlContent, true);
 
             mailSender.send(message);
             log.info("[notification-service] gửi email thành công tới: {}", to);
-        } catch (MessagingException e) {
+        } catch (MessagingException | UnsupportedEncodingException e) {
             log.error("[notification-service] gửi email thất bại tới: {}", to, e);
         }
     }
