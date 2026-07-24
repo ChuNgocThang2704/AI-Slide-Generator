@@ -158,6 +158,9 @@ export default function GeneratePage() {
 
     try {
       setLoading(true);
+      setProgressVal(0);
+      setProgressStatus('Đang khởi tạo project...');
+      setShowProgress(true);
       const promptText = form.prompt.trim() || `Tạo slide từ tệp tin ${uploadedFileData.fileName}`;
       
       const project = await projectService.create(
@@ -216,6 +219,7 @@ export default function GeneratePage() {
 
     } catch (err) {
       addToast(err.message || 'Tạo project thất bại', 'error');
+      setShowProgress(false);
       setLoading(false);
     }
   };

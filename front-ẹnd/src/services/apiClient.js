@@ -1,7 +1,13 @@
 import axios from 'axios';
 import { useAuthStore } from '../store';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:7172/api';
+const configuredBaseUrl = String(import.meta.env.VITE_API_BASE_URL || '').trim();
+const gatewayPort = String(import.meta.env.VITE_GATEWAY_PORT || '8080').trim();
+const API_BASE_URL = configuredBaseUrl || (
+  typeof window !== 'undefined'
+    ? `${window.location.protocol}//${window.location.hostname}:${gatewayPort}/api`
+    : `http://localhost:${gatewayPort}/api`
+);
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,

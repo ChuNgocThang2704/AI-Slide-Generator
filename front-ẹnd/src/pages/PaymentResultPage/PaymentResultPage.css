@@ -1,0 +1,6 @@
+.payment-result-page { min-height:calc(100vh - 72px); display:grid; place-items:center; padding:32px 20px; background:#0b0b18; }
+.payment-result-panel { width:min(520px,100%); padding:38px; text-align:center; border:1px solid rgba(255,255,255,.1); border-radius:8px; background:#111120; color:#fff; }
+.payment-result-panel h1 { margin:18px 0 10px; font-size:27px; letter-spacing:0; }
+.payment-result-panel p { margin:0 auto 25px; max-width:420px; color:rgba(255,255,255,.56); line-height:1.65; }
+.payment-success-icon { color:#20c77a; } .payment-cancel-icon { color:#ff6b7d; } .payment-wait-icon { color:#8f86ff; }
+.payment-result-actions { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; }

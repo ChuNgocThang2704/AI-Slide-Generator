@@ -113,7 +113,9 @@ export default function EditorPage() {
 
   // ── State ──
   const [activeIdx, setActiveIdx] = useState(0);
+  const [selectedSlideIndexes, setSelectedSlideIndexes] = useState(() => new Set([0]));
   const [exporting, setExporting] = useState(false);
+  const [showPptxMenu, setShowPptxMenu] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveState, setSaveState] = useState('saved');
@@ -130,6 +132,7 @@ export default function EditorPage() {
   const [exportsList, setExportsList] = useState([]);
   const [loadingExports, setLoadingExports] = useState(false);
   const [loadingSlides, setLoadingSlides] = useState(true);
+  const [generationProgress, setGenerationProgress] = useState({ active: false, value: 0, status: 'Đang tạo slide...' });
   const [leftPanelWidth, setLeftPanelWidth] = useState(() => Number(localStorage.getItem('editor-left-panel-width')) || DEFAULT_LEFT_PANEL_WIDTH);
   const [rightPanelWidth, setRightPanelWidth] = useState(() => Number(localStorage.getItem('editor-right-panel-width')) || DEFAULT_RIGHT_PANEL_WIDTH);
   const [resizingPanel, setResizingPanel] = useState(null);
@@ -142,6 +145,8 @@ export default function EditorPage() {
   const slideRef = useRef(null);
   const exportStageRef = useRef(null);
   const centerRef = useRef(null);
+  const thumbsRef = useRef(null);
+  const slideSelectionAnchorRef = useRef(0);
   const presentationRef = useRef(null);
   const editVersionRef = useRef(0);
   const slidesRef = useRef([]);
@@ -176,6 +181,7 @@ export default function EditorPage() {
           setHistoryVersion((version) => version + 1);
           hasUnsavedChangesRef.current = false;
           setSlides(formattedSlides);
+          setSelectedSlideIndexes(new Set(formattedSlides.length ? [0] : []));
           setHasUnsavedChanges(false);
           setSaveState('saved');
           if (project.status !== 1) {
@@ -252,6 +258,51 @@ export default function EditorPage() {
       fetchExports();
     }
   }, [id, projects]);
+
+  useEffect(() => {
+    const project = projects.find((item) => item.id === id);
+    const status = typeof project?.status === 'string' ? project.status.toUpperCase() : project?.status;
+    const stillProcessing = status === 0 || status === 'CREATE' || status === 'PROCESSING';
+    if (!project || (!stillProcessing && slides.length > 0)) {
+      setGenerationProgress((current) => current.active ? { ...current, active: false } : current);
+      return undefined;
+    }
+
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const progress = await projectService.getProgress(id);
+        if (disposed) return;
+        const value = Math.max(0, Math.min(100, Number(progress?.progress) || 0));
+        setGenerationProgress({
+          active: true,
+          value,
+          status: progress?.errorMessage || progress?.aiStatus || 'AI đang tạo nội dung và hình ảnh...',
+        });
+        const done = progress?.projectStatus === 1 || progress?.aiStatus === 'completed' || value >= 100;
+        if (done) {
+          const pages = await projectService.getSlidePages(id);
+          if (disposed || !Array.isArray(pages) || !pages.length) return;
+          const formattedSlides = pages.map(formatSlidePage);
+          slidesRef.current = formattedSlides;
+          setSlides(formattedSlides);
+          setSelectedSlideIndexes(new Set([0]));
+          setGenerationProgress({ active: false, value: 100, status: 'Hoàn thành' });
+          updateProject(id, { ...project, status: 1 });
+        }
+      } catch (error) {
+        if (!disposed) {
+          setGenerationProgress((current) => ({ ...current, active: true, status: error.message || 'Đang chờ máy chủ xử lý...' }));
+        }
+      }
+    };
+    poll();
+    const intervalId = window.setInterval(poll, 2500);
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [id, projects, slides.length, updateProject]);
 
   useEffect(() => {
     if (!centerRef.current || typeof ResizeObserver === 'undefined') return undefined;
@@ -559,6 +610,27 @@ export default function EditorPage() {
     addToast(`Template đổi sang "${tmpl.name}" ✓`, 'success');
   };
 
+  const selectThumbnail = useCallback((event, index) => {
+    thumbsRef.current?.focus({ preventScroll: true });
+    setActiveIdx(index);
+    if (event.shiftKey) {
+      const start = Math.min(slideSelectionAnchorRef.current, index);
+      const end = Math.max(slideSelectionAnchorRef.current, index);
+      setSelectedSlideIndexes(new Set(Array.from({ length: end - start + 1 }, (_, offset) => start + offset)));
+    } else if (event.ctrlKey || event.metaKey) {
+      setSelectedSlideIndexes((current) => {
+        const next = new Set(current);
+        if (next.has(index) && next.size > 1) next.delete(index);
+        else next.add(index);
+        return next;
+      });
+      slideSelectionAnchorRef.current = index;
+    } else {
+      setSelectedSlideIndexes(new Set([index]));
+      slideSelectionAnchorRef.current = index;
+    }
+  }, []);
+
   const handleTabClick = (tabId) => {
     if (rightTab === tabId) {
       setRightTab(null);
@@ -804,6 +876,7 @@ export default function EditorPage() {
   }, []);
 
   const handleExportPPTX = async () => {
+    setShowPptxMenu(false);
     setExporting(true);
     addToast('Đang lưu slides trước khi xuất...', 'info');
 
@@ -828,6 +901,29 @@ export default function EditorPage() {
     } catch (e) {
       console.error('PPTX export error:', e);
       addToast('Lỗi khi xuất PPTX, vui lòng thử lại', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportEditablePPTX = async () => {
+    setShowPptxMenu(false);
+    setExporting(true);
+    addToast('Đang tạo PPTX có thể chỉnh sửa...', 'info');
+    try {
+      await projectService.syncSlidePages(id, slidesRef.current.map(toSlidePageUpdate));
+      const projectName = projects.find((p) => p.id === id)?.name || 'presentation';
+      const { exportEditablePptx } = await import('../../services/editablePptxExportService');
+      await exportEditablePptx({
+        slides: slidesRef.current,
+        theme: templateId,
+        fileName: projectName,
+        projectId: id,
+      });
+      addToast('Xuất PPTX chỉnh sửa được thành công!', 'success');
+    } catch (error) {
+      console.error('Editable PPTX export error:', error);
+      addToast(error.message || 'Không thể xuất PPTX chỉnh sửa được', 'error');
     } finally {
       setExporting(false);
     }
@@ -966,12 +1062,24 @@ export default function EditorPage() {
           <button 
             id="export-pptx-btn" 
             className="btn btn-primary btn-sm flex items-center gap-1" 
-            onClick={handleExportPPTX} 
+            onClick={() => setShowPptxMenu((open) => !open)}
             disabled={exporting || slides.length === 0} 
             style={{ background: '#27ae60', border: '1px solid #219653', color: 'white', height: 32 }}
           >
             {exporting ? <><Loader2 size={14} className="spin"/> Đang xuất...</> : <><Download size={14}/> Xuất PPTX</>}
           </button>
+          {showPptxMenu && (
+            <div className="e2-export-menu">
+              <button type="button" onClick={handleExportEditablePPTX}>
+                <strong>Chỉnh sửa được</strong>
+                <span>Text, ảnh, bảng và biểu đồ là object</span>
+              </button>
+              <button type="button" onClick={handleExportPPTX}>
+                <strong>Giữ nguyên giao diện</strong>
+                <span>Giống editor nhất, mỗi slide là ảnh</span>
+              </button>
+            </div>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={handleExportPDF} disabled={exporting || slides.length === 0}>
             <FileText size={14}/> Xuất PDF
           </button>
@@ -995,11 +1103,21 @@ export default function EditorPage() {
             <div><LayoutTemplate size={14}/> <span>Slides</span></div>
             <button type="button" onClick={() => addSlide()} title="Thêm slide" aria-label="Thêm slide"><Plus size={14} /></button>
           </div>
-          <div className="thumbs-scroll">
+          <div
+            className="thumbs-scroll"
+            ref={thumbsRef}
+            tabIndex={0}
+            aria-label="Danh sách slide"
+            onKeyDown={(event) => {
+              if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'a') return;
+              event.preventDefault();
+              setSelectedSlideIndexes(new Set(slides.map((_, index) => index)));
+            }}
+          >
             {slides.map((sl, i) => (
               <div
                 key={`${sl.id || 'new'}-${i}`}
-                className={`thumb2 ${i === activeIdx ? 'active' : ''} ${i === draggedSlideIndex ? 'dragging' : ''}`}
+                className={`thumb2 ${i === activeIdx ? 'active' : ''} ${selectedSlideIndexes.has(i) ? 'selected' : ''} ${i === draggedSlideIndex ? 'dragging' : ''}`}
                 draggable
                 onDragStart={(event) => {
                   setDraggedSlideIndex(i);
@@ -1017,7 +1135,7 @@ export default function EditorPage() {
                   setDraggedSlideIndex(null);
                 }}
                 onDragEnd={() => setDraggedSlideIndex(null)}
-                onClick={() => setActiveIdx(i)}
+                onClick={(event) => selectThumbnail(event, i)}
               >
                 <span className="thumb2-num">{i + 1}</span>
                 <div className="thumb2-preview">
@@ -1084,8 +1202,20 @@ export default function EditorPage() {
                       flexDirection: 'column',
                       gap: '10px'
                     }}>
-                      <span>📄 Chưa có slides</span>
-                      <span style={{ fontSize: '14px', color: '#666' }}>Slides sẽ hiển thị khi hoàn tất tạo</span>
+                      {generationProgress.active ? (
+                        <div className="e2-generation-wait">
+                          <Loader2 size={34} className="spin"/>
+                          <strong>Đang tạo slide với AI</strong>
+                          <div className="e2-generation-track"><span style={{ width: `${generationProgress.value}%` }}/></div>
+                          <span>{generationProgress.value}%</span>
+                          <small>{generationProgress.status}</small>
+                        </div>
+                      ) : (
+                        <>
+                          <span>Chưa có slides</span>
+                          <span style={{ fontSize: '14px', color: '#666' }}>Slides sẽ hiển thị khi hoàn tất tạo</span>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <ElementCanvas

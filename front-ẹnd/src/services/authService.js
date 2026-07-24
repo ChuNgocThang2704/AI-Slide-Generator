@@ -41,6 +41,8 @@ const mapUser = (userResponse) => {
     email: userResponse.email,
     name,
     avatar,
+    phoneNumber: userResponse.profile?.phoneNumber || '',
+    dateOfBirth: userResponse.profile?.dateOfBirth || '',
     plan,
     credits: 0,
     roles: userResponse.roles || [],
@@ -48,6 +50,16 @@ const mapUser = (userResponse) => {
 };
 
 export const authService = {
+  async getMe() {
+    const response = await apiClient.get('/users/my-info');
+    return mapUser(normalizeApiResponse(response.data));
+  },
+
+  async updateProfile(userId, updates) {
+    const response = await apiClient.post(`/users/${userId}`, updates);
+    return mapUser(normalizeApiResponse(response.data));
+  },
+
   async login(email, password) {
     const authResponse = await apiClient.post('/auth/login', { email, password });
     const authData = normalizeApiResponse(authResponse.data);

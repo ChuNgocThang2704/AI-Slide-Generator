@@ -49,6 +49,12 @@ export default function DocumentsPage() {
 
     if (!allowedExtensions.includes(fileExtension)) {
       addToast('Chỉ hỗ trợ định dạng tài liệu PDF hoặc DOCX', 'error');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      addToast('Dung lượng tài liệu tối đa là 50 MB', 'error');
+      e.target.value = '';
       return;
     }
 
@@ -65,6 +71,7 @@ export default function DocumentsPage() {
       addToast(err.message || 'Lỗi khi tải tài liệu lên', 'error');
     } finally {
       setUploading(false);
+      e.target.value = '';
     }
   };
 

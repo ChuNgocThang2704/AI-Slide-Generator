@@ -31,7 +31,7 @@ const getStatusBadge = (status) => {
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
-  const { projects, setProjects, deleteProject } = useProjectStore();
+  const { projects, setProjects, updateProject, deleteProject } = useProjectStore();
   const { addToast } = useUIStore();
   const navigate = useNavigate();
 
@@ -39,6 +39,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState('all');
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null);
+  const [progressById, setProgressById] = useState({});
 
   // Fetch projects on mount
   useEffect(() => {
@@ -70,16 +71,46 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!hasProcessingProjects) return undefined;
 
-    const intervalId = window.setInterval(() => {
+    const refreshProcessing = async () => {
+      const processing = projects.filter((project) => {
+        const status = typeof project.status === 'string' ? project.status.toUpperCase() : project.status;
+        return status === 0 || status === 'CREATE' || status === 'PROCESSING';
+      });
+      const results = await Promise.allSettled(processing.map(async (project) => ({
+        id: project.id,
+        progress: await projectService.getProgress(project.id),
+      })));
+      results.forEach((result) => {
+        if (result.status !== 'fulfilled') return;
+        const task = result.value.progress;
+        const aiStatus = String(task?.aiStatus || '').toLowerCase();
+        if (Number(task?.progress) >= 100 || task?.projectStatus === 1 || aiStatus === 'completed') {
+          updateProject(result.value.id, { status: 1 });
+        }
+      });
+      setProgressById((current) => {
+        const next = { ...current };
+        results.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            next[result.value.id] = result.value.progress;
+          }
+        });
+        return next;
+      });
       loadProjects({ silent: true });
-    }, 3000);
+    };
+    refreshProcessing();
+    const intervalId = window.setInterval(refreshProcessing, 3000);
 
     return () => window.clearInterval(intervalId);
-  }, [hasProcessingProjects]);
+  }, [hasProcessingProjects, projects.length]);
 
-  const filtered = projects.filter((p) =>
-    p.name?.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = projects
+    .filter((p) => p.name?.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => activeTab === 'recent'
+      ? new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)
+      : 0)
+    .slice(0, activeTab === 'recent' ? 8 : undefined);
 
   const planInfo = PLAN_INFO[user?.plan || 'free'];
   const upgradeInfo = user?.plan === 'ultra'
@@ -217,6 +248,8 @@ export default function DashboardPage() {
         ) : (
           <div className="pres-grid">
             {filtered.map((pres) => {
+              const taskProgress = progressById[pres.id];
+              const progressPercent = Math.max(0, Math.min(100, Number(taskProgress?.progress) || 0));
               return (
                 <div key={pres.id} className="pres-card" onClick={() => handleOpen(pres)}>
                   <div className="pres-thumb" style={{
@@ -244,7 +277,12 @@ export default function DashboardPage() {
                     </div>
                     <div className="pres-meta">
                       {(() => {
-                        const badge = getStatusBadge(pres.status);
+                        const effectiveStatus = progressPercent >= 100
+                          || taskProgress?.projectStatus === 1
+                          || String(taskProgress?.aiStatus || '').toLowerCase() === 'completed'
+                          ? 1
+                          : pres.status;
+                        const badge = getStatusBadge(effectiveStatus);
                         return (
                           <span className="pres-template-tag" style={{ color: badge.color, background: badge.bg }}>
                             {badge.label}
@@ -252,6 +290,12 @@ export default function DashboardPage() {
                         );
                       })()}
                     </div>
+                    {progressPercent < 100 && (pres.status === 0 || ['CREATE', 'PROCESSING'].includes(String(pres.status).toUpperCase())) && (
+                      <div className="pres-progress" title={taskProgress?.aiStatus || 'Đang tạo slide'}>
+                        <div className="pres-progress-track"><span style={{ width: `${progressPercent}%` }}/></div>
+                        <span>{progressPercent}%</span>
+                      </div>
+                    )}
                     <div className="pres-date">
                       <Clock size={12} /> {formatDate(pres.createdAt)}
                     </div>

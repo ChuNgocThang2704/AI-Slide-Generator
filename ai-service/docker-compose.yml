@@ -4,15 +4,17 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - FREE_CHAR_LIMIT=10000
-      - PRO_CHAR_LIMIT=50000
-      - ULTRA_CHAR_LIMIT=100000
-      - IMAGE_MODEL_TYPE=flux
-      - IMAGE_GEN_API_BASE_URL=http://host.docker.internal:8080
-      - IMAGE_SENSITIVE_ALLOW_FLUX=true
-      - LLM_MODEL=Qwen3-VL-8B
-      - IMAGE_VLM_JUDGE_MODEL=Qwen3-VL-8B
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - FREE_CHAR_LIMIT=${FREE_CHAR_LIMIT:-10000}
+      - PRO_CHAR_LIMIT=${PRO_CHAR_LIMIT:-50000}
+      - ULTRA_CHAR_LIMIT=${ULTRA_CHAR_LIMIT:-100000}
+      - IMAGE_MODEL_TYPE=${IMAGE_MODEL_TYPE:-flux}
+      - IMAGE_GEN_API_BASE_URL=${IMAGE_GEN_API_BASE_URL:-http://host.docker.internal:8080}
+      - IMAGE_SENSITIVE_ALLOW_FLUX=${IMAGE_SENSITIVE_ALLOW_FLUX:-true}
+      - LLM_MODEL=${LLM_MODEL:-Qwen3-VL-8B}
+      - IMAGE_VLM_JUDGE_MODEL=${IMAGE_VLM_JUDGE_MODEL:-Qwen3-VL-8B}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
@@ -36,15 +38,17 @@ services:
     build: .
     command: ["python", "backend/worker.py"]
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - FREE_CHAR_LIMIT=10000
-      - PRO_CHAR_LIMIT=50000
-      - ULTRA_CHAR_LIMIT=100000
-      - IMAGE_MODEL_TYPE=flux
-      - IMAGE_GEN_API_BASE_URL=http://host.docker.internal:8080
-      - IMAGE_SENSITIVE_ALLOW_FLUX=true
-      - LLM_MODEL=Qwen3-VL-8B
-      - IMAGE_VLM_JUDGE_MODEL=Qwen3-VL-8B
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - FREE_CHAR_LIMIT=${FREE_CHAR_LIMIT:-10000}
+      - PRO_CHAR_LIMIT=${PRO_CHAR_LIMIT:-50000}
+      - ULTRA_CHAR_LIMIT=${ULTRA_CHAR_LIMIT:-100000}
+      - IMAGE_MODEL_TYPE=${IMAGE_MODEL_TYPE:-flux}
+      - IMAGE_GEN_API_BASE_URL=${IMAGE_GEN_API_BASE_URL:-http://host.docker.internal:8080}
+      - IMAGE_SENSITIVE_ALLOW_FLUX=${IMAGE_SENSITIVE_ALLOW_FLUX:-true}
+      - LLM_MODEL=${LLM_MODEL:-Qwen3-VL-8B}
+      - IMAGE_VLM_JUDGE_MODEL=${IMAGE_VLM_JUDGE_MODEL:-Qwen3-VL-8B}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs

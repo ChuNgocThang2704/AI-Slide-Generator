@@ -1,0 +1,21 @@
+.settings-page { min-height:calc(100vh - 72px); padding:38px 20px 64px; background:#0b0b18; color:#fff; }
+.settings-shell { width:min(920px,100%); margin:0 auto; }
+.settings-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:24px; }
+.settings-heading h1 { margin:5px 0 7px; font-size:30px; letter-spacing:0; }
+.settings-heading p { margin:0; color:rgba(255,255,255,.5); }
+.settings-eyebrow { color:#a89fff; font-size:12px; font-weight:800; text-transform:uppercase; }
+.settings-plan { padding:7px 11px; border:1px solid rgba(168,159,255,.35); border-radius:6px; color:#c5bfff; background:rgba(108,99,255,.12); font-size:12px; font-weight:800; }
+.settings-form { border:1px solid rgba(255,255,255,.09); background:#111120; border-radius:8px; overflow:hidden; }
+.settings-section { padding:24px; border-bottom:1px solid rgba(255,255,255,.08); }
+.settings-section-title { display:flex; align-items:center; gap:9px; margin-bottom:20px; font-weight:750; }
+.settings-profile-row { display:flex; align-items:center; gap:18px; margin-bottom:20px; }
+.settings-avatar { width:68px; height:68px; border-radius:50%; object-fit:cover; border:2px solid rgba(168,159,255,.5); }
+.settings-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:17px; }
+.settings-field { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.settings-field.grow { flex:1; }
+.settings-field span { display:flex; align-items:center; gap:6px; color:rgba(255,255,255,.62); font-size:13px; font-weight:650; }
+.settings-field input { width:100%; height:42px; border:1px solid rgba(255,255,255,.12); border-radius:6px; background:#0b0b17; color:#fff; padding:0 12px; outline:none; }
+.settings-field input:focus { border-color:#756cff; box-shadow:0 0 0 3px rgba(108,99,255,.13); }
+.settings-field input:disabled { color:rgba(255,255,255,.4); cursor:not-allowed; }
+.settings-actions { display:flex; justify-content:flex-end; padding:18px 24px; }
+@media (max-width:680px) { .settings-grid { grid-template-columns:1fr; } .settings-heading { align-items:center; } .settings-profile-row { align-items:flex-start; flex-direction:column; } }

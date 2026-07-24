@@ -21,6 +21,33 @@
 
 .e2-top-left  { display:flex; align-items:center; gap:12px; min-width:0; }
 .e2-top-right { display:flex; align-items:center; gap:10px; flex-shrink:0; }
+.e2-top-right { position:relative; }
+.e2-export-menu {
+  position:absolute;
+  z-index:120;
+  top:calc(100% + 8px);
+  right:85px;
+  width:260px;
+  padding:6px;
+  background:#151521;
+  border:1px solid rgba(255,255,255,.12);
+  box-shadow:0 14px 36px rgba(0,0,0,.42);
+}
+.e2-export-menu button {
+  display:flex;
+  width:100%;
+  padding:10px;
+  border:0;
+  background:transparent;
+  color:#fff;
+  text-align:left;
+  flex-direction:column;
+  gap:3px;
+  cursor:pointer;
+}
+.e2-export-menu button:hover { background:rgba(255,255,255,.07); }
+.e2-export-menu strong { font-size:13px; }
+.e2-export-menu span { color:rgba(255,255,255,.55); font-size:11px; }
 
 .e2-history-actions {
   display: inline-flex;
@@ -237,6 +264,8 @@ body.editor-panel-resizing * { cursor: col-resize !important; }
   min-width: 0;
 }
 .thumb2.active .thumb2-preview { border-color:#6c63ff; box-shadow:0 0 0 1.5px rgba(108,99,255,0.3); }
+.thumb2.selected:not(.active) .thumb2-preview { outline:2px solid rgba(124,92,255,0.65); outline-offset:2px; }
+.thumbs-scroll:focus { outline:none; }
 
 .thumb2-actions {
   position:absolute;
@@ -881,3 +910,11 @@ body.editor-panel-resizing * { cursor: col-resize !important; }
   .editor2-right.expanded { width: 320px !important; }
   .e2-right-panel-content { width: 250px !important; }
 }
+
+.e2-generation-wait { width:360px; max-width:80%; display:flex; flex-direction:column; align-items:center; gap:11px; color:#fff; }
+.e2-generation-wait svg { color:#8e84ff; }
+.e2-generation-wait strong { font-size:19px; }
+.e2-generation-wait > span { color:#a9a3ff; font-size:14px; }
+.e2-generation-wait small { max-width:320px; color:rgba(255,255,255,.46); font-size:12px; font-weight:500; text-align:center; }
+.e2-generation-track { width:100%; height:7px; overflow:hidden; border-radius:4px; background:rgba(255,255,255,.09); }
+.e2-generation-track span { display:block; height:100%; border-radius:inherit; background:#7368ff; transition:width .35s ease; }

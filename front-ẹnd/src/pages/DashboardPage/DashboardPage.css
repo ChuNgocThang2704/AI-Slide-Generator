@@ -268,6 +268,10 @@
   color: rgba(255,255,255,0.3);
 }
 
+.pres-progress { display:flex; align-items:center; gap:8px; margin-top:9px; color:#8faeff; font-size:11px; font-weight:700; }
+.pres-progress-track { flex:1; height:4px; overflow:hidden; border-radius:2px; background:rgba(59,130,246,.16); }
+.pres-progress-track span { display:block; height:100%; border-radius:inherit; background:#4b82ff; transition:width .35s ease; }
+
 @media (max-width: 1280px) { .pres-grid { grid-template-columns: repeat(3,1fr); } }
 @media (max-width: 1024px) { .dash-stats { grid-template-columns: repeat(2,1fr); } .pres-grid { grid-template-columns: repeat(2,1fr); } }
 @media (max-width: 640px)  { .pres-grid { grid-template-columns: 1fr; } .dash-stats { grid-template-columns: 1fr; } }
