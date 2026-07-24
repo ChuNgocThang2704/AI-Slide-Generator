@@ -53,6 +53,25 @@ const IconList = () => (
     <circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/>
   </svg>
 );
+const IconNumberedList = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+    <line x1="9" y1="6" x2="20" y2="6"/>
+    <line x1="9" y1="12" x2="20" y2="12"/>
+    <line x1="9" y1="18" x2="20" y2="18"/>
+    <text x="2.2" y="8" fill="currentColor" stroke="none" fontSize="6.5" fontWeight="700">1</text>
+    <text x="2.2" y="14" fill="currentColor" stroke="none" fontSize="6.5" fontWeight="700">2</text>
+    <text x="2.2" y="20" fill="currentColor" stroke="none" fontSize="6.5" fontWeight="700">3</text>
+  </svg>
+);
+const IconVerticalAlign = ({ position }) => {
+  const y = position === 'top' ? 6 : position === 'bottom' ? 18 : 12;
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <line x1="4" y1={y} x2="20" y2={y}/>
+      <path d={position === 'top' ? 'M12 19V9m0 0-3 3m3-3 3 3' : position === 'bottom' ? 'M12 5v10m0 0-3-3m3 3 3-3' : 'M12 4v5m0-5-2 2m2-2 2 2M12 20v-5m0 5-2-2m2 2 2-2'}/>
+    </svg>
+  );
+};
 
 // ── Font options ─────────────────────────────────────────────────────────────
 const FONT_OPTIONS = [
@@ -158,8 +177,18 @@ function applyInlineStyle(editor, range, styles) {
 }
 
 // ── FloatingTextToolbar Component ─────────────────────────────────────────────
-export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visible, position, onFormatChange }) {
+export default function FloatingTextToolbar({
+  editorRef,
+  selectionRangeRef,
+  visible,
+  position,
+  onFormatChange,
+  boxStyle = {},
+  onBoxStyleChange,
+  batchMode = false,
+}) {
   const colorRef = useRef(null);
+  const temporaryEditableRef = useRef(false);
   const [isBold, setIsBold]           = useState(false);
   const [isItalic, setIsItalic]       = useState(false);
   const [isUnderline, setIsUnderline] = useState(false);
@@ -168,6 +197,9 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
   const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
   const [fontFamily, setFontFamily]   = useState('');
   const [color, setColor]             = useState('#ffffff');
+  const [listMode, setListMode]       = useState('none');
+  const [lineHeight, setLineHeight]   = useState(String(boxStyle?.lineHeight || 1.35));
+  const [verticalAlign, setVerticalAlign] = useState(boxStyle?.verticalAlign || 'top');
 
   // Sync state with current selection format
   useEffect(() => {
@@ -175,11 +207,27 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
     setIsBold(queryState('bold'));
     setIsItalic(queryState('italic'));
     setIsUnderline(queryState('underline'));
+    const editor = editorRef.current;
+    if (batchMode) {
+      setIsBold(Number(boxStyle?.fontWeight) >= 600);
+      setIsItalic(boxStyle?.fontStyle === 'italic');
+      setIsUnderline(String(boxStyle?.textDecoration || '').includes('underline'));
+      setAlign(boxStyle?.textAlign || 'left');
+      if (boxStyle?.fontSize) setFontSize(String(boxStyle.fontSize));
+      if (boxStyle?.fontFamily) setFontFamily(boxStyle.fontFamily);
+      if (boxStyle?.color) setColor(boxStyle.color);
+    }
+    setLineHeight(String(boxStyle?.lineHeight || 1.35));
+    setVerticalAlign(boxStyle?.verticalAlign || 'top');
+    setListMode(
+      editor?.querySelector('ol') ? 'number' :
+      editor?.querySelector('ul') ? 'bullet' : 'none'
+    );
     setAlign(
       queryState('justifyCenter') ? 'center' :
       queryState('justifyRight')  ? 'right'  : 'left'
     );
-  }, [visible]);
+  }, [batchMode, boxStyle, editorRef, visible]);
 
   if (!visible) return null;
 
@@ -204,6 +252,11 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
 
   const restoreSelection = () => {
     if (!editorRef.current) return false;
+    if (!editorRef.current.isContentEditable) {
+      editorRef.current.setAttribute('contenteditable', 'true');
+      temporaryEditableRef.current = true;
+    }
+    editorRef.current.focus({ preventScroll: true });
     let range = selectionRangeRef?.current;
     if (!range || range.collapsed) {
       range = document.createRange();
@@ -221,12 +274,20 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
       ? window.getSelection().getRangeAt(0).cloneRange()
       : selectionRangeRef.current;
     onFormatChange?.();
+    if (temporaryEditableRef.current && editorRef.current) {
+      editorRef.current.setAttribute('contenteditable', 'false');
+      temporaryEditableRef.current = false;
+    }
   };
 
   // ── Apply font family to selected text ────────────────────────────────────
   const handleFontFamily = (family) => {
     setFontFamily(family);
     if (!family) return;
+    if (batchMode && onBoxStyleChange) {
+      onBoxStyleChange({ fontFamily: family });
+      return;
+    }
     restoreSelection();
     applyInlineStyle(editorRef.current, selectionRangeRef.current, { fontFamily: family });
     commitFormat();
@@ -241,6 +302,10 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
     }
     const normalized = Math.min(200, Math.max(4, num));
     setFontSize(String(normalized));
+    if (batchMode && onBoxStyleChange) {
+      onBoxStyleChange({ fontSize: normalized });
+      return;
+    }
     restoreSelection();
     applyInlineStyle(editorRef.current, selectionRangeRef.current, { fontSize: `${normalized}px` });
     commitFormat();
@@ -254,6 +319,10 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
   // ── Apply color to selected text ──────────────────────────────────────────
   const handleColor = (c) => {
     setColor(c);
+    if (batchMode && onBoxStyleChange) {
+      onBoxStyleChange({ color: c });
+      return;
+    }
     restoreSelection();
     applyInlineStyle(editorRef.current, selectionRangeRef.current, { color: c });
     commitFormat();
@@ -261,18 +330,36 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
 
   // ── Toggle bold/italic/underline via execCommand (these work reliably) ────
   const toggleBold = () => {
+    if (batchMode && onBoxStyleChange) {
+      const next = !isBold;
+      setIsBold(next);
+      onBoxStyleChange({ fontWeight: next ? 700 : 400 });
+      return;
+    }
     restoreSelection();
     execCmd('bold');
     setIsBold(!isBold);
     commitFormat();
   };
   const toggleItalic = () => {
+    if (batchMode && onBoxStyleChange) {
+      const next = !isItalic;
+      setIsItalic(next);
+      onBoxStyleChange({ fontStyle: next ? 'italic' : 'normal' });
+      return;
+    }
     restoreSelection();
     execCmd('italic');
     setIsItalic(!isItalic);
     commitFormat();
   };
   const toggleUnderline = () => {
+    if (batchMode && onBoxStyleChange) {
+      const next = !isUnderline;
+      setIsUnderline(next);
+      onBoxStyleChange({ textDecoration: next ? 'underline' : 'none' });
+      return;
+    }
     restoreSelection();
     execCmd('underline');
     setIsUnderline(!isUnderline);
@@ -281,15 +368,35 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
 
   // ── Align (works on block level via execCommand) ──────────────────────────
   const applyAlign = (dir) => {
+    if (batchMode && onBoxStyleChange) {
+      setAlign(dir);
+      onBoxStyleChange({ textAlign: dir });
+      return;
+    }
     restoreSelection();
     execCmd(`justify${dir.charAt(0).toUpperCase() + dir.slice(1)}`);
     setAlign(dir);
     commitFormat();
   };
 
-  const toggleBulletList = () => {
+  const applyListMode = (mode) => {
     restoreSelection();
-    execCmd('insertUnorderedList');
+    const bulletActive = queryState('insertUnorderedList');
+    const numberActive = queryState('insertOrderedList');
+
+    if (mode === 'bullet') {
+      if (numberActive) execCmd('insertOrderedList');
+      if (!bulletActive) execCmd('insertUnorderedList');
+      else execCmd('insertUnorderedList');
+    } else if (mode === 'number') {
+      if (bulletActive) execCmd('insertUnorderedList');
+      if (!numberActive) execCmd('insertOrderedList');
+      else execCmd('insertOrderedList');
+    } else {
+      if (bulletActive) execCmd('insertUnorderedList');
+      if (numberActive) execCmd('insertOrderedList');
+    }
+    setListMode(mode === listMode ? 'none' : mode);
     commitFormat();
   };
 
@@ -390,12 +497,57 @@ export default function FloatingTextToolbar({ editorRef, selectionRangeRef, visi
 
       {/* ── Bullet list ── */}
       <button
-        className="ft-btn"
-        onClick={toggleBulletList}
-        title="Bullet list"
+        className={`ft-btn ${listMode === 'bullet' ? 'active' : ''}`}
+        onClick={() => applyListMode(listMode === 'bullet' ? 'none' : 'bullet')}
+        title="Danh sách dấu đầu dòng"
       ><IconList /></button>
+      <button
+        className={`ft-btn ${listMode === 'number' ? 'active' : ''}`}
+        onClick={() => applyListMode(listMode === 'number' ? 'none' : 'number')}
+        title="Danh sách đánh số"
+      ><IconNumberedList /></button>
 
       <div className="ft-divider" />
+
+      {onBoxStyleChange && (
+        <>
+          <select
+            className="ft-select ft-line-height"
+            value={lineHeight}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              setLineHeight(String(value));
+              onBoxStyleChange({ lineHeight: value });
+            }}
+            title="Khoảng cách dòng"
+            aria-label="Khoảng cách dòng"
+          >
+            <option value="1">1.0</option>
+            <option value="1.15">1.15</option>
+            <option value="1.2">1.2</option>
+            <option value="1.35">1.35</option>
+            <option value="1.5">1.5</option>
+            <option value="1.55">1.55</option>
+            <option value="1.75">1.75</option>
+            <option value="2">2.0</option>
+          </select>
+          {['top', 'middle', 'bottom'].map((value) => (
+            <button
+              key={value}
+              className={`ft-btn ${verticalAlign === value ? 'active' : ''}`}
+              onClick={() => {
+                setVerticalAlign(value);
+                onBoxStyleChange({ verticalAlign: value });
+              }}
+              title={{ top: 'Căn trên', middle: 'Căn giữa theo chiều dọc', bottom: 'Căn dưới' }[value]}
+              aria-label={{ top: 'Căn trên', middle: 'Căn giữa theo chiều dọc', bottom: 'Căn dưới' }[value]}
+            >
+              <IconVerticalAlign position={value} />
+            </button>
+          ))}
+          <div className="ft-divider" />
+        </>
+      )}
 
       {/* ── Text Align ── */}
       <button

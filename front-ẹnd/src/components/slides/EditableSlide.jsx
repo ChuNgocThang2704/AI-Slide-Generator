@@ -1,10 +1,12 @@
-import React from 'react';
+import { useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { TiptapInlineEditor } from './TiptapEditor';
 import './EditableSlide.css';
 import { ChartVisual, TableVisual } from './StructuredVisual';
 import './StructuredVisual.css';
 import { resolveAssetUrl } from '../../utils/assetUrl';
+import { documentService } from '../../services/documentService';
+import AssetImage from './AssetImage';
 
 // ─── Theme map (same as SlideRenderer) ───────────────────────────────────────
 export const THEMES = {
@@ -104,7 +106,31 @@ export const THEMES = {
 };
 
 // ─── Inline editable text (Tiptap-powered) ───────────────────────────────────
-function InlineText({ value, onSave, slideKey, field, tag: Tag = 'div', className = '', style = {}, placeholder = '' }) {
+function plainTextLength(value) {
+  if (!value) return 0;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = String(value);
+  return (tmp.innerText || tmp.textContent || '').trim().length;
+}
+
+function adaptiveTextStyle(value, className, style) {
+  const length = plainTextLength(value);
+  if (className.includes('es-main-title')) {
+    return { ...style, fontSize: length > 90 ? 34 : length > 60 ? 40 : style.fontSize };
+  }
+  if (className.includes('es-section-title')) {
+    return { ...style, fontSize: length > 110 ? 22 : length > 75 ? 26 : length > 48 ? 30 : style.fontSize };
+  }
+  if (className.includes('es-body-text')) {
+    return { ...style, fontSize: length > 700 ? 11 : length > 500 ? 12 : length > 320 ? 13 : style.fontSize };
+  }
+  if (className.includes('es-quote-text')) {
+    return { ...style, fontSize: length > 320 ? 15 : length > 220 ? 17 : style.fontSize };
+  }
+  return style;
+}
+
+function InlineText({ value, richValue = '', onSave, slideKey, field, className = '', style = {}, placeholder = '' }) {
   const handleSave = (html) => {
     // Strip to plain text for simple fields (title, subtitle, author, role, contact)
     const tmp = document.createElement('div');
@@ -116,11 +142,13 @@ function InlineText({ value, onSave, slideKey, field, tag: Tag = 'div', classNam
   return (
     <TiptapInlineEditor
       key={`${slideKey}__${field}`}
-      value={value || ''}
+      value={richValue || value || ''}
       onSave={handleSave}
       className={`es-editable ${className}`}
-      style={style}
+      style={adaptiveTextStyle(richValue || value, className, style)}
       placeholder={placeholder}
+      autoFit={className.includes('es-body-text') || className.includes('es-quote-text')}
+      minFontSize={className.includes('es-body-text') ? 11.5 : 12}
     />
   );
 }
@@ -131,6 +159,24 @@ function InlineBullets({ bullets = [], richValue = '', onSave, slideKey, t }) {
   const initialHTML = richValue || (bullets.length
     ? `<ul>${bullets.map((b) => `<li>${b}</li>`).join('')}</ul>`
     : '');
+  const totalChars = bullets.reduce((sum, bullet) => sum + plainTextLength(bullet), 0);
+  const estimatedLines = bullets.reduce(
+    (sum, bullet) => sum + Math.max(1, Math.ceil(plainTextLength(bullet) / 82)),
+    0,
+  );
+  const fontSize = estimatedLines > 20 || totalChars > 1200
+    ? 10
+    : estimatedLines > 16 || totalChars > 900
+      ? 11.5
+      : estimatedLines > 12 || totalChars > 680
+        ? 14
+        : estimatedLines > 9 || totalChars > 500
+          ? 16
+          : estimatedLines > 7
+            ? 17
+            : 18;
+  const gap = estimatedLines > 16 ? 3 : estimatedLines > 12 ? 6 : estimatedLines > 9 ? 10 : 14;
+  const boxHeight = estimatedLines > 14 ? 380 : estimatedLines > 9 ? 365 : bullets.length >= 4 ? 340 : 270;
 
   const handleSave = (html) => {
     // Parse HTML back to array of plain text lines
@@ -140,8 +186,10 @@ function InlineBullets({ bullets = [], richValue = '', onSave, slideKey, t }) {
       if (!item.innerText?.trim()) item.remove();
     });
     const lines = [];
-    // Handle both <li> items and plain <p> paragraphs
-    tmp.querySelectorAll('li, p').forEach((el) => {
+    const items = tmp.querySelectorAll('li').length
+      ? tmp.querySelectorAll('li')
+      : tmp.querySelectorAll('p');
+    items.forEach((el) => {
       const text = el.innerText?.trim();
       if (text) lines.push(text);
     });
@@ -158,9 +206,59 @@ function InlineBullets({ bullets = [], richValue = '', onSave, slideKey, t }) {
       key={`${slideKey}__bullets`}
       value={initialHTML}
       onSave={handleSave}
-      className="es-editable es-bullets-editable"
-      style={{ color: t.textSub, fontFamily: t.fontBody }}
+      className="es-editable es-bullets-editable es-themed-bullets"
+      style={{
+        color: t.textSub,
+        fontFamily: t.fontBody,
+        fontSize,
+        '--bullet-gap': `${gap}px`,
+        '--bullet-box-height': `${boxHeight}px`,
+      }}
+      autoFit
+      minFontSize={8}
+      autoFitBaseFontSize={fontSize}
       placeholder="Nhập bullet points, mỗi dòng một ý..."
+    />
+  );
+}
+
+function InlinePointList({ points = [], richValue = '', onSave, slideKey, field, t }) {
+  const initialHTML = richValue || (points.length
+    ? `<ul>${points.map((point) => `<li>${point}</li>`).join('')}</ul>`
+    : '');
+  const totalChars = points.reduce((sum, point) => sum + plainTextLength(point), 0);
+  const fontSize = points.length > 6 || totalChars > 420
+    ? 10.5
+    : points.length > 4 || totalChars > 280
+      ? 11.5
+      : 13;
+
+  const handleSave = (html) => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    const items = tmp.querySelectorAll('li').length
+      ? tmp.querySelectorAll('li')
+      : tmp.querySelectorAll('p');
+    const nextPoints = [...items]
+      .map((item) => item.innerText?.trim())
+      .filter(Boolean);
+    if (!nextPoints.length) {
+      tmp.innerText.split('\n').map((line) => line.trim()).filter(Boolean).forEach((line) => nextPoints.push(line));
+    }
+    onSave(nextPoints, tmp.innerHTML);
+  };
+
+  return (
+    <TiptapInlineEditor
+      key={`${slideKey}__${field}`}
+      value={initialHTML}
+      onSave={handleSave}
+      className="es-editable es-col-points es-point-list"
+      style={{ color: t.textSub, fontFamily: t.fontBody, fontSize }}
+      autoFit
+      minFontSize={8}
+      autoFitBaseFontSize={fontSize}
+      placeholder="Mỗi dòng một ý..."
     />
   );
 }
@@ -407,14 +505,6 @@ function TitleSlide({ slide, t, sk, onSave }) {
 }
 
 // Helper: compute gap between bullet items based on count in editor
-function bulletGap(count) {
-  if (count <= 2) return 36;
-  if (count <= 3) return 28;
-  if (count <= 4) return 20;
-  if (count <= 5) return 14;
-  return 10;
-}
-
 // Content slide — default
 function ContentSlide({ slide, t, sk, onSave }) {
   return (
@@ -434,7 +524,6 @@ function ContentSlide({ slide, t, sk, onSave }) {
 
 // Content slide — SOFT-BLUE variant with numbered badge bullets
 function SoftBlueContentSlide({ slide, t, sk, onSave }) {
-  const count = slide.bullets?.length || 0;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -444,13 +533,7 @@ function SoftBlueContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, lineHeight: 1.2 }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
-          <EditableBulletList bullets={slide.bullets} t={t} onSave={onSave}
-            renderBulletIcon={(i) => (
-              <div style={{ flexShrink: 0, width: 26, height: 26, borderRadius: '50%', background: t.accentGrad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', fontFamily: t.fontTitle, marginTop: 2 }}>{String(i + 1).padStart(2, '0')}</div>
-            )}
-          />
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -458,33 +541,8 @@ function SoftBlueContentSlide({ slide, t, sk, onSave }) {
 
 
 // ─── Reusable inline-editable bullet helper ───────────────────────────────────
-// Each bullet item is directly contentEditable for immediate editing
-function EditableBulletList({ bullets, t, onSave, renderBulletIcon }) {
-  const saveBullet = (i, text) => {
-    const next = [...(bullets || [])];
-    next[i] = text;
-    onSave('bullets', next);
-  };
-  return (
-    <>
-      {(bullets || []).map((b, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-          {renderBulletIcon(i)}
-          <span
-            contentEditable
-            suppressContentEditableWarning
-            style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.55, fontWeight: 400, outline: 'none', flex: 1 }}
-            onBlur={(e) => saveBullet(i, e.currentTarget.innerText.trim())}
-          >{b}</span>
-        </div>
-      ))}
-    </>
-  );
-}
-
 // ROYAL-PURPLE editable — gradient left-bordered cards
 function RoyalPurpleContentSlide({ slide, t, sk, onSave }) {
-  const count = slide.bullets?.length || 0;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -494,13 +552,7 @@ function RoyalPurpleContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, lineHeight: 1.2 }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
-          <EditableBulletList bullets={slide.bullets} t={t} onSave={onSave}
-            renderBulletIcon={(i) => (
-              <span style={{ color: t.accent, fontWeight: 700, fontFamily: t.fontTitle, fontSize: 13, marginRight: 0, marginTop: 2, flexShrink: 0 }}>{String(i+1).padStart(2,'0')}.</span>
-            )}
-          />
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -508,8 +560,6 @@ function RoyalPurpleContentSlide({ slide, t, sk, onSave }) {
 
 // CLEAN-WHITE editable — numbered timeline with dividers
 function CleanWhiteContentSlide({ slide, t, sk, onSave }) {
-  const count = slide.bullets?.length || 0;
-  const padV = count <= 3 ? 20 : count <= 5 ? 14 : 10;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -519,21 +569,7 @@ function CleanWhiteContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 36, fontWeight: 400, lineHeight: 1.2, letterSpacing: '-0.3px' }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {(slide.bullets || []).map((b, i) => {
-            const saveBullet = (e) => {
-              const next = [...(slide.bullets || [])];
-              next[i] = e.currentTarget.innerText.trim();
-              onSave('bullets', next);
-            };
-            return (
-              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 20, padding: `${padV}px 0`, borderBottom: i < (count-1) ? '1px solid #e5e5e5' : 'none' }}>
-                <span style={{ color: t.accent, fontFamily: t.fontTitle, fontWeight: 800, fontSize: 26, lineHeight: 1, minWidth: 36, paddingTop: 2 }}>{i+1}</span>
-                <span contentEditable suppressContentEditableWarning style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.6, outline: 'none', flex: 1 }} onBlur={saveBullet}>{b}</span>
-              </div>
-            );
-          })}
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -541,7 +577,6 @@ function CleanWhiteContentSlide({ slide, t, sk, onSave }) {
 
 // MODERN-DARK editable — glassmorphism cards
 function ModernDarkContentSlide({ slide, t, sk, onSave }) {
-  const count = slide.bullets?.length || 0;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -551,13 +586,7 @@ function ModernDarkContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 34, fontWeight: 600, lineHeight: 1.2, letterSpacing: '-0.5px' }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
-          <EditableBulletList bullets={slide.bullets} t={t} onSave={onSave}
-            renderBulletIcon={() => (
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.accentGrad, flexShrink: 0, marginTop: 7, display: 'block' }} />
-            )}
-          />
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -565,8 +594,6 @@ function ModernDarkContentSlide({ slide, t, sk, onSave }) {
 
 // PLAYFUL-YELLOW editable — colorful alternating badges
 function PlayfulYellowContentSlide({ slide, t, sk, onSave }) {
-  const colors = ['#f59e0b','#8b5cf6','#ef4444','#10b981','#3b82f6'];
-  const count = slide.bullets?.length || 0;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -575,13 +602,7 @@ function PlayfulYellowContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 38, fontWeight: 400, lineHeight: 1.2 }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
-          <EditableBulletList bullets={slide.bullets} t={t} onSave={onSave}
-            renderBulletIcon={(i) => (
-              <div style={{ flexShrink: 0, width: 28, height: 28, borderRadius: '50%', background: colors[i % colors.length], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: t.fontTitle, marginTop: 2 }}>{i+1}</div>
-            )}
-          />
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -589,7 +610,6 @@ function PlayfulYellowContentSlide({ slide, t, sk, onSave }) {
 
 // GRADIENT-BORDER editable — left bar + tinted rows
 function GradientBorderContentSlide({ slide, t, sk, onSave }) {
-  const count = slide.bullets?.length || 0;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -598,21 +618,7 @@ function GradientBorderContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, lineHeight: 1.2 }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
-          {(slide.bullets || []).map((b, i) => {
-            const saveBullet = (e) => {
-              const next = [...(slide.bullets || [])];
-              next[i] = e.currentTarget.innerText.trim();
-              onSave('bullets', next);
-            };
-            return (
-              <div key={i} style={{ display: 'flex', alignItems: 'stretch', background: i%2===0 ? 'rgba(108,99,255,0.05)' : 'rgba(56,189,248,0.04)', borderRadius: '0 10px 10px 0', overflow: 'hidden' }}>
-                <div style={{ width: 4, flexShrink: 0, background: t.accentGrad }} />
-                <span contentEditable suppressContentEditableWarning style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.5, padding: '12px 16px', outline: 'none', flex: 1 }} onBlur={saveBullet}>{b}</span>
-              </div>
-            );
-          })}
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -620,7 +626,6 @@ function GradientBorderContentSlide({ slide, t, sk, onSave }) {
 
 // BLUE-PLANET editable — cyan glowing dots
 function BluePlanetContentSlide({ slide, t, sk, onSave }) {
-  const count = slide.bullets?.length || 0;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -630,13 +635,7 @@ function BluePlanetContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 32, fontWeight: 600, lineHeight: 1.2, letterSpacing: '0.5px' }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
-          <EditableBulletList bullets={slide.bullets} t={t} onSave={onSave}
-            renderBulletIcon={() => (
-              <div style={{ flexShrink: 0, width: 10, height: 10, borderRadius: '50%', background: t.accentGrad, boxShadow: `0 0 8px ${t.primary}88`, marginTop: 7 }} />
-            )}
-          />
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -644,7 +643,6 @@ function BluePlanetContentSlide({ slide, t, sk, onSave }) {
 
 // NATURE-GREEN editable — leaf-shaped bullets
 function NatureGreenContentSlide({ slide, t, sk, onSave }) {
-  const count = slide.bullets?.length || 0;
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -654,13 +652,7 @@ function NatureGreenContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 32, fontWeight: 700, lineHeight: 1.25 }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
-          <EditableBulletList bullets={slide.bullets} t={t} onSave={onSave}
-            renderBulletIcon={() => (
-              <div style={{ flexShrink: 0, width: 12, height: 12, background: t.accentGrad, borderRadius: '50% 0 50% 0', transform: 'rotate(-15deg)', marginTop: 6 }} />
-            )}
-          />
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -668,16 +660,6 @@ function NatureGreenContentSlide({ slide, t, sk, onSave }) {
 
 // TECH-PURPLE editable — 2-column grid with square dots
 function TechPurpleContentSlide({ slide, t, sk, onSave }) {
-  const bullets = slide.bullets || [];
-  const half = Math.ceil(bullets.length / 2);
-  const cols = [bullets.slice(0, half), bullets.slice(half)];
-  const rowGap = bulletGap(Math.max(cols[0].length, cols[1].length));
-  const saveBullet = (colIdx, rowIdx, text) => {
-    const next = [...bullets];
-    const absoluteIdx = colIdx === 0 ? rowIdx : half + rowIdx;
-    next[absoluteIdx] = text;
-    onSave('bullets', next);
-  };
   return (
     <div className="es-slide es-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <Deco t={t} />
@@ -687,18 +669,7 @@ function TechPurpleContentSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title"
           style={{ width: '100%', color: t.text, fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, lineHeight: 1.2, letterSpacing: '1px', textTransform: 'uppercase' }}
           placeholder="Tiêu đề slide" />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: `0 40px` }}>
-          {cols.map((col, ci) => (
-            <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: rowGap }}>
-              {col.map((b, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                  <div style={{ flexShrink: 0, width: 8, height: 8, background: t.accentGrad, marginTop: 7 }} />
-                  <span contentEditable suppressContentEditableWarning style={{ fontFamily: t.fontBody, fontSize: 15.5, color: t.textSub, lineHeight: 1.5, outline: 'none', flex: 1 }} onBlur={(e) => saveBullet(ci, i, e.currentTarget.innerText.trim())}>{b}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
+        <InlineBullets bullets={slide.bullets} richValue={slide.richText?.bullets} onSave={onSave} slideKey={sk} t={t} />
       </div>
     </div>
   );
@@ -706,11 +677,6 @@ function TechPurpleContentSlide({ slide, t, sk, onSave }) {
 
 // Two column slide
 function TwoColumnSlide({ slide, t, sk, onSave }) {
-  const saveLeft = (f, v) => onSave('left', { ...slide.left, [f]: v });
-  const saveRight = (f, v) => onSave('right', { ...slide.right, [f]: v });
-  const saveLeftPoints = (pts) => onSave('left', { ...slide.left, points: pts });
-  const saveRightPoints = (pts) => onSave('right', { ...slide.right, points: pts });
-
   return (
     <div className="es-slide es-twocol" style={{ background: t.bgGrad }}>
       <Deco t={t} />
@@ -720,20 +686,24 @@ function TwoColumnSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title" style={{ color: t.text, fontFamily: t.fontTitle }} placeholder="Tiêu đề" />
         <div className="es-cols">
           {[
-            { side: 'left', colData: slide.left, saveH: (v) => saveLeft('heading', v), saveP: saveLeftPoints },
-            { side: 'right', colData: slide.right, saveH: (v) => saveRight('heading', v), saveP: saveRightPoints },
-          ].map(({ side, colData, saveH, saveP }) => (
+            { side: 'left', colData: slide.left },
+            { side: 'right', colData: slide.right },
+          ].map(({ side, colData }) => (
             <div key={side} className="es-col-card" style={{ background: t.surface, borderColor: t.surfaceBorder }}>
-              <InlineText value={colData?.heading} onSave={(_, v) => saveH(v)} slideKey={sk} field={`${side}-h`}
+              <InlineText
+                value={colData?.heading}
+                richValue={slide.richText?.[`${side}Heading`]}
+                onSave={(_, value, html) => onSave(side, { ...colData, heading: value }, html, `${side}Heading`)}
+                slideKey={sk}
+                field={`${side}-h`}
                 className="es-col-heading" style={{ color: t.primary, fontFamily: t.fontTitle }} placeholder="Tiêu đề cột" />
-              <div
-                key={`${sk}__${side}-pts`}
-                className="es-editable es-col-points"
-                contentEditable suppressContentEditableWarning
-                data-placeholder="Mỗi dòng một điểm..."
-                onBlur={(e) => saveP(e.currentTarget.innerText.split('\n').filter((l) => l.trim()))}
-                dangerouslySetInnerHTML={{ __html: (colData?.points || []).join('<br>') }}
-                style={{ color: t.textSub, fontFamily: t.fontBody }}
+              <InlinePointList
+                points={colData?.points}
+                richValue={slide.richText?.[`${side}Points`]}
+                slideKey={sk}
+                field={`${side}-points`}
+                t={t}
+                onSave={(points, html) => onSave(side, { ...colData, points }, html, `${side}Points`)}
               />
             </div>
           ))}
@@ -744,20 +714,47 @@ function TwoColumnSlide({ slide, t, sk, onSave }) {
 }
 
 // Image + Text slide
-function ImageTextSlide({ slide, t, sk, onSave }) {
+function ImageTextSlide({ slide, t, sk, onSave, readonly, onPickImage, imageFit = 'cover', uploadingImage }) {
+  const textLength = plainTextLength(slide.text);
+  const titleLength = plainTextLength(slide.title);
+  const density = textLength > 980
+    ? 'density-extreme'
+    : textLength > 520 || titleLength > 78
+      ? 'density-dense'
+      : 'density-normal';
   return (
-    <div className="es-slide es-imgtext" style={{ background: t.bgGrad }}>
+    <div className={`es-slide es-imgtext ${density}`} style={{ background: t.bgGrad }}>
       <Deco t={t} />
       <div className="es-imgtext-inner">
         <div className="es-img-box" style={{ background: t.surface, borderColor: t.surfaceBorder, overflow: 'hidden', padding: 0 }}>
           {slide.imageUrl ? (
-            <img src={resolveAssetUrl(slide.imageUrl)} alt={slide.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <AssetImage
+              src={resolveAssetUrl(slide.imageUrl)}
+              storageUrl={slide.imageStorageUrl}
+              assetId={slide.imageAssetId}
+              alt={slide.title}
+              style={{ width: '100%', height: '100%', objectFit: imageFit, borderRadius: 'inherit' }}
+            />
           ) : (
             <>
               <InlineText value={slide.imageEmoji || '🖼️'} onSave={onSave} slideKey={sk} field="imageEmoji"
                 className="es-emoji" style={{}} placeholder="🖼️" />
               <div className="es-img-hint" style={{ color: t.textSub, fontFamily: t.fontBody }}>Click để đổi emoji</div>
             </>
+          )}
+          {!readonly && (
+            <div className="es-image-actions">
+              <button type="button" onClick={(event) => { event.stopPropagation(); onPickImage?.(); }}>
+                {uploadingImage ? 'Đang tải...' : 'Thay ảnh'}
+              </button>
+              <button type="button" onClick={(event) => {
+                event.stopPropagation();
+                const nextFit = imageFit === 'cover' ? 'contain' : 'cover';
+                onSave('imageFit', nextFit, nextFit, 'imageFit');
+              }}>
+                {imageFit === 'cover' ? 'Vừa khung' : 'Phủ khung'}
+              </button>
+            </div>
           )}
         </div>
         <div className="es-imgtext-content">
@@ -773,8 +770,12 @@ function ImageTextSlide({ slide, t, sk, onSave }) {
 }
 
 function StructuredSlide({ slide, t, sk, onSave }) {
+  const itemCount = slide.type === 'table'
+    ? Math.max(slide.table?.headers?.length || 0, slide.table?.rows?.length || 0)
+    : Math.max(slide.chart?.labels?.length || slide.chart?.categories?.length || 0, slide.chart?.series?.length || 0);
+  const density = itemCount >= 8 ? 'density-extreme' : itemCount >= 6 ? 'density-dense' : 'density-normal';
   return (
-    <div className="es-slide es-content" style={{ background: t.bgGrad }}>
+    <div className={`es-slide es-content es-structured ${density}`} style={{ background: t.bgGrad }}>
       <Deco t={t} />
       <div className="es-content-inner" style={{ gap: 18 }}>
         <div className="es-bar" style={{ background: t.accentGrad }} />
@@ -782,8 +783,8 @@ function StructuredSlide({ slide, t, sk, onSave }) {
           tag="h2" className="es-section-title" style={{ color: t.text, fontFamily: t.fontTitle }} placeholder="Tiêu đề" />
         <div style={{ flex: 1, minHeight: 0, padding: '0 2px' }}>
           {slide.type === 'table'
-            ? <TableVisual table={slide.table} theme={t} />
-            : <ChartVisual chart={slide.chart} theme={t} />}
+            ? <TableVisual table={slide.table} theme={t} onChange={(table) => onSave('table', table)} />
+            : <ChartVisual chart={slide.chart} theme={t} onChange={(chart) => onSave('chart', chart)} />}
         </div>
       </div>
     </div>
@@ -836,7 +837,9 @@ function getGradStyle(grad) {
 // ─── Main export ─────────────────────────────────────────────────────────────
 const SLIDE_MAP = { title: TitleSlide, content: ContentSlide, twoColumn: TwoColumnSlide, imageText: ImageTextSlide, table: StructuredSlide, chart: StructuredSlide, quote: QuoteSlide, thankyou: ThankYouSlide };
 
-export default function EditableSlide({ slide, theme = 'clean-white', slideIndex = 0, onUpdate }) {
+export default function EditableSlide({ slide, theme = 'clean-white', slideIndex = 0, onUpdate, onNotify, readonly = false }) {
+  const imageInputRef = useRef(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const t = THEMES[theme] || THEMES['clean-white'];
   const sk = `${slideIndex}`;
   let Component = SLIDE_MAP[slide?.type] || ContentSlide;
@@ -853,13 +856,47 @@ export default function EditableSlide({ slide, theme = 'clean-white', slideIndex
   };
   if (slide?.type === 'content' && contentVariants[theme]) Component = contentVariants[theme];
 
-  const handleSave = (field, value, html) => {
-    const existingHtml = slide.richText?.[field];
+  const handleSave = (field, value, html, richKey = field) => {
+    const existingHtml = slide.richText?.[richKey];
     if (value === slide[field] && (html === undefined || html === existingHtml)) return;
     const richText = html === undefined
       ? slide.richText
-      : { ...(slide.richText || {}), [field]: html };
+      : { ...(slide.richText || {}), [richKey]: html };
     onUpdate?.({ ...slide, [field]: value, richText });
+  };
+
+  const handleImageUpload = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      onNotify?.('Vui lòng chọn ảnh PNG, JPEG, WebP hoặc GIF', 'warning');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      onNotify?.('Ảnh không được vượt quá 10 MB', 'warning');
+      return;
+    }
+    setUploadingImage(true);
+    try {
+      const uploaded = await documentService.upload(file);
+      const imageUrl = uploaded?.viewUrl || uploaded?.url;
+      if (!imageUrl) throw new Error('Máy chủ không trả về URL ảnh');
+      onUpdate?.({
+        ...slide,
+        imageUrl,
+        richText: {
+          ...(slide.richText || {}),
+          imageStorageUrl: uploaded?.url || '',
+          imageAssetId: uploaded?.id || '',
+        },
+      });
+      onNotify?.('Đã thay ảnh', 'success');
+    } catch (error) {
+      onNotify?.(error.message || 'Không thể tải ảnh lên', 'error');
+    } finally {
+      setUploadingImage(false);
+    }
   };
 
   const richFields = { ...(slide.richText || {}) };
@@ -867,8 +904,26 @@ export default function EditableSlide({ slide, theme = 'clean-white', slideIndex
   const displaySlide = { ...slide, ...richFields };
 
   return (
-    <div className="editable-slide-root" data-theme={theme}>
-      <Component slide={displaySlide} t={t} sk={sk} onSave={handleSave} />
+    <div className={`editable-slide-root ${readonly ? 'readonly' : ''}`} data-theme={theme}>
+      {!readonly && slide?.type === 'imageText' && (
+        <input
+          ref={imageInputRef}
+          className="es-image-input"
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={handleImageUpload}
+        />
+      )}
+      <Component
+        slide={displaySlide}
+        t={t}
+        sk={sk}
+        onSave={handleSave}
+        readonly={readonly}
+        imageFit={displaySlide.imageFit || 'cover'}
+        uploadingImage={uploadingImage}
+        onPickImage={() => imageInputRef.current?.click()}
+      />
       <div className="es-slide-number" style={{ color: t.textSub }}>
         {String(slideIndex + 1).padStart(2, '0')}
       </div>

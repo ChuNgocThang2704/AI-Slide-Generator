@@ -190,6 +190,8 @@ services:
       RABBIT_SSL_ENABLED: "false"
       AI_URL: ${AI_URL_DOCKER:-http://host.docker.internal:8000}
       APP_SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084/api/subscription
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       mysql:
         condition: service_healthy
@@ -229,6 +231,7 @@ services:
     env_file:
       - .env
     environment:
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-PSlideAI}
       RABBIT_HOST: rabbitmq
       RABBIT_PORT: 5672
       RABBIT_USER: ${RABBIT_USER:-ai_user}

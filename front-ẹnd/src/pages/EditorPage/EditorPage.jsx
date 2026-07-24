@@ -1,16 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
-import EditableSlide from '../../components/slides/EditableSlide';
 import ElementCanvas from '../../components/slides/ElementCanvas';
-import SlideRenderer from '../../components/slides/SlideRenderer';
 import { projectService } from '../../services/documentService';
 import { exportSlidesToPptx } from '../../services/pptxExportService';
 import { formatSlidePage, toSlidePageUpdate } from '../../utils/slideMapping';
 import {
   ChevronLeft, ChevronRight, Download, ArrowLeft,
   LayoutTemplate, Check, Loader2, Maximize2, Minimize2,
-  Info, Palette, Save, Sparkles, X, FileText, Play, Presentation, Cloud, CloudOff, Undo2, Redo2
+  Info, Palette, Save, Sparkles, X, FileText, Play, Presentation, Cloud, CloudOff,
+  Undo2, Redo2, Copy, Trash2, GripVertical, Plus, ZoomIn, ZoomOut
 } from 'lucide-react';
 import './EditorPage.css';
 
@@ -85,6 +84,26 @@ const TEMPLATES = [
 const DEFAULT_LEFT_PANEL_WIDTH = 180;
 const DEFAULT_RIGHT_PANEL_WIDTH = 390;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const SLIDE_LAYOUTS = [
+  { value: 'title', label: 'Tiêu đề' },
+  { value: 'content', label: 'Nội dung' },
+  { value: 'imageText', label: 'Ảnh + chữ' },
+  { value: 'twoColumn', label: 'Hai cột' },
+  { value: 'quote', label: 'Trích dẫn' },
+  { value: 'table', label: 'Bảng' },
+  { value: 'chart', label: 'Biểu đồ' },
+  { value: 'thankyou', label: 'Kết thúc' },
+];
+
+function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
+  return (
+    <div style={{ width: 960 * scale, height: 540 * scale, overflow: 'hidden' }}>
+      <div style={{ width: 960, height: 540, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+        <ElementCanvas slide={slide} theme={theme} scale={1} readonly />
+      </div>
+    </div>
+  );
+}
 
 export default function EditorPage() {
   const { id } = useParams();
@@ -94,7 +113,9 @@ export default function EditorPage() {
 
   // ── State ──
   const [activeIdx, setActiveIdx] = useState(0);
+  const [selectedSlideIndexes, setSelectedSlideIndexes] = useState(() => new Set([0]));
   const [exporting, setExporting] = useState(false);
+  const [showPptxMenu, setShowPptxMenu] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveState, setSaveState] = useState('saved');
@@ -111,13 +132,21 @@ export default function EditorPage() {
   const [exportsList, setExportsList] = useState([]);
   const [loadingExports, setLoadingExports] = useState(false);
   const [loadingSlides, setLoadingSlides] = useState(true);
+  const [generationProgress, setGenerationProgress] = useState({ active: false, value: 0, status: 'Đang tạo slide...' });
   const [leftPanelWidth, setLeftPanelWidth] = useState(() => Number(localStorage.getItem('editor-left-panel-width')) || DEFAULT_LEFT_PANEL_WIDTH);
   const [rightPanelWidth, setRightPanelWidth] = useState(() => Number(localStorage.getItem('editor-right-panel-width')) || DEFAULT_RIGHT_PANEL_WIDTH);
   const [resizingPanel, setResizingPanel] = useState(null);
+  const [draggedSlideIndex, setDraggedSlideIndex] = useState(null);
   const [centerSize, setCenterSize] = useState({ width: 900, height: 600 });
+  const [zoomPercent, setZoomPercent] = useState(100);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [savingTitle, setSavingTitle] = useState(false);
   const slideRef = useRef(null);
   const exportStageRef = useRef(null);
   const centerRef = useRef(null);
+  const thumbsRef = useRef(null);
+  const slideSelectionAnchorRef = useRef(0);
   const presentationRef = useRef(null);
   const editVersionRef = useRef(0);
   const slidesRef = useRef([]);
@@ -130,6 +159,7 @@ export default function EditorPage() {
   const wheelAccumulatorRef = useRef(0);
   const wheelResetRef = useRef(null);
   const wheelLockedUntilRef = useRef(0);
+  const titleSaveCancelledRef = useRef(false);
   const [historyVersion, setHistoryVersion] = useState(0);
 
   // ── Effects ──
@@ -151,6 +181,7 @@ export default function EditorPage() {
           setHistoryVersion((version) => version + 1);
           hasUnsavedChangesRef.current = false;
           setSlides(formattedSlides);
+          setSelectedSlideIndexes(new Set(formattedSlides.length ? [0] : []));
           setHasUnsavedChanges(false);
           setSaveState('saved');
           if (project.status !== 1) {
@@ -179,7 +210,12 @@ export default function EditorPage() {
     if (!center) return undefined;
 
     const handleWheel = (event) => {
-      if (event.ctrlKey || event.metaKey || document.activeElement?.isContentEditable) return;
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        setZoomPercent((value) => clamp(value + (event.deltaY < 0 ? 10 : -10), 50, 150));
+        return;
+      }
+      if (document.activeElement?.isContentEditable) return;
       if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
       event.preventDefault();
 
@@ -222,6 +258,51 @@ export default function EditorPage() {
       fetchExports();
     }
   }, [id, projects]);
+
+  useEffect(() => {
+    const project = projects.find((item) => item.id === id);
+    const status = typeof project?.status === 'string' ? project.status.toUpperCase() : project?.status;
+    const stillProcessing = status === 0 || status === 'CREATE' || status === 'PROCESSING';
+    if (!project || (!stillProcessing && slides.length > 0)) {
+      setGenerationProgress((current) => current.active ? { ...current, active: false } : current);
+      return undefined;
+    }
+
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const progress = await projectService.getProgress(id);
+        if (disposed) return;
+        const value = Math.max(0, Math.min(100, Number(progress?.progress) || 0));
+        setGenerationProgress({
+          active: true,
+          value,
+          status: progress?.errorMessage || progress?.aiStatus || 'AI đang tạo nội dung và hình ảnh...',
+        });
+        const done = progress?.projectStatus === 1 || progress?.aiStatus === 'completed' || value >= 100;
+        if (done) {
+          const pages = await projectService.getSlidePages(id);
+          if (disposed || !Array.isArray(pages) || !pages.length) return;
+          const formattedSlides = pages.map(formatSlidePage);
+          slidesRef.current = formattedSlides;
+          setSlides(formattedSlides);
+          setSelectedSlideIndexes(new Set([0]));
+          setGenerationProgress({ active: false, value: 100, status: 'Hoàn thành' });
+          updateProject(id, { ...project, status: 1 });
+        }
+      } catch (error) {
+        if (!disposed) {
+          setGenerationProgress((current) => ({ ...current, active: true, status: error.message || 'Đang chờ máy chủ xử lý...' }));
+        }
+      }
+    };
+    poll();
+    const intervalId = window.setInterval(poll, 2500);
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [id, projects, slides.length, updateProject]);
 
   useEffect(() => {
     if (!centerRef.current || typeof ResizeObserver === 'undefined') return undefined;
@@ -350,12 +431,148 @@ export default function EditorPage() {
     applyHistorySnapshot(next);
   }, [applyHistorySnapshot]);
 
+  const handleDeckUpdate = useCallback((nextSlides, nextActiveIdx) => {
+    undoStackRef.current.push(slidesRef.current);
+    if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+    redoStackRef.current = [];
+    lastHistoryAtRef.current = 0;
+    lastHistorySlideRef.current = -1;
+    slidesRef.current = nextSlides;
+    setSlides(nextSlides);
+    setActiveIdx(Math.max(0, Math.min(nextActiveIdx, nextSlides.length - 1)));
+    editVersionRef.current += 1;
+    hasUnsavedChangesRef.current = true;
+    setHasUnsavedChanges(true);
+    setSaveState('pending');
+    setHistoryVersion((version) => version + 1);
+  }, []);
+
+  const duplicateSlide = useCallback((index) => {
+    const duplicate = structuredClone(slidesRef.current[index]);
+    delete duplicate.id;
+    delete duplicate.pageIndex;
+    const nextSlides = [...slidesRef.current];
+    nextSlides.splice(index + 1, 0, duplicate);
+    handleDeckUpdate(nextSlides, index + 1);
+    addToast('Đã nhân bản slide', 'success');
+  }, [addToast, handleDeckUpdate]);
+
+  const addSlide = useCallback((afterIndex = activeIdx) => {
+    const blankSlide = {
+      type: 'content',
+      title: '',
+      bullets: [],
+      notes: '',
+      imageUrl: '',
+      chart: null,
+      table: null,
+      richText: {},
+      elements: [],
+      primaryVisual: '',
+      likelyMultiPptxSlides: false,
+    };
+    const insertIndex = Math.max(0, Math.min(afterIndex + 1, slidesRef.current.length));
+    const nextSlides = [...slidesRef.current];
+    nextSlides.splice(insertIndex, 0, blankSlide);
+    handleDeckUpdate(nextSlides, insertIndex);
+    addToast('Đã thêm slide mới', 'success');
+  }, [activeIdx, addToast, handleDeckUpdate]);
+
+  const deleteSlide = useCallback((index) => {
+    if (slidesRef.current.length <= 1) {
+      addToast('Bài trình chiếu cần ít nhất một slide', 'warning');
+      return;
+    }
+    const nextSlides = slidesRef.current.filter((_, slideIndex) => slideIndex !== index);
+    const nextActive = activeIdx > index ? activeIdx - 1 : Math.min(activeIdx, nextSlides.length - 1);
+    handleDeckUpdate(nextSlides, nextActive);
+    addToast('Đã xóa slide', 'success');
+  }, [activeIdx, addToast, handleDeckUpdate]);
+
+  const reorderSlides = useCallback((fromIndex, toIndex) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    const nextSlides = [...slidesRef.current];
+    const [moved] = nextSlides.splice(fromIndex, 1);
+    nextSlides.splice(toIndex, 0, moved);
+    let nextActive = activeIdx;
+    if (activeIdx === fromIndex) nextActive = toIndex;
+    else if (fromIndex < activeIdx && toIndex >= activeIdx) nextActive = activeIdx - 1;
+    else if (fromIndex > activeIdx && toIndex <= activeIdx) nextActive = activeIdx + 1;
+    handleDeckUpdate(nextSlides, nextActive);
+  }, [activeIdx, handleDeckUpdate]);
+
+  const changeSlideLayout = useCallback((nextType) => {
+    const slide = slidesRef.current[activeIdx];
+    if (!slide || slide.type === nextType) return;
+    const sourceLines = Array.isArray(slide.bullets) && slide.bullets.length
+      ? slide.bullets
+      : String(slide.text || slide.subtitle || slide.quote || '')
+        .split(/\r?\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const splitAt = Math.max(1, Math.ceil(sourceLines.length / 2));
+    const richText = {
+      ...(slide.richText || {}),
+      ...(slide.table ? { _savedTable: slide.table } : {}),
+      ...(slide.chart ? { _savedChart: slide.chart } : {}),
+      ...(slide.imageUrl ? { _savedImageUrl: slide.imageUrl } : {}),
+    };
+    const defaultTable = {
+      headers: ['Tiêu chí', 'Giá trị 1', 'Giá trị 2'],
+      rows: [['Nội dung', '', '']],
+    };
+    const defaultChart = {
+      type: 'bar',
+      labels: ['Mục 1', 'Mục 2', 'Mục 3'],
+      series: [{ name: 'Giá trị', values: [0, 0, 0] }],
+    };
+    const nextSlide = {
+      ...slide,
+      type: nextType,
+      richText,
+      table: nextType === 'table' ? slide.table || richText._savedTable || defaultTable : null,
+      chart: nextType === 'chart' ? slide.chart || richText._savedChart || defaultChart : null,
+      imageUrl: nextType === 'imageText' ? slide.imageUrl || richText._savedImageUrl || '' : '',
+      text: slide.text || sourceLines.join('\n'),
+      subtitle: slide.subtitle || sourceLines[0] || '',
+      quote: slide.quote || sourceLines[0] || slide.title || '',
+      left: slide.left || { heading: 'Nội dung 1', points: sourceLines.slice(0, splitAt) },
+      right: slide.right || { heading: 'Nội dung 2', points: sourceLines.slice(splitAt) },
+      primaryVisual: nextType === 'table' ? 'table' : nextType === 'chart' ? 'chart' : nextType === 'imageText' ? 'image' : '',
+      elements: [],
+    };
+    handleSlideUpdate(nextSlide);
+  }, [activeIdx, handleSlideUpdate]);
+
+  useEffect(() => {
+    const handleDeckShortcut = (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.target.closest?.('input, textarea, [contenteditable="true"]')) return;
+      const key = event.key.toLowerCase();
+      if (key === 'd') {
+        event.preventDefault();
+        duplicateSlide(activeIdx);
+      } else if (key === '=' || key === '+') {
+        event.preventDefault();
+        setZoomPercent((value) => Math.min(150, value + 10));
+      } else if (key === '-') {
+        event.preventDefault();
+        setZoomPercent((value) => Math.max(50, value - 10));
+      } else if (key === '0') {
+        event.preventDefault();
+        setZoomPercent(100);
+      }
+    };
+    window.addEventListener('keydown', handleDeckShortcut);
+    return () => window.removeEventListener('keydown', handleDeckShortcut);
+  }, [activeIdx, duplicateSlide]);
+
   const applySyncResult = useCallback((savedPages, savingVersion) => {
     if (Array.isArray(savedPages) && savedPages.length) {
       let changed = false;
       const reconciled = slidesRef.current.map((slide, index) => {
         const savedPage = savedPages.find((page) => page.pageIndex === index) || savedPages[index];
-        if (slide.id || !savedPage?.id) return slide;
+        if (!savedPage?.id || slide.id === savedPage.id) return slide;
         changed = true;
         return { ...slide, id: savedPage.id, pageIndex: savedPage.pageIndex ?? index };
       });
@@ -392,6 +609,27 @@ export default function EditorPage() {
     updateProject(id, { templateId: tmplId });
     addToast(`Template đổi sang "${tmpl.name}" ✓`, 'success');
   };
+
+  const selectThumbnail = useCallback((event, index) => {
+    thumbsRef.current?.focus({ preventScroll: true });
+    setActiveIdx(index);
+    if (event.shiftKey) {
+      const start = Math.min(slideSelectionAnchorRef.current, index);
+      const end = Math.max(slideSelectionAnchorRef.current, index);
+      setSelectedSlideIndexes(new Set(Array.from({ length: end - start + 1 }, (_, offset) => start + offset)));
+    } else if (event.ctrlKey || event.metaKey) {
+      setSelectedSlideIndexes((current) => {
+        const next = new Set(current);
+        if (next.has(index) && next.size > 1) next.delete(index);
+        else next.add(index);
+        return next;
+      });
+      slideSelectionAnchorRef.current = index;
+    } else {
+      setSelectedSlideIndexes(new Set([index]));
+      slideSelectionAnchorRef.current = index;
+    }
+  }, []);
 
   const handleTabClick = (tabId) => {
     if (rightTab === tabId) {
@@ -523,6 +761,80 @@ export default function EditorPage() {
     }
   };
 
+  const saveProjectTitle = async () => {
+    if (titleSaveCancelledRef.current) {
+      titleSaveCancelledRef.current = false;
+      setEditingTitle(false);
+      return;
+    }
+    const nextTitle = titleDraft.trim();
+    const currentProject = projects.find((item) => item.id === id);
+    if (!nextTitle || nextTitle === currentProject?.name) {
+      setTitleDraft(currentProject?.name || '');
+      setEditingTitle(false);
+      return;
+    }
+    setSavingTitle(true);
+    try {
+      const updated = await projectService.update(id, { name: nextTitle });
+      updateProject(id, { name: updated?.name || nextTitle });
+      setEditingTitle(false);
+      addToast('Đã đổi tên bài trình chiếu', 'success');
+    } catch (error) {
+      addToast(error.message || 'Không thể đổi tên bài trình chiếu', 'error');
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
+  const handleBackDashboard = async () => {
+    if (!hasUnsavedChangesRef.current || !slidesRef.current.length) {
+      navigate('/dashboard');
+      return;
+    }
+    setSaving(true);
+    setSaveState('saving');
+    try {
+      await projectService.syncSlidePages(id, slidesRef.current.map(toSlidePageUpdate));
+      hasUnsavedChangesRef.current = false;
+      setHasUnsavedChanges(false);
+      setSaveState('saved');
+      navigate('/dashboard');
+    } catch (error) {
+      setSaveState('error');
+      addToast(error.message || 'Không thể lưu trước khi rời editor', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleEditorShortcut = (event) => {
+      const targetIsEditable = event.target.closest?.('input, textarea, [contenteditable="true"]');
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (!saving && hasUnsavedChangesRef.current) handleSave();
+        return;
+      }
+      if (targetIsEditable || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key === 'PageDown') {
+        event.preventDefault();
+        setActiveIdx((index) => clamp(index + 1, 0, Math.max(0, slidesRef.current.length - 1)));
+      } else if (event.key === 'PageUp') {
+        event.preventDefault();
+        setActiveIdx((index) => clamp(index - 1, 0, Math.max(0, slidesRef.current.length - 1)));
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        setActiveIdx(0);
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        setActiveIdx(Math.max(0, slidesRef.current.length - 1));
+      }
+    };
+    window.addEventListener('keydown', handleEditorShortcut);
+    return () => window.removeEventListener('keydown', handleEditorShortcut);
+  }, [saving]);
+
   useEffect(() => {
     if (!hasUnsavedChanges || revising || exporting || saving || saveInFlightRef.current || !slides.length) return undefined;
 
@@ -553,7 +865,18 @@ export default function EditorPage() {
     }
   }, [id]);
 
+  useEffect(() => {
+    const warnBeforeUnload = (event) => {
+      if (!hasUnsavedChangesRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, []);
+
   const handleExportPPTX = async () => {
+    setShowPptxMenu(false);
     setExporting(true);
     addToast('Đang lưu slides trước khi xuất...', 'info');
 
@@ -565,16 +888,42 @@ export default function EditorPage() {
       addToast('Đang tạo file PPTX có thể chỉnh sửa...', 'info');
 
       const projectName = projects.find((p) => p.id === id)?.name || 'presentation';
+      const { captureSlides } = await import('../../services/visualExportService');
+      const slideSnapshots = await captureSlides(exportStageRef.current, { projectId: id });
       await exportSlidesToPptx({
         slides: slidesRef.current,
         theme: templateId,
         fileName: projectName,
+        slideSnapshots,
       });
 
       addToast('✅ Xuất PPTX thành công!', 'success');
     } catch (e) {
       console.error('PPTX export error:', e);
       addToast('Lỗi khi xuất PPTX, vui lòng thử lại', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportEditablePPTX = async () => {
+    setShowPptxMenu(false);
+    setExporting(true);
+    addToast('Đang tạo PPTX có thể chỉnh sửa...', 'info');
+    try {
+      await projectService.syncSlidePages(id, slidesRef.current.map(toSlidePageUpdate));
+      const projectName = projects.find((p) => p.id === id)?.name || 'presentation';
+      const { exportEditablePptx } = await import('../../services/editablePptxExportService');
+      await exportEditablePptx({
+        slides: slidesRef.current,
+        theme: templateId,
+        fileName: projectName,
+        projectId: id,
+      });
+      addToast('Xuất PPTX chỉnh sửa được thành công!', 'success');
+    } catch (error) {
+      console.error('Editable PPTX export error:', error);
+      addToast(error.message || 'Không thể xuất PPTX chỉnh sửa được', 'error');
     } finally {
       setExporting(false);
     }
@@ -587,7 +936,7 @@ export default function EditorPage() {
       await projectService.syncSlidePages(id, slidesRef.current.map(toSlidePageUpdate));
       const projectName = projects.find((p) => p.id === id)?.name || 'presentation';
       const { captureSlides, exportSnapshotsToPdf } = await import('../../services/visualExportService');
-      const slideSnapshots = await captureSlides(exportStageRef.current);
+      const slideSnapshots = await captureSlides(exportStageRef.current, { projectId: id });
       await exportSnapshotsToPdf(slideSnapshots, projectName);
       addToast('Xuất PDF thành công!', 'success');
     } catch (error) {
@@ -631,7 +980,8 @@ export default function EditorPage() {
 
   const { name: title, templateId = 'clean-white' } = project;
   const activeSlide = slides[activeIdx];
-  const scale = getScale();
+  const fitScale = getScale();
+  const scale = fitScale * zoomPercent / 100;
 
   const pptxExport = exportsList.find(exp => exp.exportType === 'PPTX' || exp.type === 'PPTX');
   const pptxUrl = pptxExport?.s3Url || pptxExport?.url || project.slideUrl || (project.status === 2 ? '#' : null);
@@ -641,11 +991,44 @@ export default function EditorPage() {
       {/* ── TOPBAR ── */}
       <div className="editor2-topbar">
         <div className="e2-top-left">
-          <button className="btn btn-ghost btn-sm" onClick={() => navigate('/dashboard')}>
+          <button className="btn btn-ghost btn-sm" onClick={handleBackDashboard}>
             <ArrowLeft size={15} /> Dashboard
           </button>
           <div className="e2-breadcrumb">
-            <span className="e2-pres-title">{title}</span>
+            {editingTitle ? (
+              <input
+                className="e2-pres-title-input"
+                value={titleDraft}
+                autoFocus
+                maxLength={160}
+                disabled={savingTitle}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={saveProjectTitle}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.currentTarget.blur();
+                  } else if (event.key === 'Escape') {
+                    titleSaveCancelledRef.current = true;
+                    setTitleDraft(title);
+                    setEditingTitle(false);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="e2-pres-title"
+                title="Đổi tên bài trình chiếu"
+                onClick={() => {
+                  titleSaveCancelledRef.current = false;
+                  setTitleDraft(title);
+                  setEditingTitle(true);
+                }}
+              >
+                {title}
+              </button>
+            )}
             <span className="e2-badge">{slides.length} slides</span>
             <span className="e2-template-chip" style={{ color: TEMPLATES.find(t=>t.id===templateId)?.colors?.primary || '#666' }}>
               {TEMPLATES.find((t) => t.id === templateId)?.name || templateId}
@@ -679,12 +1062,24 @@ export default function EditorPage() {
           <button 
             id="export-pptx-btn" 
             className="btn btn-primary btn-sm flex items-center gap-1" 
-            onClick={handleExportPPTX} 
+            onClick={() => setShowPptxMenu((open) => !open)}
             disabled={exporting || slides.length === 0} 
             style={{ background: '#27ae60', border: '1px solid #219653', color: 'white', height: 32 }}
           >
             {exporting ? <><Loader2 size={14} className="spin"/> Đang xuất...</> : <><Download size={14}/> Xuất PPTX</>}
           </button>
+          {showPptxMenu && (
+            <div className="e2-export-menu">
+              <button type="button" onClick={handleExportEditablePPTX}>
+                <strong>Chỉnh sửa được</strong>
+                <span>Text, ảnh, bảng và biểu đồ là object</span>
+              </button>
+              <button type="button" onClick={handleExportPPTX}>
+                <strong>Giữ nguyên giao diện</strong>
+                <span>Giống editor nhất, mỗi slide là ảnh</span>
+              </button>
+            </div>
+          )}
           <button className="btn btn-ghost btn-sm" onClick={handleExportPDF} disabled={exporting || slides.length === 0}>
             <FileText size={14}/> Xuất PDF
           </button>
@@ -693,7 +1088,10 @@ export default function EditorPage() {
 
       <div
         className="e2-formatbar"
-        style={{ left: leftPanelWidth + 6, right: rightPanelWidth + 86 }}
+        style={{
+          left: leftPanelWidth + 6,
+          right: rightPanelWidth + (rightTab ? 6 : 0),
+        }}
       >
         <div id="editor-format-toolbar-host" />
       </div>
@@ -701,13 +1099,52 @@ export default function EditorPage() {
       <div className="editor2-body">
         {/* ── LEFT: Slide thumbnails ── */}
         <div className="editor2-thumbs" style={{ width: leftPanelWidth }}>
-          <div className="thumbs-header"><LayoutTemplate size={14}/> <span>Slides</span></div>
-          <div className="thumbs-scroll">
+          <div className="thumbs-header">
+            <div><LayoutTemplate size={14}/> <span>Slides</span></div>
+            <button type="button" onClick={() => addSlide()} title="Thêm slide" aria-label="Thêm slide"><Plus size={14} /></button>
+          </div>
+          <div
+            className="thumbs-scroll"
+            ref={thumbsRef}
+            tabIndex={0}
+            aria-label="Danh sách slide"
+            onKeyDown={(event) => {
+              if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'a') return;
+              event.preventDefault();
+              setSelectedSlideIndexes(new Set(slides.map((_, index) => index)));
+            }}
+          >
             {slides.map((sl, i) => (
-              <div key={i} className={`thumb2 ${i === activeIdx ? 'active' : ''}`} onClick={() => setActiveIdx(i)}>
+              <div
+                key={`${sl.id || 'new'}-${i}`}
+                className={`thumb2 ${i === activeIdx ? 'active' : ''} ${selectedSlideIndexes.has(i) ? 'selected' : ''} ${i === draggedSlideIndex ? 'dragging' : ''}`}
+                draggable
+                onDragStart={(event) => {
+                  setDraggedSlideIndex(i);
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', String(i));
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const fromIndex = Number(event.dataTransfer.getData('text/plain'));
+                  if (Number.isInteger(fromIndex)) reorderSlides(fromIndex, i);
+                  setDraggedSlideIndex(null);
+                }}
+                onDragEnd={() => setDraggedSlideIndex(null)}
+                onClick={(event) => selectThumbnail(event, i)}
+              >
                 <span className="thumb2-num">{i + 1}</span>
                 <div className="thumb2-preview">
-                  <SlideRenderer slide={sl} theme={templateId} index={i} scale={Math.max(0.1, (leftPanelWidth - 42) / 960)} />
+                  <UnifiedSlideView slide={sl} theme={templateId} index={i} scale={Math.max(0.1, (leftPanelWidth - 42) / 960)} />
+                  <div className="thumb2-actions">
+                    <button type="button" title="Kéo để đổi thứ tự" aria-label="Kéo để đổi thứ tự"><GripVertical size={12} /></button>
+                    <button type="button" title="Nhân bản slide" aria-label="Nhân bản slide" onClick={(event) => { event.stopPropagation(); duplicateSlide(i); }}><Copy size={12} /></button>
+                    <button type="button" title="Xóa slide" aria-label="Xóa slide" onClick={(event) => { event.stopPropagation(); deleteSlide(i); }}><Trash2 size={12} /></button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -765,13 +1202,29 @@ export default function EditorPage() {
                       flexDirection: 'column',
                       gap: '10px'
                     }}>
-                      <span>📄 Chưa có slides</span>
-                      <span style={{ fontSize: '14px', color: '#666' }}>Slides sẽ hiển thị khi hoàn tất tạo</span>
+                      {generationProgress.active ? (
+                        <div className="e2-generation-wait">
+                          <Loader2 size={34} className="spin"/>
+                          <strong>Đang tạo slide với AI</strong>
+                          <div className="e2-generation-track"><span style={{ width: `${generationProgress.value}%` }}/></div>
+                          <span>{generationProgress.value}%</span>
+                          <small>{generationProgress.status}</small>
+                        </div>
+                      ) : (
+                        <>
+                          <span>Chưa có slides</span>
+                          <span style={{ fontSize: '14px', color: '#666' }}>Slides sẽ hiển thị khi hoàn tất tạo</span>
+                        </>
+                      )}
                     </div>
-                  ) : ['table', 'chart'].includes(activeSlide?.type) ? (
-                    <EditableSlide slide={activeSlide} theme={templateId} slideIndex={activeIdx} onUpdate={handleSlideUpdate}/>
                   ) : (
-                    <ElementCanvas slide={activeSlide} theme={templateId} scale={scale} onUpdate={handleSlideUpdate} onNotify={addToast}/>
+                    <ElementCanvas
+                      slide={activeSlide}
+                      theme={templateId}
+                      scale={scale}
+                      onUpdate={handleSlideUpdate}
+                      onNotify={addToast}
+                    />
                   )}
                   </div>
                 </div>
@@ -780,7 +1233,11 @@ export default function EditorPage() {
               {/* Slide indicator */}
               <div className="e2-slide-info">
                 <span className="e2-slide-counter">{activeIdx + 1} / {slides.length || 0}</span>
-                <span className="e2-edit-hint">💡 Click vào văn bản để chỉnh sửa trực tiếp</span>
+                <div className="e2-zoom-controls">
+                  <button type="button" onClick={() => setZoomPercent((value) => Math.max(50, value - 10))} disabled={zoomPercent <= 50} title="Thu nhỏ" aria-label="Thu nhỏ"><ZoomOut size={14} /></button>
+                  <button type="button" className="e2-zoom-value" onClick={() => setZoomPercent(100)} title="Vừa màn hình">{zoomPercent}%</button>
+                  <button type="button" onClick={() => setZoomPercent((value) => Math.min(150, value + 10))} disabled={zoomPercent >= 150} title="Phóng to" aria-label="Phóng to"><ZoomIn size={14} /></button>
+                </div>
               </div>
             </div>
 
@@ -937,7 +1394,12 @@ export default function EditorPage() {
                 {rightTab === 'info' && (
                   <div className="e2-info-panel">
                     <InfoRow label="Slide hiện tại" value={`${activeIdx + 1} / ${slides.length}`} />
-                    <InfoRow label="Loại slide" value={activeSlide?.type} />
+                    <label className="e2-layout-field">
+                      <span>Bố cục</span>
+                      <select value={activeSlide?.type || 'content'} onChange={(event) => changeSlideLayout(event.target.value)}>
+                        {SLIDE_LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
+                      </select>
+                    </label>
                     <InfoRow label="Template" value={TEMPLATES.find(t => t.id === templateId)?.name || templateId} />
                     <InfoRow label="Tiêu đề" value={activeSlide?.title || '—'} />
                     
@@ -968,11 +1430,9 @@ export default function EditorPage() {
                       />
                     </div>
 
-                    <div style={{ marginTop: 20 }}>
-                      <p style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)', lineHeight: 1.6 }}>
-                        💡 <strong>Hướng dẫn chỉnh sửa:</strong><br/>
-                        Click trực tiếp vào văn bản trên slide để sửa. Sau khi sửa xong, bấm Tab hoặc click ra ngoài để lưu.
-                      </p>
+                    <div className="e2-notes-meta">
+                      <span>{activeSlide?.notes?.trim().split(/\s+/).filter(Boolean).length || 0} từ</span>
+                      <span>{activeSlide?.notes?.length || 0} ký tự</span>
                     </div>
                   </div>
                 )}
@@ -999,7 +1459,7 @@ export default function EditorPage() {
       <div ref={exportStageRef} className="e2-export-stage" aria-hidden="true" style={{ position: 'fixed', left: -12000, top: 0, width: 960, pointerEvents: 'none' }}>
         {slides.map((slide, index) => (
           <div key={slide.id || index} data-export-slide style={{ width: 960, height: 540, overflow: 'hidden' }}>
-            <SlideRenderer slide={slide} theme={templateId} index={index} scale={1} />
+            <UnifiedSlideView slide={slide} theme={templateId} index={index} scale={1} />
           </div>
         ))}
       </div>
@@ -1022,7 +1482,7 @@ export default function EditorPage() {
               height: 540 * Math.min(presentationViewport.width / 960, presentationViewport.height / 540),
             }}
           >
-            <SlideRenderer
+            <UnifiedSlideView
               slide={activeSlide}
               theme={templateId}
               index={activeIdx}
@@ -1108,7 +1568,7 @@ function getMockSlides(topic) {
       type: 'thankyou',
       title: 'Cảm ơn!',
       subtitle: 'Rất mong nhận được câu hỏi và đóng góp ý kiến.',
-      contact: 'contact@genslideauto.com',
+      contact: 'contact@pslideai.com',
       imagePrompt: 'A simple thank you card',
       imageUrl: '',
       pageIndex: 4

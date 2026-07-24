@@ -27,7 +27,7 @@ const PROMPT_SUGGESTIONS = [
 
 
 export default function GeneratePage() {
-  const { addProject } = useProjectStore();
+  const { addProject, updateProject } = useProjectStore();
   const { addToast } = useUIStore();
   const navigate = useNavigate();
   const location = useLocation();
@@ -158,6 +158,9 @@ export default function GeneratePage() {
 
     try {
       setLoading(true);
+      setProgressVal(0);
+      setProgressStatus('Đang khởi tạo project...');
+      setShowProgress(true);
       const promptText = form.prompt.trim() || `Tạo slide từ tệp tin ${uploadedFileData.fileName}`;
       
       const project = await projectService.create(
@@ -188,6 +191,7 @@ export default function GeneratePage() {
           if (res.projectStatus === 1) {
             clearInterval(intervalId);
             setPollingIntervalId(null);
+            updateProject(project.id, { status: 1 });
             setShowProgress(false);
             setLoading(false);
             addToast('🎉 Tạo slide thành công!', 'success');
@@ -215,6 +219,7 @@ export default function GeneratePage() {
 
     } catch (err) {
       addToast(err.message || 'Tạo project thất bại', 'error');
+      setShowProgress(false);
       setLoading(false);
     }
   };

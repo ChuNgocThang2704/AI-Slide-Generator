@@ -48,7 +48,7 @@ public class PayOSPaymentStrategy implements PaymentStrategy {
 
         try {
             PaymentLinkItem item = PaymentLinkItem.builder()
-                    .name(request.getDescription() != null ? request.getDescription() : "Thanh toan AI Slide Generator")
+                    .name(request.getDescription() != null ? request.getDescription() : "Thanh toan PSlideAI")
                     .quantity(1)
                     .price(amount)
                     .build();
@@ -56,7 +56,7 @@ public class PayOSPaymentStrategy implements PaymentStrategy {
             CreatePaymentLinkRequest paymentData = CreatePaymentLinkRequest.builder()
                     .orderCode(paymentCode)
                     .amount(amount)
-                    .description(request.getDescription() != null ? request.getDescription() : "Thanh toan AI Slide Generator")
+                    .description(request.getDescription() != null ? request.getDescription() : "Thanh toan PSlideAI")
                     .returnUrl(request.getReturnUrl())
                     .cancelUrl(request.getCancelUrl())
                     .items(Collections.singletonList(item))

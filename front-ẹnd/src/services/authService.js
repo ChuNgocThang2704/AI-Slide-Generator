@@ -24,11 +24,13 @@ const buildAvatarUrl = (name) => {
 const mapUser = (userResponse) => {
   if (!userResponse) return null;
 
-  const roleNames = (userResponse.roles || []).map((role) => role.name);
-  const plan = roleNames.includes('USER_PRO')
-    ? 'pro'
-    : roleNames.includes('USER_EXTRA')
-      ? 'ultra'
+  const roleNames = (userResponse.roles || [])
+    .map((role) => role?.name || role?.code || role)
+    .filter(Boolean);
+  const plan = roleNames.includes('USER_ULTRA')
+    ? 'ultra'
+    : roleNames.includes('USER_PRO')
+      ? 'pro'
       : 'free';
 
   const name = userResponse.profile?.fullName || userResponse.username || userResponse.email?.split('@')[0] || 'User';
@@ -39,6 +41,8 @@ const mapUser = (userResponse) => {
     email: userResponse.email,
     name,
     avatar,
+    phoneNumber: userResponse.profile?.phoneNumber || '',
+    dateOfBirth: userResponse.profile?.dateOfBirth || '',
     plan,
     credits: 0,
     roles: userResponse.roles || [],
@@ -46,6 +50,16 @@ const mapUser = (userResponse) => {
 };
 
 export const authService = {
+  async getMe() {
+    const response = await apiClient.get('/users/my-info');
+    return mapUser(normalizeApiResponse(response.data));
+  },
+
+  async updateProfile(userId, updates) {
+    const response = await apiClient.post(`/users/${userId}`, updates);
+    return mapUser(normalizeApiResponse(response.data));
+  },
+
   async login(email, password) {
     const authResponse = await apiClient.post('/auth/login', { email, password });
     const authData = normalizeApiResponse(authResponse.data);

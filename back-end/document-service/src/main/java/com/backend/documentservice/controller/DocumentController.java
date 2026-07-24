@@ -20,6 +20,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -195,6 +197,15 @@ public class DocumentController {
         return ApiResponse.<String>builder()
                 .data(sourceDocumentService.generatePresignedViewUrl(id, currentUserId()))
                 .build();
+    }
+
+    @GetMapping("/projects/{id}/image-proxy")
+    public ResponseEntity<byte[]> proxyProjectImage(@PathVariable UUID id, @RequestParam String url) {
+        ProjectService.ProxiedImage image = projectService.proxyProjectImage(id, currentUserId(), url);
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .contentType(image.contentType())
+                .body(image.bytes());
     }
 
     @GetMapping("/source-documents/view-url")

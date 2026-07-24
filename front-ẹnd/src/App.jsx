@@ -15,6 +15,8 @@ import EditorPage from './pages/EditorPage/EditorPage';
 import PricingPage from './pages/PricingPage/PricingPage';
 import DocumentsPage from './pages/DocumentsPage/DocumentsPage';
 import AdminPage from './pages/AdminPage/AdminPage';
+import SettingsPage from './pages/SettingsPage/SettingsPage';
+import PaymentResultPage from './pages/PaymentResultPage/PaymentResultPage';
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuthStore();
@@ -150,6 +152,8 @@ export default function App() {
         {/* Public */}
         <Route path="/" element={<Layout><LandingPage /></Layout>} />
         <Route path="/pricing" element={<Layout><PricingPage /></Layout>} />
+        <Route path="/success" element={<PrivateRoute><Layout><PaymentResultPage /></Layout></PrivateRoute>} />
+        <Route path="/cancel" element={<PrivateRoute><Layout><PaymentResultPage cancelled /></Layout></PrivateRoute>} />
 
         {/* Auth only for non-logged-in */}
         <Route path="/login" element={
@@ -188,6 +192,11 @@ export default function App() {
         <Route path="/documents" element={
           <PrivateRoute>
             <Layout><DocumentsPage /></Layout>
+          </PrivateRoute>
+        } />
+        <Route path="/settings" element={
+          <PrivateRoute>
+            <Layout><SettingsPage /></Layout>
           </PrivateRoute>
         } />
         <Route path="/admin" element={

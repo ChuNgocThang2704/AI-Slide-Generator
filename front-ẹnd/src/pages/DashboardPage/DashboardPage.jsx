@@ -31,7 +31,7 @@ const getStatusBadge = (status) => {
 
 export default function DashboardPage() {
   const { user } = useAuthStore();
-  const { projects, setProjects, deleteProject } = useProjectStore();
+  const { projects, setProjects, updateProject, deleteProject } = useProjectStore();
   const { addToast } = useUIStore();
   const navigate = useNavigate();
 
@@ -39,15 +39,16 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState('all');
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null);
+  const [progressById, setProgressById] = useState({});
 
   // Fetch projects on mount
   useEffect(() => {
     loadProjects();
   }, []);
 
-  const loadProjects = async () => {
+  const loadProjects = async ({ silent = false } = {}) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await projectService.getAll(0, 100, '');
       console.log('Projects loaded:', data);
       if (data.items) {
@@ -55,17 +56,68 @@ export default function DashboardPage() {
       }
     } catch (err) {
       console.error('Load projects error:', err);
+      if (silent) return;
       addToast(err.message || 'Không thể tải projects', 'error');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
-  const filtered = projects.filter((p) =>
-    p.name?.toLowerCase().includes(search.toLowerCase())
-  );
+  const hasProcessingProjects = projects.some((project) => {
+    const status = typeof project.status === 'string' ? project.status.toUpperCase() : project.status;
+    return status === 0 || status === 'CREATE' || status === 'PROCESSING';
+  });
+
+  useEffect(() => {
+    if (!hasProcessingProjects) return undefined;
+
+    const refreshProcessing = async () => {
+      const processing = projects.filter((project) => {
+        const status = typeof project.status === 'string' ? project.status.toUpperCase() : project.status;
+        return status === 0 || status === 'CREATE' || status === 'PROCESSING';
+      });
+      const results = await Promise.allSettled(processing.map(async (project) => ({
+        id: project.id,
+        progress: await projectService.getProgress(project.id),
+      })));
+      results.forEach((result) => {
+        if (result.status !== 'fulfilled') return;
+        const task = result.value.progress;
+        const aiStatus = String(task?.aiStatus || '').toLowerCase();
+        if (Number(task?.progress) >= 100 || task?.projectStatus === 1 || aiStatus === 'completed') {
+          updateProject(result.value.id, { status: 1 });
+        }
+      });
+      setProgressById((current) => {
+        const next = { ...current };
+        results.forEach((result) => {
+          if (result.status === 'fulfilled') {
+            next[result.value.id] = result.value.progress;
+          }
+        });
+        return next;
+      });
+      loadProjects({ silent: true });
+    };
+    refreshProcessing();
+    const intervalId = window.setInterval(refreshProcessing, 3000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hasProcessingProjects, projects.length]);
+
+  const filtered = projects
+    .filter((p) => p.name?.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => activeTab === 'recent'
+      ? new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)
+      : 0)
+    .slice(0, activeTab === 'recent' ? 8 : undefined);
 
   const planInfo = PLAN_INFO[user?.plan || 'free'];
+  const upgradeInfo = user?.plan === 'ultra'
+    ? { title: 'Đã mở khóa Ultra', description: 'Toàn bộ tính năng cao cấp', clickable: false }
+    : user?.plan === 'pro'
+      ? { title: 'Nâng cấp Ultra', description: 'Giới hạn cao nhất + ảnh chất lượng cao', clickable: true }
+      : { title: 'Nâng cấp Pro', description: '20 slides/ngày + HD images', clickable: true };
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
@@ -140,14 +192,18 @@ export default function DashboardPage() {
               <div className="dsc-label">Gói hiện tại – {planInfo.price}</div>
             </div>
           </div>
-          <div className="dash-stat-card upgrade-card" onClick={() => navigate('/pricing')} style={{ cursor: 'pointer' }}>
+          <div
+            className={`dash-stat-card upgrade-card ${upgradeInfo.clickable ? '' : 'is-current-plan'}`}
+            onClick={upgradeInfo.clickable ? () => navigate('/pricing') : undefined}
+            style={{ cursor: upgradeInfo.clickable ? 'pointer' : 'default' }}
+          >
             <div className="upgrade-glow" />
             <div className="dsc-icon" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
               <Sparkles size={20} />
             </div>
             <div>
-              <div className="dsc-value" style={{ color: '#fbbf24' }}>Nâng cấp Pro</div>
-              <div className="dsc-label">20 slides/ngày + HD images</div>
+              <div className="dsc-value" style={{ color: '#fbbf24' }}>{upgradeInfo.title}</div>
+              <div className="dsc-label">{upgradeInfo.description}</div>
             </div>
           </div>
         </div>
@@ -192,6 +248,8 @@ export default function DashboardPage() {
         ) : (
           <div className="pres-grid">
             {filtered.map((pres) => {
+              const taskProgress = progressById[pres.id];
+              const progressPercent = Math.max(0, Math.min(100, Number(taskProgress?.progress) || 0));
               return (
                 <div key={pres.id} className="pres-card" onClick={() => handleOpen(pres)}>
                   <div className="pres-thumb" style={{
@@ -219,7 +277,12 @@ export default function DashboardPage() {
                     </div>
                     <div className="pres-meta">
                       {(() => {
-                        const badge = getStatusBadge(pres.status);
+                        const effectiveStatus = progressPercent >= 100
+                          || taskProgress?.projectStatus === 1
+                          || String(taskProgress?.aiStatus || '').toLowerCase() === 'completed'
+                          ? 1
+                          : pres.status;
+                        const badge = getStatusBadge(effectiveStatus);
                         return (
                           <span className="pres-template-tag" style={{ color: badge.color, background: badge.bg }}>
                             {badge.label}
@@ -227,6 +290,12 @@ export default function DashboardPage() {
                         );
                       })()}
                     </div>
+                    {progressPercent < 100 && (pres.status === 0 || ['CREATE', 'PROCESSING'].includes(String(pres.status).toUpperCase())) && (
+                      <div className="pres-progress" title={taskProgress?.aiStatus || 'Đang tạo slide'}>
+                        <div className="pres-progress-track"><span style={{ width: `${progressPercent}%` }}/></div>
+                        <span>{progressPercent}%</span>
+                      </div>
+                    )}
                     <div className="pres-date">
                       <Clock size={12} /> {formatDate(pres.createdAt)}
                     </div>

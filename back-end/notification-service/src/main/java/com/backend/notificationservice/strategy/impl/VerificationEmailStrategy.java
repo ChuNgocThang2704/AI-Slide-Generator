@@ -9,7 +9,7 @@ import java.util.Map;
 public class VerificationEmailStrategy implements EmailStrategy {
     @Override
     public String getSubject(Map<String, Object> payload) {
-        return "[AI Slide] Mã xác thực đăng ký tài khoản";
+        return "[PSlideAI] Mã xác thực tài khoản";
     }
 
     @Override

@@ -29,5 +29,7 @@ spring:
     mode: HTML
     encoding: UTF-8
 app:
+  mail:
+    from-name: ${MAIL_FROM_NAME:PSlideAI}
   rabbitmq:
     queue: ${RABBIT_QUEUE:notification_queue}

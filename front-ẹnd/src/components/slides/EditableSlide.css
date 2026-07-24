@@ -9,6 +9,11 @@
   box-shadow: 0 20px 60px rgba(0,0,0,0.35);
 }
 
+.editable-slide-root.readonly {
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Base slide */
 .es-slide {
   width: 100%; height: 100%;
@@ -132,25 +137,78 @@
   font-weight: 400;
   line-height: 1.5;
   min-height: 100px;
+  height: var(--bullet-box-height, auto);
   padding: 4px 0;
   font-family: inherit;
 }
 
 .es-bullets-editable ul {
-  list-style-type: disc;
-  padding-left: 20px;
+  list-style: none;
+  padding-left: 0;
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--bullet-gap, 12px);
   font-family: inherit;
+  counter-reset: slide-bullet;
+  min-height: 100%;
+  justify-content: space-evenly;
 }
 
 .es-bullets-editable li {
+  position: relative;
   line-height: 1.6;
-  font-size: 14px;
-  padding: 2px 0;
+  font-size: inherit;
+  padding: 2px 0 2px 34px;
   font-family: inherit;
+  counter-increment: slide-bullet;
+}
+
+.es-bullets-editable li::before {
+  content: counter(slide-bullet, decimal-leading-zero) ".";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 26px;
+  color: var(--bullet-accent, currentColor);
+  font-family: inherit;
+  font-size: clamp(9px, .75em, 12px);
+  font-weight: 800;
+  line-height: 2.15;
+}
+
+.es-themed-bullets {
+  width: 100%;
+  max-width: 800px;
+  max-height: 390px;
+  overflow: hidden;
+}
+
+.editable-slide-root[data-theme="soft-blue"] .es-bullets-editable,
+.editable-slide-root[data-theme="royal-purple"] .es-bullets-editable {
+  --bullet-accent: #ed7d31;
+}
+
+.editable-slide-root[data-theme="clean-white"] .es-bullets-editable {
+  --bullet-accent: #111827;
+}
+
+.editable-slide-root[data-theme="modern-dark"] .es-bullets-editable,
+.editable-slide-root[data-theme="gradient-border"] .es-bullets-editable,
+.editable-slide-root[data-theme="tech-purple"] .es-bullets-editable {
+  --bullet-accent: #8b7cff;
+}
+
+.editable-slide-root[data-theme="playful-yellow"] .es-bullets-editable {
+  --bullet-accent: #f59e0b;
+}
+
+.editable-slide-root[data-theme="blue-planet"] .es-bullets-editable {
+  --bullet-accent: #22d3ee;
+}
+
+.editable-slide-root[data-theme="nature-green"] .es-bullets-editable {
+  --bullet-accent: #34d399;
 }
 
 /* ── TWO COLUMN ── */
@@ -174,6 +232,21 @@
   border-radius: 6px;
 }
 
+.es-point-list ul {
+  list-style: disc;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.es-point-list li {
+  margin: 0 0 5px;
+}
+
+.es-point-list {
+  max-height: 300px;
+  overflow: hidden;
+}
+
 /* ── IMAGE + TEXT ── */
 .es-imgtext-inner {
   width: 100%; display: grid;
@@ -181,11 +254,46 @@
 }
 
 .es-img-box {
+  position: relative;
   border-radius: 14px; border: 1px solid;
   aspect-ratio: 4/3; display: flex;
   flex-direction: column; align-items: center;
   justify-content: center; gap: 8px;
   cursor: pointer;
+}
+
+.es-image-input {
+  display: none;
+}
+
+.es-image-actions {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 4;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.es-img-box:hover .es-image-actions,
+.es-image-actions:focus-within {
+  opacity: 1;
+}
+
+.es-image-actions button {
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 5px;
+  background: rgba(12, 12, 20, 0.86);
+  color: #fff;
+  padding: 6px 9px;
+  font: 600 11px/1.2 Inter, sans-serif;
+  cursor: pointer;
+}
+
+.es-image-actions button:hover {
+  background: rgba(22, 22, 34, 0.96);
 }
 
 .es-emoji {
@@ -273,9 +381,7 @@
 
 /* ─── 2. GRID LAYOUT FOR BULLET POINTS IN TECH-PURPLE ─── */
 .editable-slide-root[data-theme="tech-purple"] .es-bullets-editable {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  display: block;
 }
 
 /* Bracket styling for tech-purple main title */
@@ -715,6 +821,102 @@
   border-radius: 30% 70% 30% 70% / 50% 50% 50% 50%;
   transform: rotate(45deg);
   z-index: -1;
+}
+
+/* Content-aware image/text layouts. Kept last to override fixed template coordinates. */
+.editable-slide-root .es-imgtext.density-dense .es-imgtext-content {
+  width: 470px !important;
+  gap: 14px !important;
+}
+
+.editable-slide-root .es-imgtext.density-dense .es-section-title {
+  font-size: 27px !important;
+  line-height: 1.12 !important;
+}
+
+.editable-slide-root .es-imgtext.density-dense .es-body-text {
+  font-size: 14.5px !important;
+  line-height: 1.45 !important;
+  max-height: 350px;
+  overflow: hidden;
+}
+
+.editable-slide-root .es-imgtext.density-dense .es-img-box {
+  left: 560px !important;
+  top: 125px !important;
+  width: 320px !important;
+  height: 270px !important;
+}
+
+.editable-slide-root .es-imgtext.density-extreme .es-imgtext-content {
+  width: 530px !important;
+  top: 26px !important;
+  gap: 10px !important;
+}
+
+.editable-slide-root .es-imgtext.density-extreme .es-section-title {
+  font-size: 25px !important;
+  line-height: 1.08 !important;
+}
+
+.editable-slide-root .es-imgtext.density-extreme .es-body-text {
+  font-size: 13.5px !important;
+  line-height: 1.35 !important;
+  max-height: 390px;
+  overflow: hidden;
+}
+
+.editable-slide-root .es-imgtext.density-extreme .es-img-box {
+  left: 625px !important;
+  top: 145px !important;
+  width: 250px !important;
+  height: 220px !important;
+}
+
+.editable-slide-root .es-imgtext .es-img-box > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.editable-slide-root .es-structured .es-content-inner {
+  height: 100%;
+  min-height: 0;
+}
+
+.editable-slide-root[data-theme] .es-structured .es-bar {
+  position: static !important;
+  width: 48px !important;
+  height: 4px !important;
+  flex: 0 0 4px;
+  margin: 0 !important;
+  border-radius: 999px !important;
+}
+
+.editable-slide-root .es-structured.density-dense .es-section-title {
+  font-size: 27px !important;
+}
+
+.editable-slide-root .es-structured.density-extreme .es-section-title {
+  font-size: 23px !important;
+}
+
+.editable-slide-root .es-structured.density-dense .sv-table th,
+.editable-slide-root .es-structured.density-dense .sv-table td {
+  padding: 7px 8px;
+}
+
+.editable-slide-root .es-structured.density-extreme .sv-table th,
+.editable-slide-root .es-structured.density-extreme .sv-table td {
+  padding: 5px 6px;
+  line-height: 1.18;
+}
+
+.editable-slide-root .es-structured.density-extreme .sv-plot {
+  gap: 7px;
+  padding-top: 22px;
 }
 
 /* Ensure images clip to the circular container */

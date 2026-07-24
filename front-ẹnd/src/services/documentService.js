@@ -66,6 +66,14 @@ export const projectService = {
     return normalizeApiResponse(response.data);
   },
 
+  async getProjectImage(projectId, url) {
+    const response = await apiClient.get(`/document/projects/${projectId}/image-proxy`, {
+      params: { url },
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
   // Cập nhật 1 slide page
   async updateSlidePage(projectId, pageId, updates) {
     const response = await apiClient.post(

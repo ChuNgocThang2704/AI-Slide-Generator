@@ -159,6 +159,16 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
   const shapes = [shape(2, 'Background', 0, 0, SLIDE_W, SLIDE_H, t.bg, t.bg)];
   const number = String(index + 1).padStart(2, '0');
   let nextId = 10;
+  const layoutOverrides = slide.richText?.__layoutOverrides || {};
+  const placed = (key, x, y, w, h) => {
+    const value = layoutOverrides[key] || {};
+    return {
+      x: x + (Number(value.x) || 0) / 72,
+      y: y + (Number(value.y) || 0) / 72,
+      w: value.width ? Number(value.width) / 72 : w,
+      h: value.height ? Number(value.height) / 72 : h,
+    };
+  };
 
   shapes.push(shape(nextId++, 'Accent', 0.65, 0.55, 0.08, 0.55, t.accent, t.accent));
 
@@ -175,6 +185,46 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
           const placement = imagePlacement(element, imageRef, x, y, w, h);
           shapes.push(imagePic(nextId++, 'Canvas image', imageRef.relId, placement.x, placement.y, placement.w, placement.h, { rotation: element.rotation, crop: placement.crop }));
         }
+        return;
+      }
+      if (element.type === 'table') {
+        const table = element.data || slide.table || {};
+        const headers = Array.isArray(table.headers) ? table.headers : [];
+        const rows = Array.isArray(table.rows) ? table.rows.slice(0, 8) : [];
+        const colCount = Math.max(headers.length, 1);
+        const colWidth = w / colCount;
+        const rowHeight = Math.min(0.58, h / Math.max(rows.length + 1, 1));
+        headers.forEach((header, colIndex) => {
+          shapes.push(textBox(nextId++, `Canvas table header ${colIndex + 1}`,
+            x + colIndex * colWidth, y, colWidth, rowHeight,
+            [paragraph(String(header ?? ''), { size: 10, color: t.text, bold: true })],
+            { fill: t.surface, line: t.primary, valign: 'mid' }));
+        });
+        rows.forEach((row, rowIndex) => headers.forEach((_, colIndex) => {
+          shapes.push(textBox(nextId++, `Canvas table cell ${rowIndex + 1}-${colIndex + 1}`,
+            x + colIndex * colWidth, y + (rowIndex + 1) * rowHeight, colWidth, rowHeight,
+            [paragraph(String(row?.[colIndex] ?? ''), { size: 9, color: t.textSub })],
+            { line: t.surface, valign: 'mid' }));
+        }));
+        return;
+      }
+      if (element.type === 'chart') {
+        const chart = element.data || slide.chart || {};
+        const labels = chart.labels || chart.categories || [];
+        const values = (chart.series?.[0]?.values || chart.values || []).map((value) => Number(value) || 0);
+        const maxValue = Math.max(...values.map(Math.abs), 1);
+        const groupWidth = w / Math.max(labels.length, 1);
+        labels.slice(0, 10).forEach((label, valueIndex) => {
+          const value = values[valueIndex] || 0;
+          const barHeight = Math.max(0.06, Math.abs(value) / maxValue * Math.max(0.25, h - 0.55));
+          const barX = x + valueIndex * groupWidth + groupWidth * 0.25;
+          shapes.push(shape(nextId++, `Canvas chart bar ${valueIndex + 1}`, barX,
+            y + h - 0.38 - barHeight, groupWidth * 0.5, barHeight,
+            valueIndex % 2 ? t.primary : t.accent, null, 'roundRect'));
+          shapes.push(textBox(nextId++, `Canvas chart label ${valueIndex + 1}`,
+            x + valueIndex * groupWidth, y + h - 0.32, groupWidth, 0.3,
+            [paragraph(String(label), { size: 8, color: t.textSub, align: 'ctr' })], { margin: 0 }));
+        });
         return;
       }
       if (element.type !== 'text') return;
@@ -196,17 +246,20 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
   }
 
   if (slide.type === 'title') {
-    shapes.push(textBox(nextId++, 'Title', 1.1, 1.75, 8.1, 1.8, [
+    const titleBox = placed('title', 1.1, 1.75, 8.1, 1.8);
+    const subtitleBox = placed('subtitle', 1.12, 3.45, 7.3, 0.9);
+    shapes.push(textBox(nextId++, 'Title', titleBox.x, titleBox.y, titleBox.w, titleBox.h, [
       paragraph(slide.title || '', { size: 34, color: t.text, bold: true }),
     ], { margin: 0, valign: 'mid' }));
     if (slide.subtitle) {
-      shapes.push(textBox(nextId++, 'Subtitle', 1.12, 3.45, 7.3, 0.9, [
+      shapes.push(textBox(nextId++, 'Subtitle', subtitleBox.x, subtitleBox.y, subtitleBox.w, subtitleBox.h, [
         paragraph(slide.subtitle, { size: 16, color: t.textSub }),
       ], { margin: 0 }));
     }
     shapes.push(shape(nextId++, 'Divider', 1.12, 4.65, 1.2, 0.05, t.accent, t.accent));
   } else if (slide.type === 'twoColumn') {
-    shapes.push(textBox(nextId++, 'Title', 0.95, 0.55, 11.2, 0.75, [
+    const titleBox = placed('title', 0.95, 0.55, 11.2, 0.75);
+    shapes.push(textBox(nextId++, 'Title', titleBox.x, titleBox.y, titleBox.w, titleBox.h, [
       paragraph(slide.title || '', { size: 26, color: t.text, bold: true }),
     ], { margin: 0 }));
     const cols = [
@@ -225,18 +278,21 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
     const imageOnRight = ['modern-dark', 'blue-planet', 'tech-purple'].includes(theme);
     const textX = imageOnRight ? 0.95 : 5.95;
     const imageX = imageOnRight ? 8.1 : 0.95;
+    const imageBox = placed('image', imageX, 1.65, 4.1, 3.2);
+    const titleBox = placed('title', textX, 1.1, 5.2, 0.95);
+    const bodyBox = placed('text', textX, 2.15, 5.2, 3.0);
     if (imageRefs[0]?.relId) {
-      shapes.push(imagePic(nextId++, 'Slide image', imageRefs[0].relId, imageX, 1.65, 4.1, 3.2));
+      shapes.push(imagePic(nextId++, 'Slide image', imageRefs[0].relId, imageBox.x, imageBox.y, imageBox.w, imageBox.h));
     } else {
       shapes.push(shape(nextId++, 'Image placeholder', imageX, 1.65, 4.1, 3.2, t.surface, t.primary, 'roundRect'));
       shapes.push(textBox(nextId++, 'Image label', imageX + 0.35, 2.75, 3.4, 0.6, [
         paragraph(slide.imageEmoji || 'Image', { size: 18, color: t.textSub, align: 'ctr' }),
       ], { margin: 0, valign: 'mid' }));
     }
-    shapes.push(textBox(nextId++, 'Title', textX, 1.1, 5.2, 0.95, [
+    shapes.push(textBox(nextId++, 'Title', titleBox.x, titleBox.y, titleBox.w, titleBox.h, [
       paragraph(slide.title || '', { size: 24, color: t.text, bold: true }),
     ], { margin: 0 }));
-    shapes.push(textBox(nextId++, 'Body', textX, 2.15, 5.2, 3.0, [
+    shapes.push(textBox(nextId++, 'Body', bodyBox.x, bodyBox.y, bodyBox.w, bodyBox.h, [
       paragraph(slide.text || (slide.bullets || []).join('\n'), { size: 15, color: t.textSub }),
     ], { margin: 0 }));
   } else if (slide.type === 'table') {
@@ -289,10 +345,12 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
     }
   } else {
     const bullets = Array.isArray(slide.bullets) ? slide.bullets : [];
-    shapes.push(textBox(nextId++, 'Title', 0.95, 0.55, 11.2, 0.8, [
+    const titleBox = placed('title', 0.95, 0.55, 11.2, 0.8);
+    const bulletsBox = placed('bullets', 1.05, 1.65, 10.8, 4.65);
+    shapes.push(textBox(nextId++, 'Title', titleBox.x, titleBox.y, titleBox.w, titleBox.h, [
       paragraph(slide.title || '', { size: 25, color: t.text, bold: true }),
     ], { margin: 0 }));
-    shapes.push(textBox(nextId++, 'Bullets', 1.05, 1.65, 10.8, 4.65, bullets.map((bullet) => (
+    shapes.push(textBox(nextId++, 'Bullets', bulletsBox.x, bulletsBox.y, bulletsBox.w, bulletsBox.h, bullets.map((bullet) => (
       paragraph(bullet, { size: bullets.length > 5 ? 13 : 15, color: t.textSub, bullet: true })
     )), { margin: 0 }));
   }

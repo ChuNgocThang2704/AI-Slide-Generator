@@ -107,7 +107,7 @@ const THEMES = {
 // ─────────────────────────────────────────────
 // Decorative background shapes per template
 // ─────────────────────────────────────────────
-function BgDecorations({ theme }) {
+export function BgDecorations({ theme }) {
   const t = THEMES[theme] || THEMES['clean-white'];
 
   if (t.id === 'royal-purple') {
@@ -395,17 +395,21 @@ function SoftBlueTitleSlide({ slide, theme }) {
 function SoftBlueContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = titleFontSize(count);
+  const badgeSize = count <= 2 ? 32 : count <= 3 ? 28 : 24;
+  const badgeFontSz = count <= 2 ? 14 : count <= 3 ? 12 : 11;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
       <div style={{ position: 'absolute', left: 48, top: 48, width: 5, height: 40, borderRadius: 999, background: t.accentGrad }} />
-      <div style={{ position: 'absolute', left: 64, top: 46, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, color: t.text, lineHeight: 1.2 }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 700, color: t.text, lineHeight: 1.2, marginBottom: count <= 2 ? 32 : count <= 3 ? 24 : 18 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
           {slide.bullets?.map((b, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
-              <div style={{ flexShrink: 0, width: 28, height: 28, borderRadius: '50%', background: t.accentGrad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#fff', fontFamily: t.fontTitle, marginTop: 1 }}>{String(i + 1).padStart(2, '0')}</div>
-              <span style={{ fontFamily: t.fontBody, fontSize: 16.5, color: t.textSub, lineHeight: 1.55, fontWeight: 400 }}>{b}</span>
+              <div style={{ flexShrink: 0, width: badgeSize, height: badgeSize, borderRadius: '50%', background: t.accentGrad, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: badgeFontSz, fontWeight: 700, color: '#fff', fontFamily: t.fontTitle, marginTop: 2 }}>{String(i + 1).padStart(2, '0')}</div>
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.6, fontWeight: 400 }}>{b}</span>
             </div>
           ))}
         </div>
@@ -415,14 +419,33 @@ function SoftBlueContentSlide({ slide, theme, index }) {
   );
 }
 
+
 // Helper: compute gap between bullet items based on count
-// Fewer items → more spacing to avoid large blank area at bottom
+// Adaptive — fewer items get tighter gap (content is already bigger), more items need less gap
 function bulletGap(count) {
-  if (count <= 2) return 36;
-  if (count <= 3) return 28;
-  if (count <= 4) return 20;
-  if (count <= 5) return 14;
-  return 10;
+  if (count <= 2) return 20;
+  if (count <= 3) return 16;
+  if (count <= 4) return 12;
+  if (count <= 5) return 10;
+  return 8;
+}
+
+// Helper: compute font size for bullet text based on count
+// Fewer bullets → bigger text to fill space nicely
+function bulletFontSize(count) {
+  if (count <= 2) return 20;
+  if (count <= 3) return 18;
+  if (count <= 4) return 16.5;
+  if (count <= 5) return 15.5;
+  return 14;
+}
+
+// Helper: compute font size for h2 title on content slides
+function titleFontSize(count) {
+  if (count <= 2) return 38;
+  if (count <= 3) return 35;
+  if (count <= 4) return 32;
+  return 30;
 }
 
 // ─────────────────────────────────────────────
@@ -433,17 +456,21 @@ function bulletGap(count) {
 function RoyalPurpleContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = titleFontSize(count);
+  const padV = count <= 2 ? 18 : count <= 3 ? 14 : count <= 4 ? 11 : 9;
+  const numFs = count <= 3 ? 15 : 13;
   return (
-    <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
+    <div className="slide-wrap slide-content" style={{ background: t.bgGrad, display: 'flex', flexDirection: 'column', padding: 64 }}>
       <BgDecorations theme={theme} />
-      <div style={{ position: 'absolute', left: 48, top: 48, width: 5, height: 44, borderRadius: 999, background: t.accentGrad }} />
-      <div style={{ position: 'absolute', left: 64, top: 44, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, color: t.text, lineHeight: 1.2 }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+        <div style={{ width: 5, height: 44, borderRadius: 999, background: t.accentGrad, marginBottom: count <= 2 ? 36 : count <= 3 ? 28 : 22 }} />
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 700, color: t.text, lineHeight: 1.2, marginBottom: count <= 2 ? 36 : count <= 3 ? 28 : 22 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
           {slide.bullets?.map((b, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 0, borderLeft: '3px solid', borderImage: `${t.accentGrad} 1`, background: 'rgba(153,72,255,0.07)', borderRadius: '0 10px 10px 0', padding: '10px 16px 10px 14px' }}>
-              <span style={{ color: t.accent, fontWeight: 700, fontFamily: t.fontTitle, fontSize: 13, marginRight: 10, marginTop: 2, flexShrink: 0 }}>{String(i+1).padStart(2,'0')}.</span>
-              <span style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.5 }}>{b}</span>
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 0, borderLeft: '3px solid', borderImage: `${t.accentGrad} 1`, background: 'rgba(153,72,255,0.07)', borderRadius: '0 10px 10px 0', padding: `${padV}px 16px ${padV}px 14px` }}>
+              <span style={{ color: t.accent, fontWeight: 700, fontFamily: t.fontTitle, fontSize: numFs, marginRight: 12, marginTop: 2, flexShrink: 0 }}>{String(i+1).padStart(2,'0')}.</span>
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.6 }}>{b}</span>
             </div>
           ))}
         </div>
@@ -457,18 +484,21 @@ function RoyalPurpleContentSlide({ slide, theme, index }) {
 function CleanWhiteContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const count = slide.bullets?.length || 0;
-  const padV = count <= 3 ? 20 : count <= 5 ? 14 : 10;
+  const fs = count <= 2 ? 21 : count <= 3 ? 18.5 : count <= 4 ? 17 : count <= 5 ? 15.5 : 14;
+  const tfs = count <= 2 ? 40 : count <= 3 ? 36 : count <= 4 ? 32 : 30;
+  const numFs = count <= 2 ? 40 : count <= 3 ? 32 : count <= 4 ? 26 : 22;
+  const padV = count <= 2 ? 28 : count <= 3 ? 22 : count <= 4 ? 16 : count <= 5 ? 12 : 8;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
       <div style={{ position: 'absolute', left: 48, top: 48, width: 4, height: 40, borderRadius: 999, background: t.accentGrad }} />
-      <div style={{ position: 'absolute', left: 64, top: 46, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 36, fontWeight: 400, color: t.text, lineHeight: 1.2, letterSpacing: '-0.3px' }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ position: 'absolute', left: 64, top: 46, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 400, color: t.text, lineHeight: 1.2, letterSpacing: '-0.3px', marginBottom: count <= 2 ? 32 : count <= 3 ? 22 : 14, flexShrink: 0 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', minHeight: 0 }}>
           {slide.bullets?.map((b, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 20, padding: `${padV}px 0`, borderBottom: i < (count-1) ? '1px solid #e5e5e5' : 'none' }}>
-              <span style={{ color: t.accent, fontFamily: t.fontTitle, fontWeight: 800, fontSize: 26, lineHeight: 1, minWidth: 36, paddingTop: 2 }}>{i+1}</span>
-              <span style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.6 }}>{b}</span>
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 20, paddingTop: padV, paddingBottom: padV, borderBottom: i < (count-1) ? `1px solid ${t.accent}22` : 'none' }}>
+              <span style={{ color: t.accent, fontFamily: t.fontTitle, fontWeight: 800, fontSize: numFs, lineHeight: 1, minWidth: count <= 2 ? 50 : count <= 3 ? 44 : 36, paddingTop: 2, flexShrink: 0 }}>{i+1}</span>
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.7, fontWeight: 400 }}>{b}</span>
             </div>
           ))}
         </div>
@@ -478,21 +508,26 @@ function CleanWhiteContentSlide({ slide, theme, index }) {
   );
 }
 
+
 // MODERN-DARK — glassmorphism cards
 function ModernDarkContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = titleFontSize(count);
+  const padCard = count <= 2 ? '18px 22px' : count <= 3 ? '15px 20px' : count <= 4 ? '12px 18px' : '9px 16px';
+  const dotSize = count <= 3 ? 10 : 8;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
       <div style={{ position: 'absolute', left: 48, top: 48, width: 5, height: 40, borderRadius: 999, background: t.accentGrad }} />
-      <div style={{ position: 'absolute', left: 64, top: 44, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 34, fontWeight: 600, color: t.text, lineHeight: 1.2, letterSpacing: '-0.5px' }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 600, color: t.text, lineHeight: 1.2, letterSpacing: '-0.5px', marginBottom: count <= 2 ? 28 : count <= 3 ? 20 : 14 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
           {slide.bullets?.map((b, i) => (
-            <div key={i} style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(10px)', border: '1px solid rgba(108,99,255,0.2)', borderRadius: 10, padding: '12px 18px', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.accentGrad, flexShrink: 0, marginTop: 7 }} />
-              <span style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.5 }}>{b}</span>
+            <div key={i} style={{ background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(10px)', border: '1px solid rgba(108,99,255,0.2)', borderRadius: 10, padding: padCard, display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+              <span style={{ width: dotSize, height: dotSize, borderRadius: '50%', background: t.accentGrad, flexShrink: 0, marginTop: 4 }} />
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.6 }}>{b}</span>
             </div>
           ))}
         </div>
@@ -507,16 +542,20 @@ function PlayfulYellowContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const colors = ['#f59e0b','#8b5cf6','#ef4444','#10b981','#3b82f6'];
   const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = count <= 2 ? 42 : count <= 3 ? 38 : count <= 4 ? 34 : 30;
+  const badgeSize = count <= 2 ? 34 : count <= 3 ? 30 : 26;
+  const badgeFontSize = count <= 2 ? 15 : count <= 3 ? 13 : 12;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
-      <div style={{ position: 'absolute', left: 64, top: 44, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 38, fontWeight: 400, color: t.text, lineHeight: 1.2 }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 400, color: t.text, lineHeight: 1.2, marginBottom: count <= 2 ? 28 : count <= 3 ? 20 : 14 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
           {slide.bullets?.map((b, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-              <div style={{ flexShrink: 0, width: 28, height: 28, borderRadius: '50%', background: colors[i % colors.length], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#fff', fontFamily: t.fontTitle, marginTop: 2 }}>{i+1}</div>
-              <span style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.55 }}>{b}</span>
+              <div style={{ flexShrink: 0, width: badgeSize, height: badgeSize, borderRadius: '50%', background: colors[i % colors.length], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: badgeFontSize, fontWeight: 700, color: '#fff', fontFamily: t.fontTitle, marginTop: 2 }}>{i+1}</div>
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.6 }}>{b}</span>
             </div>
           ))}
         </div>
@@ -530,16 +569,19 @@ function PlayfulYellowContentSlide({ slide, theme, index }) {
 function GradientBorderContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = titleFontSize(count);
+  const padRow = count <= 2 ? '18px 18px' : count <= 3 ? '14px 16px' : count <= 4 ? '11px 15px' : '9px 14px';
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
-      <div style={{ position: 'absolute', left: 64, top: 44, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, color: t.text, lineHeight: 1.2 }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 700, color: t.text, lineHeight: 1.2, marginBottom: count <= 2 ? 28 : count <= 3 ? 20 : 14 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
           {slide.bullets?.map((b, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 0, background: i%2===0 ? 'rgba(108,99,255,0.05)' : 'rgba(56,189,248,0.04)', borderRadius: '0 10px 10px 0', overflow: 'hidden' }}>
-              <div style={{ width: 4, flexShrink: 0, alignSelf: 'stretch', background: t.accentGrad }} />
-              <span style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.5, padding: '12px 16px' }}>{b}</span>
+            <div key={i} style={{ display: 'flex', alignItems: 'stretch', gap: 0, background: i%2===0 ? 'rgba(108,99,255,0.05)' : 'rgba(56,189,248,0.04)', borderRadius: '0 10px 10px 0', overflow: 'hidden' }}>
+              <div style={{ width: count <= 3 ? 5 : 4, flexShrink: 0, background: t.accentGrad }} />
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.6, padding: padRow, display: 'flex', alignItems: 'center' }}>{b}</span>
             </div>
           ))}
         </div>
@@ -553,17 +595,20 @@ function GradientBorderContentSlide({ slide, theme, index }) {
 function BluePlanetContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = count <= 2 ? 34 : count <= 3 ? 30 : count <= 4 ? 28 : 26;
+  const dotSize = count <= 3 ? 12 : 10;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
       <div style={{ position: 'absolute', left: 48, top: 48, width: 5, height: 40, borderRadius: 999, background: t.accentGrad }} />
-      <div style={{ position: 'absolute', left: 64, top: 44, width: 630, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 32, fontWeight: 600, color: t.text, lineHeight: 1.2, letterSpacing: '0.5px' }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
+      <div style={{ position: 'absolute', left: 64, top: 44, width: 630, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 600, color: t.text, lineHeight: 1.2, letterSpacing: '0.5px', marginBottom: count <= 2 ? 28 : count <= 3 ? 20 : 14 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
           {slide.bullets?.map((b, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              <div style={{ flexShrink: 0, width: 10, height: 10, borderRadius: '50%', background: t.accentGrad, boxShadow: `0 0 8px ${t.primary}88`, marginTop: 7 }} />
-              <span style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.55 }}>{b}</span>
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+              <div style={{ flexShrink: 0, width: dotSize, height: dotSize, borderRadius: '50%', background: t.accentGrad, boxShadow: `0 0 10px ${t.primary}99`, marginTop: 4 }} />
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.6 }}>{b}</span>
             </div>
           ))}
         </div>
@@ -577,17 +622,20 @@ function BluePlanetContentSlide({ slide, theme, index }) {
 function NatureGreenContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = count <= 2 ? 34 : count <= 3 ? 30 : count <= 4 ? 28 : 26;
+  const leafSize = count <= 3 ? 14 : 12;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
       <div style={{ position: 'absolute', left: 48, top: 48, width: 5, height: 40, borderRadius: '0 999px 999px 0', background: t.accentGrad }} />
-      <div style={{ position: 'absolute', left: 64, top: 44, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 32, fontWeight: 700, color: t.text, lineHeight: 1.25 }}>{slide.title}</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: bulletGap(count) }}>
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 700, color: t.text, lineHeight: 1.25, marginBottom: count <= 2 ? 28 : count <= 3 ? 20 : 14 }}>{slide.title}</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
           {slide.bullets?.map((b, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-              <div style={{ flexShrink: 0, width: 12, height: 12, background: t.accentGrad, borderRadius: '50% 0 50% 0', transform: 'rotate(-15deg)', marginTop: 6 }} />
-              <span style={{ fontFamily: t.fontBody, fontSize: 16, color: t.textSub, lineHeight: 1.6 }}>{b}</span>
+              <div style={{ flexShrink: 0, width: leafSize, height: leafSize, background: t.accentGrad, borderRadius: '50% 0 50% 0', transform: 'rotate(-15deg)', marginTop: 5 }} />
+              <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.65 }}>{b}</span>
             </div>
           ))}
         </div>
@@ -597,32 +645,48 @@ function NatureGreenContentSlide({ slide, theme, index }) {
   );
 }
 
-// TECH-PURPLE — 2-column grid with square tech dots
+// TECH-PURPLE — 2-column grid with square tech dots (single col when ≤3 bullets)
 function TechPurpleContentSlide({ slide, theme, index }) {
   const t = THEMES[theme];
   const bullets = slide.bullets || [];
-  const half = Math.ceil(bullets.length / 2);
-  const left = bullets.slice(0, half);
-  const right = bullets.slice(half);
-  const rowGap = bulletGap(Math.max(left.length, right.length));
+  const count = bullets.length;
+  const useGrid = count >= 4;
+  const half = Math.ceil(count / 2);
+  const leftCol = useGrid ? bullets.slice(0, half) : bullets;
+  const rightCol = useGrid ? bullets.slice(half) : [];
+  const colCount = useGrid ? Math.max(leftCol.length, rightCol.length) : count;
+  const fs = useGrid ? (count <= 6 ? 15.5 : 14) : bulletFontSize(count);
+  const tfs = titleFontSize(count);
+  const dotSize = count <= 3 ? 10 : 8;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
       <div style={{ position: 'absolute', left: 48, top: 48, width: 4, height: 40, background: t.accentGrad }} />
-      <div style={{ position: 'absolute', left: 64, top: 44, width: 832, display: 'flex', flexDirection: 'column', gap: 28 }}>
-        <h2 style={{ fontFamily: t.fontTitle, fontSize: 34, fontWeight: 700, color: t.text, lineHeight: 1.2, letterSpacing: '1px', textTransform: 'uppercase' }}>{slide.title}</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: `0 40px` }}>
-          {[left, right].map((col, ci) => (
-            <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: rowGap }}>
-              {col.map((b, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                  <div style={{ flexShrink: 0, width: 8, height: 8, background: t.accentGrad, marginTop: 7 }} />
-                  <span style={{ fontFamily: t.fontBody, fontSize: 15.5, color: t.textSub, lineHeight: 1.5 }}>{b}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <h2 style={{ fontFamily: t.fontTitle, fontSize: tfs, fontWeight: 700, color: t.text, lineHeight: 1.2, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: count <= 2 ? 28 : count <= 3 ? 20 : 14 }}>{slide.title}</h2>
+        {useGrid ? (
+          <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 40px' }}>
+            {[leftCol, rightCol].map((col, ci) => (
+              <div key={ci} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
+                {col.map((b, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    <div style={{ flexShrink: 0, width: dotSize, height: dotSize, background: t.accentGrad, marginTop: 5 }} />
+                    <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.55 }}>{b}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
+            {leftCol.map((b, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <div style={{ flexShrink: 0, width: dotSize, height: dotSize, background: t.accentGrad, marginTop: 5 }} />
+                <span style={{ fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.6 }}>{b}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <div className="slide-slide-number" style={{ color: t.textSub }}>{String(index+1).padStart(2,'0')}</div>
     </div>
@@ -657,19 +721,22 @@ function TitleSlide({ slide, theme }) {
 // ─────────────────────────────────────────────
 function ContentSlide({ slide, theme, index }) {
   const t = THEMES[theme] || THEMES['clean-white'];
+  const count = slide.bullets?.length || 0;
+  const fs = bulletFontSize(count);
+  const tfs = titleFontSize(count);
   return (
-    <div className="slide-wrap slide-content" style={{ background: t.bgGrad }}>
+    <div className="slide-wrap slide-content" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
-      <div className="slide-content-inner">
-        <div className="slide-content-header">
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <div className="slide-content-header" style={{ marginBottom: count <= 2 ? 28 : count <= 3 ? 20 : 14 }}>
           <div className="slide-accent-bar" style={{ background: t.accentGrad }} />
-          <h2 className="slide-section-title" style={{ color: t.text, fontFamily: t.fontTitle }}>{slide.title}</h2>
+          <h2 className="slide-section-title" style={{ color: t.text, fontFamily: t.fontTitle, fontSize: tfs, lineHeight: 1.2 }}>{slide.title}</h2>
         </div>
-        <ul className="slide-bullets" style={{ fontFamily: t.fontBody }}>
+        <ul className="slide-bullets" style={{ fontFamily: t.fontBody, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', margin: 0, padding: 0, listStyle: 'none' }}>
           {slide.bullets?.map((b, i) => (
-            <li key={i} className="slide-bullet-item">
-              <span className="bullet-dot" style={{ background: t.accentGrad }} />
-              <span style={{ color: t.textSub }}>{b}</span>
+            <li key={i} className="slide-bullet-item" style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+              <span className="bullet-dot" style={{ background: t.accentGrad, flexShrink: 0, marginTop: (fs * 1.6 - 10) / 2 }} />
+              <span style={{ color: t.textSub, fontSize: fs, lineHeight: 1.6 }}>{b}</span>
             </li>
           ))}
         </ul>
@@ -684,21 +751,26 @@ function ContentSlide({ slide, theme, index }) {
 // ─────────────────────────────────────────────
 function TwoColumnSlide({ slide, theme, index }) {
   const t = THEMES[theme] || THEMES['clean-white'];
+  const leftPoints = slide.left?.points?.length || 0;
+  const rightPoints = slide.right?.points?.length || 0;
+  const maxPoints = Math.max(leftPoints, rightPoints);
+  const fs = maxPoints <= 3 ? 15 : maxPoints <= 5 ? 13.5 : 12;
+  const tfs = titleFontSize(maxPoints);
   return (
-    <div className="slide-wrap slide-twocol" style={{ background: t.bgGrad }}>
+    <div className="slide-wrap slide-twocol" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
-      <div className="slide-twocol-inner">
-        <div className="slide-content-header">
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'flex', flexDirection: 'column' }}>
+        <div className="slide-content-header" style={{ marginBottom: 16 }}>
           <div className="slide-accent-bar" style={{ background: t.accentGrad }} />
-          <h2 className="slide-section-title" style={{ color: t.text, fontFamily: t.fontTitle }}>{slide.title}</h2>
+          <h2 className="slide-section-title" style={{ color: t.text, fontFamily: t.fontTitle, fontSize: tfs, lineHeight: 1.2 }}>{slide.title}</h2>
         </div>
-        <div className="slide-twocol-grid">
+        <div className="slide-twocol-grid" style={{ flex: 1, gridTemplateColumns: '1fr 1fr', gap: 20 }}>
           {[slide.left, slide.right].map((col, ci) => (
-            <div key={ci} className="slide-col-card" style={{ background: t.surface, borderColor: t.surfaceBorder }}>
-              <div className="slide-col-heading" style={{ color: t.primary, fontFamily: t.fontTitle }}>{col?.heading}</div>
-              <ul className="slide-col-list" style={{ fontFamily: t.fontBody }}>
+            <div key={ci} className="slide-col-card" style={{ background: t.surface, borderColor: t.surfaceBorder, display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box' }}>
+              <div className="slide-col-heading" style={{ color: t.primary, fontFamily: t.fontTitle, fontSize: 17, marginBottom: 8 }}>{col?.heading}</div>
+              <ul className="slide-col-list" style={{ fontFamily: t.fontBody, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', margin: 0, padding: 0, listStyle: 'none' }}>
                 {col?.points?.map((p, i) => (
-                  <li key={i} style={{ color: t.textSub }}>
+                  <li key={i} style={{ color: t.textSub, fontSize: fs, lineHeight: 1.5, display: 'flex', gap: 8 }}>
                     <span style={{ color: t.accent }}>▸</span> {p}
                   </li>
                 ))}
@@ -715,29 +787,45 @@ function TwoColumnSlide({ slide, theme, index }) {
 // ─────────────────────────────────────────────
 // Slide Type: IMAGE + TEXT
 // ─────────────────────────────────────────────
-// Helper to resolve remote /outputs/ URLs to localhost:8000 for local development setup
 function ImageTextSlide({ slide, theme, index }) {
   const t = THEMES[theme] || THEMES['clean-white'];
+  const textLen = (slide.text || '').length;
+  const bulletCount = slide.bullets?.length || 0;
+  const fs = bulletCount > 0
+    ? bulletFontSize(bulletCount)
+    : textLen < 120 ? 18.5 : textLen < 250 ? 16 : 14.5;
+  const tfs = titleFontSize(bulletCount || 3);
   return (
-    <div className="slide-wrap slide-imagetext" style={{ background: t.bgGrad }}>
+    <div className="slide-wrap slide-imagetext" style={{ background: t.bgGrad, position: 'relative' }}>
       <BgDecorations theme={theme} />
-      <div className="slide-imagetext-inner">
-        <div className="slide-image-box" style={{ background: t.surface, borderColor: t.surfaceBorder, overflow: 'hidden', padding: 0 }}>
+      <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 36, alignItems: 'center' }}>
+        <div className="slide-image-box" style={{ background: t.surface, borderColor: t.surfaceBorder, overflow: 'hidden', padding: 0, height: '100%', maxHeight: 380, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 16 }}>
           {slide.imageUrl ? (
             <img src={resolveAssetUrl(slide.imageUrl)} alt={slide.title} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' }} />
           ) : (
-            <>
-              <div className="slide-image-emoji">{slide.imageEmoji || '🖼️'}</div>
-              <div className="slide-image-caption" style={{ background: t.accentGrad, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontFamily: t.fontTitle }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: 24, textAlign: 'center' }}>
+              <div className="slide-image-emoji" style={{ fontSize: 52 }}>{slide.imageEmoji || '🖼️'}</div>
+              <div className="slide-image-caption" style={{ background: t.accentGrad, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontFamily: t.fontTitle, fontSize: 16, fontWeight: 700 }}>
                 {slide.title}
               </div>
-            </>
+            </div>
           )}
         </div>
-        <div className="slide-imagetext-content">
-          <div className="slide-accent-bar" style={{ background: t.accentGrad }} />
-          <h2 className="slide-section-title" style={{ color: t.text, fontFamily: t.fontTitle }}>{slide.title}</h2>
-          <p className="slide-body-text" style={{ color: t.textSub, fontFamily: t.fontBody }}>{slide.text}</p>
+        <div className="slide-imagetext-content" style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'center' }}>
+          <div className="slide-accent-bar" style={{ background: t.accentGrad, marginBottom: 10 }} />
+          <h2 className="slide-section-title" style={{ color: t.text, fontFamily: t.fontTitle, fontSize: tfs, lineHeight: 1.2, marginBottom: 14 }}>{slide.title}</h2>
+          {slide.bullets && slide.bullets.length > 0 ? (
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: bulletGap(bulletCount) }}>
+              {slide.bullets.map((b, i) => (
+                <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontFamily: t.fontBody, fontSize: fs, color: t.textSub, lineHeight: 1.55 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: t.accentGrad, marginTop: 7, flexShrink: 0 }} />
+                  <span>{b}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="slide-body-text" style={{ color: t.textSub, fontFamily: t.fontBody, fontSize: fs, lineHeight: 1.65, margin: 0 }}>{slide.text}</p>
+          )}
         </div>
       </div>
       <div className="slide-slide-number" style={{ color: t.textSub }}>{String(index + 1).padStart(2, '0')}</div>
@@ -795,14 +883,22 @@ function ThankYouSlide({ slide, theme, index }) {
 
 function StructuredSlide({ slide, theme, index }) {
   const t = THEMES[theme] || THEMES['clean-white'];
+  const isTable = slide.type === 'table';
+  const rowCount = isTable ? (slide.table?.rows?.length || 0) : (slide.chart?.labels?.length || 0);
+  // Adaptive title size: shorter when lots of data rows
+  const titleFs = rowCount <= 3 ? 36 : rowCount <= 6 ? 32 : 28;
   return (
     <div className="slide-wrap slide-content" style={{ background: t.bgGrad }}>
       <BgDecorations theme={theme} />
-      <div className="slide-content-inner" style={{ gap: 18 }}>
-        <div className="slide-bar" style={{ background: t.accentGrad }} />
-        <h2 className="slide-section-title" style={{ color: t.text, fontFamily: t.fontTitle }}>{slide.title}</h2>
-        <div style={{ flex: 1, minHeight: 0 }}>
-          {slide.type === 'table'
+      <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: 0, padding: '44px 64px 44px 64px', boxSizing: 'border-box' }}>
+        {/* Header accent bar + title */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20, flexShrink: 0 }}>
+          <div style={{ width: 48, height: 4, borderRadius: 999, background: t.accentGrad }} />
+          <h2 style={{ fontFamily: t.fontTitle, fontSize: titleFs, fontWeight: 700, color: t.text, lineHeight: 1.2, margin: 0 }}>{slide.title}</h2>
+        </div>
+        {/* Data visual — fills all remaining space */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {isTable
             ? <TableVisual table={slide.table} theme={t} />
             : <ChartVisual chart={slide.chart} theme={t} />}
         </div>
