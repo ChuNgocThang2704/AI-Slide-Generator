@@ -1,444 +1,357 @@
-﻿# Kiến trúc Microservices Hệ thống Tạo và Quản lý Slide Tự động (AI-Powered Slide Generator)
+# Kiến trúc Microservices Hệ thống Tạo và Quản lý Slide Tự động (AI-Powered Slide Generator)
 
 ## 1. Tổng quan hệ thống
-Mục tiêu là xây dựng một hệ thống SaaS cho phép người dùng tải lên tài liệu (DOCX, PDF, Book) hoặc nhập text, sau đó hệ thống sử dụng kết hợp các mô hình AI (Text LLM và Diffusion Models) để tự động sinh ra cấu trúc slide, nội dung và hình ảnh minh họa tương ứng một cách tự động ra định dạng `.pptx`.
+Mục tiêu là xây dựng một hệ thống SaaS cho phép người dùng tải lên tài liệu (DOCX, PDF, TXT) hoặc nhập văn bản gợi ý (Prompt), sau đó hệ thống sử dụng kết hợp các mô hình AI (Text LLM và Diffusion Models) để tự động sinh ra cấu trúc slide, nội dung và hình ảnh minh họa tương ứng một cách tự động ra định dạng `.pptx`.
 
-Hệ thống được thiết kế theo kiến trúc **Microservices**. Sự lựa chọn Microservices ở đây là rất cần thiết vì backend vừa cần quản lý nghiệp vụ, giao dịch (phù hợp với Java Spring Boot) trực quan, bảo mật; lại vừa cần điều phối các mô hình AI, xử lý dữ liệu nặng (phù hợp với Python FastAPI/Flask).
+Hệ thống được thiết kế theo kiến trúc **Microservices** phân tán. Sự lựa chọn Microservices ở đây là rất cần thiết vì backend vừa cần quản lý nghiệp vụ, giao dịch thanh toán (phù hợp với Java Spring Boot) trực quan, bảo mật; lại vừa cần điều phối các mô hình AI, xử lý dữ liệu nặng và làm việc trực tiếp với GPU (phù hợp với Python FastAPI).
 
 ---
 
 ## 2. Thiết kế Kiến Trúc Các Services, Công nghệ & Database
 
-Dưới đây là sơ đồ tổng quan về kiến trúc Microservices và luồng giao tiếp giữa các thành phần:
+Dưới đây là sơ đồ tổng quan về kiến trúc Microservices và luồng giao tiếp thực tế giữa các thành phần:
 
 ```mermaid
 graph TD
   %% -------------------
-  %% LAYER 1: FRONTEND
+  %% LAYER 1: CLIENT
   %% -------------------
   User((Người dùng)) -->|"Truy cập Web"| FE["Frontend ReactJS"]
   
   %% -------------------
-  %% LAYER 2: GATEWAY
+  %% LAYER 2: EDGE GATEWAY
   %% -------------------
-  FE -->|"REST API / WSS"| AG["API Gateway Spring Cloud"]
+  FE -->|"REST API / WSS"| AG["API Gateway (Spring Cloud Gateway)"]
   
   %% -------------------
-  %% LAYER 3: CORE BUSINESS SERVICES (Java Spring Boot)
+  %% LAYER 3: CORE SERVICES (Java Spring Boot)
   %% -------------------
   AG -->|"Xác thực"| UA["User Service"]
-  AG -->|"Thanh toán"| SP["Payment Service"]
-  AG -->|"Upload/Tải"| DM["Document Management Service"]
+  AG -->|"Gói cước & Quota"| SUB["Subscription Service"]
+  AG -->|"Thanh toán"| PAY["Payment Service"]
+  AG -->|"Quản lý Dự án & Slide"| DM["Document Service"]
   AG -->|"Quản lý Mẫu"| TM["Template Service"]
-  AG -->|"Yêu cầu Gen Slide"| TO["Task Orchestrator Service"]
   
   %% -------------------
-  %% LAYER 4: DATABASES (Sync Data)
+  %% LAYER 4: DATABASES (Database-per-Service)
   %% -------------------
-  UA -.-> MySqlUser[("PostgreSQL Users")]
-  SP -.-> MySqlPay[("MySQL Payment")]
-  DM -.-> DMDB[("MySQL Document Metadata")]
-  TM -.-> TMDB[("MySQL Templates")]
+  UA -.-> DB_UA[("PostgreSQL<br/>user_service_db")]
+  SUB -.-> DB_SUB[("PostgreSQL<br/>subscription_service_db")]
+  DM -.-> DB_DM[("MySQL<br/>document_service_db")]
+  TM -.-> DB_TM[("MySQL<br/>template_service_db")]
   
   %% -------------------
-  %% LAYER 5: STORAGE & MESSAGE BROKER (Async Data)
+  %% LAYER 5: STORAGE, BROKER & CACHE (Async / Infrastructure)
   %% -------------------
-  DM --> S3[("MinIO / S3 Storage")]
+  DM --> S3[("MinIO / AWS S3 Storage")]
   TM --> S3
   
-  TO -->|"Gửi Message Event"| Broker{{"RabbitMQ"}}
+  DM -.->|"Gửi Event Thông báo"| MQ{{"RabbitMQ"}}
+  SUB -.->|"Gửi Event"| MQ
+  PAY -.->|"Gửi Event"| MQ
+  
+  MQ -.->|"Subscribe Event"| NS["Notification Service"]
   
   %% -------------------
-  %% LAYER 6: ASYNC WORKERS & INFRASTRUCTURE
+  %% LAYER 6: AI SERVICES (Python FastAPI + Redis Queue)
   %% -------------------
-  Broker <-->|"Nhận & Báo cáo Task"| TS["AI Text Processing"]
-  Broker <-->|"Nhận & Báo cáo Task"| IS["AI Image Gen Service"]
-  Broker <-->|"Nhận & Báo cáo Task"| RS["PPTX Render Service"]
-  Broker -.->|"Subscribe Topic (Email, SMS, Tiến trình)"| NS["Notification Service (RabbitMQ)"]
-  NS --> NotiDB[("MongoDB Notifications")]
+  DM -->|"HTTP POST (Submit Task)"| AI_API["AI Service (FastAPI)"]
+  DM -.->|"HTTP GET (Poll Status)"| AI_API
   
-  %% -------------------
-  %% LAYER 7: AI MODELS & DEPENDENCIES
-  %% -------------------
-  TS -.->|"Đọc File đầu vào"| S3
-  TS --> LLM(["Local LLM: Ollama/Qwen"])
+  AI_API -->|"Đẩy Task vào Queue"| RD[("Redis Queue")]
+  RD <-->|"Xử lý Task"| AI_Worker["AI Worker (worker.py)"]
   
-  IS --> Diffusers(["Image Gen: SDXL/FLUX"])
-  IS -.->|"Lưu Ảnh Sinh"| S3
-  
-  RS -.->|"Đọc Template & Lưu Slide PPTX"| S3
-  
-  NS -.->|"Lắng nghe tiến trình/Tin nhắn"| FE
+  AI_Worker -.->|"Đọc Tài liệu & Lưu PPTX/Ảnh"| S3
+  AI_Worker --> LLM(["LLM: Ollama/Qwen/vLLM"])
+  AI_Worker --> Diffusers(["Image Gen: SDXL/FLUX"])
 ```
 
-### 2.1 API Gateway & Nginx (Edge Layer)
+### 2.1 API Gateway (Edge Layer)
 - **Công nghệ**: Spring Cloud Gateway.
-- **Chức năng**: Entry point duy nhất (Single Entry Point) cho các request từ Frontend (ReactJS + TS). Xử lý routing, rate limiting, CORS. Phân phối tải (Load balancing).
+- **Cổng**: `8080` (Biến `GATEWAY_PORT`).
+- **Chức năng**: Entry point duy nhất cho các request từ Frontend (ReactJS). Xử lý routing định tuyến, rate limiting, CORS và giải mã / xác thực JWT tập trung.
 
 ### 2.2 User Service (Core Business)
-- **Nhiệm vụ**: Quản lý tài khoản, phân quyền, đăng nhập/đăng ký, xác thực OAuth2/JWT. Quản lý trạng thái thông tin cá nhân.
+- **Nhiệm vụ**: Quản lý tài khoản, phân quyền dựa trên vai trò (RBAC), đăng nhập/đăng ký, xác thực JWT.
 - **Công nghệ**: Java Spring Boot, Spring Security.
-- **Database**: **PostgreSQL** (hoặc MySQL).
-  - *Lý do*: Dữ liệu người dùng có tính quan hệ tĩnh, cần đảm bảo ACID. PostgreSQL rất mạnh mẽ cho các truy vấn phức tạp.
+- **Database**: **PostgreSQL** (`user_service_db`).
+  - *Lý do*: Đảm bảo tính nhất quán (ACID), bảo mật dữ liệu người dùng cực cao.
 
-### 2.3 Subscription & Payment Service (Core Business)
-- **Nhiệm vụ**: Quản lý gói cước (Dùng thử miễn phí, Gói Pro, Gói theo số lượng slide). Tích hợp cổng thanh toán (Stripe, Paypal, VNPAY...). Quản lý quota (tài khoản này còn được tạo bao nhiêu slide).
-- **Công nghệ**: Java Spring Boot.
-- **Database**: **MySQL**.
-  - *Lý do*: Giao dịch tài chính đòi hỏi ACID tuyệt đối, rollback ngay lập tức khi lỗi.
+### 2.3 Subscription Service (Core Business)
+- **Nhiệm vụ**: Quản lý gói cước dịch vụ (Free, Pro, Enterprise) và kiểm duyệt hạn mức sử dụng (Quota check). Cung cấp các API nội bộ cho các dịch vụ khác (như `document-service`) để trừ / hoàn trả hạn mức.
+- **Công nghệ**: Java Spring Boot, Spring Data JPA.
+- **Database**: **PostgreSQL** (`subscription_service_db`).
+  - *Lý do*: Đảm bảo tính ACID, đồng bộ hóa tốt với dữ liệu người dùng.
 
-### 2.4 Document & Slide Management Service (Core Business)
-- **Nhiệm vụ**: Quản lý repository tài liệu đầu vào (PDF, DOCX) của người dùng, danh sách các slide `.pptx` đã được tạo ra, chia sẻ slide, public/private.
-- **Công nghệ**: Java Spring Boot.
-- **Database**: **MySQL** kết hợp **Object Storage (AWS S3 / MinIO)**.
-  - *Lý do*: S3/MinIO để lưu trữ các tệp vật lý. MySQL lưu trữ metadata (Tên file, Ngày tạo, Tác giả, Link S3), có thể dùng cột kiểu JSON nếu metadata linh hoạt.
+### 2.4 Payment Service (Core Business)
+- **Nhiệm vụ**: Tích hợp trực tiếp các cổng thanh toán Stripe & PayOS. Xử lý webhook phản hồi từ cổng thanh toán để kích hoạt gói.
+- **Công nghệ**: Java Spring Boot, Stripe Java SDK, PayOS Java SDK.
+- **Database**: Không sử dụng trực tiếp (Stateless), gọi API nội bộ sang Subscription Service để lưu giao dịch và kích hoạt gói cước.
 
-### 2.5 Template Service (Core Business)
-- **Nhiệm vụ**: Quản lý các mẫu thiết kế slide (thames, layout) cho phép người dùng chọn giao diện slide trước khi tạo. Quản lý màu sắc, font chữ chuẩn.
-- **Công nghệ**: Java Spring Boot.
-- **Database**: **MySQL** để lưu định nghĩa mẫu và đường dẫn các file template gốc trên **S3**.
+### 2.5 Document Service (Core Business & Orchestrator)
+- **Nhiệm vụ**: Quản lý không gian làm việc thiết kế slide (Project Workspace), lưu trữ tài liệu tải lên của khách hàng, lưu trữ cấu trúc trang slide. Đóng vai trò **Bộ điều phối (Orchestrator)** gọi bất đồng bộ tới AI Service qua HTTP REST và thực hiện cơ chế Polling để giám sát tiến độ.
+- **Công nghệ**: Java Spring Boot, AWS S3 Java SDK.
+- **Database**: **MySQL** (`document_service_db`) kết hợp với **Object Storage (MinIO / S3)**.
+  - *Lý do*: MySQL lưu trữ siêu dữ liệu (metadata) linh hoạt và hỗ trợ kiểu cột JSON rất tốt, Object Storage để lưu trữ các file cứng (.docx, .pdf, .pptx).
 
-### 2.6 Task Orchestrator Service (Orchestration)
-- **Nhiệm vụ**: Nhận yêu cầu tạo slide, bóc tách thành các bài toán nhỏ hơn (chia nhỏ task extract text, task gen ảnh) đưa vào Queue. 
+### 2.6 Template Service (Core Business)
+- **Nhiệm vụ**: Quản lý kho mẫu slide thiết kế (Themes, Layouts, Placeholders) và tọa độ các vị trí chèn nội dung trên slide.
 - **Công nghệ**: Java Spring Boot.
-- **Database**: Gửi message task đến **RabbitMQ**. Sử dụng Redis (lưu Cache trạng thái tạm thời của Task).
+- **Database**: **MySQL** (`template_service_db`).
 
 ### 2.7 Notification Service (Infrastructure)
-- **Nhiệm vụ**: Gửi thông báo đa nền tảng (real-time qua WebSocket cho trình duyệt, OTP SMS, Email cho hoá đơn/chúc mừng). Service này **đóng vai trò như một Subscriber mạnh mẽ lắng nghe RabbitMQ (Exchange Topics)**. Mọi service khác (ví dụ Payment Service muốn gửi OTP, Orchestrator muốn báo slide xong %...) đều chỉ cần push event vào RabbitMQ và Notification Service sẽ tự bắt event để phân phối. Điều này đảm bảo Zero-Coupling (không kết nối dính chùm).
-- **Công nghệ**: RabbitMQ.
-- **Database**: **MongoDB** để lưu thông báo chuông/in-app (notification history, trạng thái đã đọc/chưa đọc). **Redis** để cache Session ID WebSocket và map `user_id -> connection`.
+- **Nhiệm vụ**: Gửi email thông báo tự động (email hóa đơn, xác thực hoặc báo slide hoàn thành) bằng cách đăng ký lắng nghe sự kiện từ hàng đợi RabbitMQ.
+- **Công nghệ**: Java Spring Boot, Spring AMQP (RabbitMQ Consumer), Java Mail Sender, Thymeleaf HTML Template.
+- **Database**: Stateless (không có DB riêng).
 
-### 2.8 AI Text Processing Service (AI Service)
+### 2.8 AI Service (Python FastAPI & Worker)
 - **Nhiệm vụ**: 
-  - Đọc nội dung file PDF/DOCX (dùng PyPDF2, pdfplumber, python-docx).
-  - Tích hợp Text LLM (Qwen / Ollama, Llama 3) để: tóm tắt nội dung, chia thành các phần tương đương với từng trang slide, sinh ra *nội dung text cho slide* và *prompt mô tả* để sinh ảnh minh họa.
-  - **Lưu ý**: Service này chỉ sinh ra bản draft nội dung text, **không tự động tiếp tục** sang bước sinh ảnh. Nội dung sẽ được lưu vào DB để người dùng xem và chỉnh sửa trước khi approve.
-- **Công nghệ**: Python + FastAPI (rất phù hợp và nhanh gọn cho model inferencing).
-- **Database**: Không có DB riêng (Stateless), nhận data từ Queue và trả kết quả về Queue. Document Management Service sẽ lưu nội dung draft vào `slide_pages`.
-
-### 2.7 AI Image Generation Service (AI Service)
-- **Nhiệm vụ**: Nhận text prompts từ Queue (đã được Text AI Service sinh ra ở bước trước), load models SDXL (Stable Diffusion XL qua HuggingFace Diffusers) hoặc FLUX. Gen ảnh minh họa chất lượng cao. Đưa ảnh sinh ra lên S3, trả URL về Queue.
-- **Công nghệ**: Python + FastAPI (Giao tiếp với GPUs, PyTorch).
-- **Database**: Ghi trực tiếp Object Storage (MinIO/S3), Stateless.
-
-### 2.8 PPTX Render Service (Worker)
-- **Nhiệm vụ**: Sau khi đã có Outline Text hoàn chỉnh + Link ảnh minh hoạ, Service này ráp tất cả vào Template `.pptx` chuẩn.
-- **Công nghệ**: Python (với thư viện `python-pptx`) - thao tác với slide thuận tiện hơn thư viện của Java (Apache POI).
-- **Database**: Đẩy file `.pptx` thành phẩm lên MinIO/S3 và báo Task Done cho Task Orchestrator.
+  - **AI Text Processing**: Đọc nội dung file PDF/DOCX, gọi LLM (Ollama/Qwen) sinh cấu trúc dàn ý dạng JSON (tiêu đề, nội dung text, và prompt ảnh).
+  - **AI Image Generation**: Sử dụng mô hình khuếch tán (SDXL/FLUX) tạo ảnh minh họa từ prompt.
+  - **PPTX Render**: Sử dụng thư viện `python-pptx` để chèn chữ và ảnh vào đúng tọa độ của template slide PowerPoint, upload thành phẩm lên S3.
+- **Công nghệ**: Python, FastAPI, Redis (dùng hàng đợi rq-worker để chạy bất đồng bộ tác vụ nặng).
 
 ---
 
-## 3. Luồng hoạt động (Workflow) – Chi tiết toàn bộ chức năng hệ thống
+## 3. Luồng hoạt động (Workflow) & Sơ đồ Sequence Diagrams
 
-Phần này liệt kê **tất cả các luồng nghiệp vụ** từ đăng ký/đăng nhập, gói cước, tài liệu, template, sinh slide, chia sẻ, thông báo đến xem/tải slide. Luồng sinh slide chạy bất đồng bộ qua **Message Queue (RabbitMQ)** để tránh timeout do AI xử lý lâu.
+### 3.1. Luồng Đăng ký và Đăng nhập (User Service)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Người dùng
+    participant FE as Frontend ReactJS
+    participant AG as API Gateway (8080)
+    participant UA as User Service (8081)
+    participant PG as PostgreSQL (Users DB)
 
----
-
-### 3.1. Luồng Đăng ký và Đăng nhập (User and Auth Service)
-
-| Bước | Hành động                                                                                           | Thành phần tham gia                  | Ghi chú                                               |
-| ---- | --------------------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------- |
-| 1    | User mở form Đăng ký / Đăng nhập                                                                    | Frontend                             | Email + mật khẩu hoặc OAuth (Google, GitHub...)       |
-| 2    | Frontend gửi request tới API Gateway                                                                | Frontend → API Gateway               | POST /auth/register hoặc /auth/login                  |
-| 3    | Gateway route tới User and Auth Service                                                             | API Gateway → User and Auth Service  | Validate input, rate limit                            |
-| 4    | **Đăng ký:** Kiểm tra email chưa tồn tại → hash mật khẩu → tạo user + gán role mặc định (FREE_USER) | User and Auth Service, DB PostgreSQL | Ghi bảng `users`, `user_roles`                        |
-| 5    | **Đăng nhập:** Kiểm tra email + mật khẩu → tạo JWT (access + refresh token)                         | User and Auth Service                | Ghi `login_audit_logs` (SUCCESS/FAILED)               |
-| 6    | Trả JWT về Frontend, lưu vào storage/cookie                                                         | User and Auth Service → Frontend     | Frontend gửi kèm header Authorization cho các API sau |
-| 7    | (Tùy chọn) OAuth: redirect tới IdP → callback → tạo/link user → phát JWT                            | User and Auth Service, OAuth IdP     | Tương đương bước 4–6 với identity bên thứ ba          |
-
-**Luồng bổ sung:** Đổi mật khẩu, Quên mật khẩu (gửi email reset link), Cập nhật thông tin cá nhân, Đăng xuất (vô hiệu hóa token / blacklist refresh token).
-
----
-
-### 3.2. Luồng Gói cước và Thanh toán (Subscription and Payment Service)
-
-| Bước | Hành động                                                                                        | Thành phần tham gia                                              | Ghi chú                                                                            |
-| ---- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| 1    | User xem trang Gói cước (Pricing)                                                                | Frontend                                                         | Gọi API danh sách `packages` + `package_features`                                  |
-| 2    | User chọn gói (VD: Pro monthly), (tùy chọn) nhập mã giảm giá                                     | Frontend → API Gateway → Subscription and Payment Service        | Validate coupon `discount_coupons` (còn hạn, còn lượt)                             |
-| 3    | Service tạo/ cập nhật `user_subscriptions`, tạo `invoice`                                        | Subscription and Payment Service, MySQL                          | Trạng thái PENDING cho đến khi thanh toán thành công                               |
-| 4    | Service tạo URL thanh toán (VNPAY/Stripe/PayPal) và redirect user                                | Subscription and Payment Service → Frontend                      | Frontend chuyển user tới trang cổng thanh toán                                     |
-| 5    | User thanh toán trên cổng; cổng gọi webhook / redirect return URL                                | Cổng thanh toán → API Gateway → Subscription and Payment Service | Ghi `transactions` (PENDING → SUCCESS/FAILED)                                      |
-| 6    | Service cập nhật trạng thái invoice, subscription (ACTIVE), ghi `subscription_history` (UPGRADE) | Subscription and Payment Service, MySQL                          | Đồng thời có thể gửi event sang RabbitMQ để Notification Service gửi email hóa đơn |
-| 7    | (Định kỳ) Cron kiểm tra `expire_date` → gia hạn hoặc đánh dấu EXPIRED, gửi nhắc gia hạn          | Subscription and Payment Service, Notification Service           | Quota (số slide/tháng) lấy từ `package_features` theo gói hiện tại                 |
-
-**Luồng bổ sung:** Hủy gói (CANCEL), Hạ cấp gói (DOWNGRADE), Xem lịch sử hóa đơn và giao dịch, Áp dụng mã giảm giá.
+    User->>FE: Điền thông tin & Click Đăng ký/Đăng nhập
+    FE->>AG: POST /api/auth/login (hoặc /register)
+    AG->>UA: Chuyển tiếp request (Validate & Rate limit)
+    UA->>PG: Truy vấn/Lưu thông tin người dùng
+    PG-->>UA: Trả về kết quả truy vấn
+    Note over UA: Băm mật khẩu (BCrypt) khi đăng ký<br/>Hoặc giải mã & cấp Access/Refresh Token (JWT) khi đăng nhập
+    UA-->>AG: Trả về cặp Token (JWT)
+    AG-->>FE: Trả về Response chứa Token
+    FE->>User: Lưu Token & Hiển thị Dashboard
+```
+- **Bước bổ sung**: Đổi mật khẩu, quên mật khẩu (gửi mail link reset mật khẩu qua RabbitMQ ➔ Notification Service), đăng xuất (vô hiệu hóa token).
 
 ---
 
-### 3.3. Luồng Quản lý tài liệu (Document Management Service)
+### 3.2. Luồng Gói cước và Thanh toán (Subscription & Payment Service)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Người dùng
+    participant FE as Frontend ReactJS
+    participant AG as API Gateway (8080)
+    participant SUB as Subscription Service (8084)
+    participant PAY as Payment Service (8085)
+    participant PG as PostgreSQL (Sub DB)
+    participant Gateway as Cổng Thanh Toán (Stripe/PayOS)
 
-| Bước | Hành động                                                                                           | Thành phần tham gia                       | Ghi chú                                                          |
-| ---- | --------------------------------------------------------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------- |
-| 1    | User chọn file PDF/DOCX từ máy (hoặc kéo thả)                                                       | Frontend                                  | Validate dung lượng, định dạng phía client                       |
-| 2    | Frontend gửi file lên API Gateway (multipart/form-data)                                             | Frontend → API Gateway                    | Header Authorization: JWT                                        |
-| 3    | Gateway chuyển tới Document Management Service                                                      | API Gateway → Document Management Service | Service kiểm tra quyền, quota (gọi Subscription Service nếu cần) |
-| 4    | Service upload file lên MinIO/S3, nhận `s3_url`                                                     | Document Management Service → MinIO/S3    | Bucket dành cho source documents                                 |
-| 5    | Service ghi metadata vào DB: `source_documents` (user_id, file_name, s3_url, page_count, file_size) | Document Management Service, MySQL        | Trả về `document_id` cho Frontend                                |
-| 6    | User xem danh sách tài liệu của mình                                                                | Frontend → Document Management Service    | GET /documents, filter theo user_id                              |
-| 7    | User xóa / đổi tên tài liệu (nếu cho phép)                                                          | Document Management Service               | Cập nhật DB; có thể soft-delete hoặc xóa file S3 tùy chính sách  |
-
-**Luồng bổ sung:** Tải xuống file gốc từ S3 (pre-signed URL), Phân trang danh sách tài liệu, Lọc theo tên/ngày.
-
----
-
-### 3.4. Luồng Quản lý Template (Template Service)
-
-| Bước | Hành động                                                                                    | Thành phần tham gia                                      | Ghi chú                                                               |
-| ---- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
-| 1    | User mở màn hình chọn Template (trước hoặc sau khi chọn tài liệu)                            | Frontend                                                 | GET /templates (có thể kèm category)                                  |
-| 2    | Template Service trả danh sách templates (name, thumbnail_url, is_premium, categories)       | API Gateway → Template Service → MySQL                   | Join `templates`, `template_categories`, `slide_layouts` nếu cần      |
-| 3    | User chọn một template (template_id)                                                         | Frontend                                                 | Lưu tạm hoặc gửi kèm khi tạo project/task sinh slide                  |
-| 4    | (Tùy chọn) User thêm/xóa template yêu thích                                                  | Frontend → Template Service                              | Cập nhật `user_favorite_templates` (user_id tham chiếu chéo)          |
-| 5    | Khi sinh slide: Task Orchestrator / Document Service gửi template_id cho PPTX Render Service | Template Service, Task Orchestrator, PPTX Render Service | Worker đọc file .pptx gốc từ S3 theo đường dẫn trong Template Service |
-
-**Luồng bổ sung:** Xem chi tiết template (layout placeholders cho admin), Lọc template theo category, Chỉ hiển thị template không premium cho user free (hoặc khóa nút “Dùng” nếu premium).
-
----
-
-### 3.5. Luồng Sinh Slide Tự Động (Task Orchestrator + AI Workers)
-
-Luồng chính chạy **bất đồng bộ** qua RabbitMQ với **điểm dừng tương tác** (Human-in-the-loop): sau khi AI sinh text, hệ thống dừng lại để người dùng review và chỉnh sửa trước khi tiếp tục sinh ảnh và render slide.
-
-| Bước | Hành động                                                                                                                                                                                                                                            | Thành phần tham gia                                                     | Ghi chú                                                                                                       |
-| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 1    | **Upload và tạo yêu cầu:** User đã đăng nhập, đã có file trong Document Service (hoặc upload ngay). Chọn template, bấm "Tạo slide"                                                                                                                   | Frontend → API Gateway → Document Management Service, Task Orchestrator | Document Service đảm bảo file tồn tại; trừ quota (gọi Subscription and Payment Service)                       |
-| 2    | Task Orchestrator tạo bản ghi project (status DRAFT), tạo task tổng (task_uuid), ghi `ai_task_logs` (EXTRACT_TEXT, PENDING)                                                                                                                             | Task Orchestrator, MySQL/Redis                                          | Trả về `task_uuid`, `project_uuid` cho Frontend ngay                                                                |
-| 3    | **Đẩy vào Queue:** Task Orchestrator publish message lên RabbitMQ: task_uuid, project_uuid, source_doc s3_url, template_id                                                                                                                                 | Task Orchestrator → RabbitMQ                                            | Queue dành cho bước extract text                                                                              |
-| 4    | **Text Extraction & Generation:** AI Text Processing Service consume message → tải file từ S3 → đọc nội dung (PyPDF2/pdfplumber/python-docx) → gọi LLM (Ollama/Qwen) → sinh dàn bài JSON (từng slide: nội dung text + prompt ảnh)                     | RabbitMQ → AI Text Processing Service, S3, LLM                          | Cập nhật `ai_task_logs` (EXTRACT_TEXT, PROCESSING → SUCCESS)                                                  |
-| 5    | **Lưu Draft Content:** Service gửi kết quả về Task Orchestrator / Document Management Service → lưu vào bảng `slide_pages` (content_json, image_prompt) → cập nhật project status = REVIEWING                                                        | AI Text Processing Service → Document Management Service, MySQL         | **KHÔNG** publish sang queue Image Gen ngay. Pipeline tạm dừng tại đây                                        |
-| 6    | **Thông báo Review:** Notification Service gửi event "Nội dung đã sẵn sàng để xem trước" → Frontend hiển thị UI Editor với nội dung text từng slide                                                                                                  | Notification Service → Frontend (WebSocket/SSE)                         | User thấy nút "Xem trước và Chỉnh sửa"                                                                        |
-| 7    | **User Review & Edit:** User xem từng slide, chỉnh sửa text/prompt ảnh trực tiếp trên giao diện → Frontend gọi API để cập nhật `slide_pages` (PUT /projects/{project_uuid}/slides/{page_index})                                                               | Frontend → API Gateway → Document Management Service                    | Cho phép user sửa nhiều lần. Project vẫn ở trạng thái REVIEWING                                               |
-| 8    | **User Approve:** User hài lòng với nội dung → bấm nút "Phê duyệt và Tiếp tục" → Frontend gọi API approve (POST /projects/{project_uuid}/approve)                                                                                                              | Frontend → API Gateway → Task Orchestrator                              | Task Orchestrator cập nhật project status = PROCESSING, publish message sang queue Image Gen                  |
-| 9    | **Image Generation:** AI Image Gen Service consume → với mỗi slide cần ảnh: đọc `image_prompt` từ DB → gọi SDXL/FLUX sinh ảnh → upload ảnh lên S3 → cập nhật `slide_pages.image_url`                                                                | RabbitMQ → AI Image Gen Service, S3, Diffusers                          | Ghi `generated_images` (user_id, prompt, s3_url) nếu cần lưu thư viện; publish message sang queue PPTX Render |
-| 10   | **Slide Assembling:** PPTX Render Service consume → đọc template .pptx từ S3 (theo template_id) → đọc text + image_url từ `slide_pages` → điền vào layout_placeholders → render file .pptx → upload lên S3 → cập nhật project (status DONE), project_exports (PPTX, s3_url) | RabbitMQ → PPTX Render Service, S3, Template metadata                   | `ai_task_logs` (RENDER_PPTX, SUCCESS)                                                                         |
-| 11   | **Thông báo tiến trình:** Trong suốt bước 9–10, Task Orchestrator publish event tiến trình (60%, 80%, 100%) lên RabbitMQ → Notification Service subscribe → đẩy qua WebSocket/SSE tới Frontend                                                       | RabbitMQ, Notification Service, Frontend (WebSocket/SSE)                | User thấy thanh tiến trình real-time từ 50% (sau approve) đến 100%                                            |
-| 12   | **Hoàn tất:** Notification Service gửi event "Slide đã sẵn sàng" → Frontend cập nhật UI (nút Xem/Tải slide hoàn chỉnh), có thể kèm push/email (tùy cấu hình)                                                                                         | Notification Service → Frontend / Email                                 |                                                                                                               |
-
-**Luồng lỗi:** 
-- **Bước 4 lỗi:** Worker ghi `ai_task_logs` (EXTRACT_TEXT, FAILED), project status = DRAFT, báo user "Không thể xử lý tài liệu".
-- **Bước 9–10 lỗi:** Ghi `ai_task_logs` (FAILED, error_message), project status = REVIEWING, user có thể sửa lại prompt và retry từ bước 8.
-- **User hủy:** User có thể xóa project (status DRAFT/REVIEWING) hoặc để đó, không mất quota cho đến khi approve.
-
-**Lợi ích của luồng mới:**
-- **Kiểm soát chất lượng:** User có thể chỉnh sửa nội dung AI sinh ra trước khi tốn tài nguyên GPU sinh ảnh.
-- **Tiết kiệm quota:** Chỉ trừ quota khi user approve (bước 8), không phải khi AI sinh draft.
-- **Tăng trải nghiệm:** User cảm thấy có quyền kiểm soát hơn, không bị "ép" nhận kết quả tự động.
+    User->>FE: Chọn gói cước (PRO) & Click Nâng cấp
+    FE->>AG: POST /api/subscription/users/upgrade
+    AG->>SUB: Chuyển tiếp yêu cầu
+    SUB->>PG: Tạo bản ghi Hóa đơn & Gói cước ở trạng thái PENDING
+    PG-->>SUB: Lưu thành công
+    SUB->>PAY: Gọi API nội bộ tạo phiên thanh toán (Stripe/PayOS Session)
+    PAY->>Gateway: Khởi tạo phiên thanh toán (API Key)
+    Gateway-->>PAY: Trả về paymentRedirectUrl
+    PAY-->>SUB: Trả về URL thanh toán
+    SUB-->>FE: Trả về URL thanh toán
+    FE->>User: Chuyển hướng sang trang cổng thanh toán (hoặc hiển thị VietQR)
+    User->>Gateway: Thực hiện thanh toán (quét mã QR / nhập thẻ)
+    Gateway-->>User: Xác nhận thanh toán thành công
+    Gateway->>PAY: Gửi thông điệp Webhook (Ví dụ: checkout.session.completed)
+    Note over PAY: Xác thực chữ ký mã hóa (SigHeader / Checksum Key)
+    PAY->>SUB: Gọi API nội bộ báo giao dịch thành công (orderCode / client_ref_id)
+    SUB->>PG: Cập nhật trạng thái Gói cước sang ACTIVE & gia hạn thời gian
+    PG-->>SUB: Cập nhật thành công
+    SUB-->>PAY: Xác nhận thành công
+    PAY-->>Gateway: Trả về HTTP 200 OK
+```
 
 ---
 
-### 3.6. Luồng Chia sẻ và Làm việc nhóm (Document Management / Projects)
+### 3.3. Luồng Sinh Slide Tự Động (Human-in-the-loop)
+Hệ thống sử dụng luồng thiết kế **kiểm soát trung gian** để tối ưu hóa tài nguyên GPU:
 
-| Bước | Hành động                                                                                 | Thành phần tham gia                                  | Ghi chú                                                               |
-| ---- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------- |
-| 1    | Chủ project mở màn hình Chia sẻ, nhập email (hoặc chọn user) và vai trò (EDITOR / VIEWER) | Frontend → API Gateway → Document Management Service | Service có thể gọi User and Auth Service để resolve email → user_id   |
-| 2    | Service ghi bảng `project_collaborators` (project_id, user_id, role)                      | Document Management Service, MySQL                   | Trả danh sách collaborator hiện tại                                   |
-| 3    | User được mời (đăng nhập) thấy project trong “Được chia sẻ với tôi”                       | Frontend, Document Management Service                | GET /projects/shared, filter theo user_id trong project_collaborators |
-| 4    | EDITOR có quyền chỉnh slide (nếu có tính năng edit sau khi gen); VIEWER chỉ xem và tải    | Document Management Service, Frontend                | Phân quyền kiểm tra ở API (project_collaborators.role)                |
-| 5    | Chủ project có thể thu hồi quyền (xóa bản ghi project_collaborators) hoặc đổi role        | Document Management Service                          |                                                                       |
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Người dùng
+    participant FE as Frontend ReactJS
+    participant AG as API Gateway (8080)
+    participant DM as Document Service (8082)
+    participant SUB as Subscription Service (8084)
+    participant MY as MySQL (Projects DB)
+    participant S3 as MinIO / AWS S3
+    participant AI as AI Service (FastAPI - 8000)
+    participant RD as Redis Queue
+    participant Worker as AI Worker (worker.py)
 
-**Luồng bổ sung:** Chia sẻ bằng link public (token) với quyền VIEWER, Hết hạn link.
+    User->>FE: Tải lên tài liệu & Chọn Template -> Bấm "Tạo Slide"
+    FE->>AG: POST /api/document/projects
+    AG->>DM: Chuyển tiếp request tạo Project
+    DM->>SUB: Gọi Feign Client kiểm tra Quota (checkQuota)
+    SUB-->>DM: Cho phép (allowed = true)
+    DM->>S3: Upload file tài liệu gốc lên S3 (Nhận s3_url)
+    S3-->>DM: Trả về s3_url
+    DM->>MY: Tạo Project (DRAFT), sinh ai_task_logs (EXTRACT_TEXT, PENDING)
+    MY-->>DM: Lưu thành công
+    DM->>AI: Gửi spec tạo slide draft (HTTP POST /api/generate-slide-spec)
+    AI->>RD: Đẩy tác vụ vào hàng đợi Redis
+    AI-->>DM: Trả về Task ID của AI Engine
+    DM->>MY: Cập nhật ai_task_id vào Project & cập nhật log thành PROCESSING
+    MY-->>DM: Lưu thành công
+    DM-->>FE: Trả về Project ID & Task ID ngay lập tức (Bất đồng bộ)
+    
+    loop Polling tiến trình sinh Dàn bài (Draft)
+        FE->>AG: GET /api/document/projects/{id}/progress
+        AG->>DM: Chuyển tiếp request lấy tiến độ
+        DM->>AI: GET /api/task-status/{taskId}
+        AI-->>DM: Trả về status & progress
+        DM->>MY: Cập nhật log trạng thái
+        DM-->>FE: Trả về tiến trình
+    end
+
+    Note over Worker: Worker lấy file từ S3, gọi LLM<br/>để trích xuất nội dung & sinh Outline Draft JSON
+    Worker->>AI: Cập nhật Task hoàn thành sinh text
+    
+    FE->>User: Hiển thị giao diện Editor với Text Draft từng slide
+    User->>FE: Chỉnh sửa nội dung chữ, chỉnh sửa prompt tạo ảnh
+    FE->>AG: POST /api/document/projects/{id}/pages/sync
+    AG->>DM: Đồng bộ nội dung đã sửa xuống database
+    DM->>MY: Cập nhật slide_pages
+    
+    User->>FE: Bấm "Phê duyệt và Tiếp tục" (Approve)
+    FE->>AG: POST /api/document/projects/{id}/approve (hoặc chuyển trạng thái dự án)
+    AG->>DM: Cập nhật Project (status = PROCESSING)
+    DM->>AI: Gọi API tiếp tục sinh ảnh & render PPTX
+    AI->>RD: Đẩy tiếp task sinh ảnh & render vào Redis
+    
+    loop Polling tiến trình sinh Ảnh & Dựng Slide
+        FE->>AG: GET /api/document/projects/{id}/progress
+        DM->>AI: GET /api/task-status/{taskId}
+        AI-->>DM: Trả về progress (50% -> 100%)
+        DM-->>FE: Trả về tiến trình
+    end
+
+    Note over Worker: Worker đọc prompt tạo ảnh qua SDXL/FLUX,<br/>lưu ảnh lên S3, ráp text + ảnh vào PPTX template,<br/>upload file .pptx lên S3
+    Worker->>AI: Hoàn thành task (completed)
+    DM->>MY: Cập nhật Project (status = DONE, slide_url = s3_url) & logs = SUCCESS
+    DM->>SUB: Gọi Feign Client trừ Quota người dùng (consumeQuota)
+    FE->>User: Báo slide đã sẵn sàng -> Nút Xem & Tải slide
+```
 
 ---
 
-### 3.7. Luồng Thông báo (Notification Service)
+## 4. Thiết kế Cơ sở dữ liệu (Database Schema Detail)
 
-| Bước | Hành động                                                                                                                                                                                                     | Thành phần tham gia                   | Ghi chú                                                             |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------- |
-| 1    | Bất kỳ service nào cần gửi thông báo (Payment, Orchestrator, User and Auth...) publish event lên RabbitMQ (Exchange topic) với routing key (vd: notification.email, notification.websocket, notification.sms) | Các Service → RabbitMQ                | Payload: user_id, loại thông báo, nội dung, metadata                |
-| 2    | Notification Service subscribe các queue tương ứng (email, websocket, sms)                                                                                                                                    | RabbitMQ → Notification Service       | Decouple hoàn toàn: service gửi không cần biết Notification Service |
-| 3    | **Email + Bell notification:** Service gửi email qua SMTP/API (SendGrid, SES...) và đồng thời lưu bản ghi thông báo vào MongoDB collection `notifications`                                                   | Notification Service, SMTP/API, MongoDB | VD: hóa đơn, reset mật khẩu, slide hoàn thành                       |
-| 4    | **WebSocket/SSE:** Service map user_id → connection (Redis cache session); đẩy message tới đúng client để hiện thông báo chuông real-time (và cập nhật badge số lượng chưa đọc)                               | Notification Service, Redis, Frontend |                                                                     |
-| 5    | **SMS (OTP, nhắc thanh toán):** Gọi gateway SMS, ghi log                                                                                                                                                      | Notification Service, SMS Gateway     |                                                                     |
-| 6    | User mở trang “Lịch sử thông báo” (quả chuông) → Frontend gọi API Notification Service → trả danh sách từ MongoDB `notifications` theo `user_id`, `is_read`, `created_at`                                    | Frontend → Notification Service       | Phân trang, lọc theo loại/ngày                                      |
+### 4.1. User Service Database (PostgreSQL - `user_service_db`)
+Quản lý bảo mật định danh, hồ sơ cá nhân và phân quyền người dùng theo mô hình RBAC:
 
----
-
-### 3.8. Luồng Xem và Tải slide đã tạo (View and Download)
-
-| Bước | Hành động                                                                                                                                                                                    | Thành phần tham gia                                        | Ghi chú                                                                                   |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| 1    | User mở danh sách Project/Dashboard → Frontend gọi API Document Management Service (GET /projects?user_id=...)                                                                               | Frontend → Document Management Service                     | Trả danh sách project (name, status, created_at, thumbnail nếu có)                        |
-| 2    | User chọn một project (status DONE) → bấm “Xem”                                                                                                                                              | Frontend                                                   | Frontend lấy project_id, gọi API lấy thông tin export (project_exports: PPTX/PDF, s3_url) |
-| 3    | **Xem trong trình duyệt:** Frontend lấy pre-signed URL từ backend (Document Management Service hoặc dedicated API) → nhúng viewer (thư viện xem .pptx hoặc convert tạm sang PDF để hiển thị) | Document Management Service, S3 (pre-signed URL), Frontend | Không tải toàn bộ file về máy user                                                        |
-| 4    | **Tải xuống:** User bấm “Tải PPTX” (hoặc “Tải PDF” nếu có export PDF) → Backend trả pre-signed URL hoặc redirect → trình duyệt tải file                                                      | Document Management Service, S3                            | Có thể ghi project_exports lần nữa (export_type, exported_at) để audit/quota              |
-| 5    | (Tùy chọn) Export PDF: User bấm “Xuất PDF” → Backend đưa job vào queue (PPTX → PDF worker) hoặc gọi sync service → lưu file PDF lên S3 → cập nhật project_exports → trả link tải             | Document Management Service, Worker/Service chuyển PDF, S3 | Quota có thể tính theo số lần export PDF/tháng                                            |
-
----
-
-### 3.9. Tóm tắt luồng theo chức năng
-
-| Chức năng                   | Luồng chính | Ghi chú                                                        |
-| --------------------------- | ----------- | -------------------------------------------------------------- |
-| **Đăng ký / Đăng nhập**     | 3.1         | JWT, OAuth, audit log                                          |
-| **Gói cước và Thanh toán**  | 3.2         | Package, invoice, gateway, subscription history                |
-| **Quản lý tài liệu**        | 3.3         | Upload S3, metadata, danh sách, xóa                            |
-| **Quản lý Template**        | 3.4         | Danh sách, chọn, yêu thích; dùng khi sinh slide                |
-| **Sinh slide tự động**      | 3.5         | Queue → Text AI → User Review & Edit → User Approve → Image AI → PPTX Render; thông báo tiến trình |
-| **Chia sẻ / Làm việc nhóm** | 3.6         | project_collaborators, role EDITOR/VIEWER                      |
-| **Thông báo**               | 3.7         | RabbitMQ → Email, WebSocket, SMS, lịch sử                      |
-| **Xem và Tải slide**        | 3.8         | Danh sách project, pre-signed URL, viewer, export PDF          |
-
-## 4. Công Nghệ Đề Xuất
-* **Frontend:** TypeScript + ReactJS / Next.js (Khuyến khích) hoặc VueJS. Khởi chạy server trên NodeJS.
-* **Core Backend API:** Java 17/21 + Spring Boot 3 + Spring Cloud + Hibernate/JPA.
-* **AI Worker Backend:** Python 3.10+ + FastAPI.
-* **Database Relational:** MySQL 8.
-* **Database NoSQL:** MongoDB (ưu tiên cho Notification Service để lưu thông báo chuông/in-app).
-* **Cache & Message Broker:** Redis.
-* **Object Store:** MinIO (mã nguồn mở giống lệnh AWS S3 để chạy local/on-premise).
-* **AI Models:** 
-  * Text: Ollama (Qwen2 / Llama-3 / Gemma-2).
-  * Image: Diffusers (Stable Diffusion XL / FLUX.1).
-
----
-
-## 5. Thiết kế Cơ sở dữ liệu (Database Schema)
-
-Dưới đây là chi tiết thiết kế CSDL cho từng bảng thuộc các Microservices, tuân thủ theo nguyên lý **Database-per-Service** của Microservices. (Mỗi service quản lý một cụm DB riêng).
-
-### 5.1. User & Auth Service (Phân quyền chuẩn RBAC)
-**Database**: PostgreSQL / MySQL - Quản lý bảo mật, định danh, và phân quyền người dùng.
-
-#### Danh sách các bảng chi tiết:
-- **`users`**: Thông tin định danh cốt lõi.
-  - `id` (PK, UUID)
-  - `email` (VARCHAR(100), UNIQUE)
-  - `password_hash` (VARCHAR(255))
-  - `status` (ENUM: ACTIVE, INACTIVE, BANNED)
-  - `created_at` (TIMESTAMP)
-- **`roles`**: Master Data chứa các nhóm quyền.
-  - `id` (PK, UUID)
-  - `code` (VARCHAR(50), UNIQUE) - VD: ADMIN, MANAGER, FREE_USER, PRO_USER
-- **`permissions`**: Master Data chứa từng hành động cực nhỏ.
-  - `id` (PK, UUID)
-  - `code` (VARCHAR(50), UNIQUE) - VD: EXPORT_PPTX, GEN_IMAGE_FLUX, UPLOAD_PDF_100MB
-- **`user_roles`**: Bảng nối N-N giữa User và Role. (Một user có thể có nhiều role).
-  - `user_id` (UUID, FK -> users.id)
-  - `role_id` (UUID, FK -> roles.id)
-- **`role_permissions`**: Bảng nối N-N giữa Role và Permission. (Khi user up lên gói Pro, chỉ cần gán role PRO_USER là có trọn quyền).
-  - `role_id` (UUID, FK -> roles.id)
-  - `permission_id` (UUID, FK -> permissions.id)
-- **`login_audit_logs`**: Lưu vết bảo mật hệ thống.
-  - `id` (PK, UUID)
-  - `user_id` (UUID, FK -> users.id)
-  - `ip_address` (VARCHAR(45))
-  - `device` (VARCHAR(255))
-  - `login_time` (TIMESTAMP)
-  - `status` (ENUM: SUCCESS, FAILED)
-
-#### Sơ đồ Entity-Relationship (ERD):
 ```mermaid
 erDiagram
     users ||--o{ user_roles : "has"
     roles ||--o{ user_roles : "assigned to"
-    roles ||--o{ role_permissions : "contains"
-    permissions ||--o{ role_permissions : "assigned to"
-    users ||--o{ login_audit_logs : "generates track"
+    roles ||--o{ role_permission : "contains"
+    permissions ||--o{ role_permission : "assigned to"
+    users ||--|| user_profiles : "owns"
 
     users {
         UUID id PK
-        VARCHAR email UK
-        VARCHAR password_hash
-        ENUM status
+        VARCHAR username
+        VARCHAR password
+        VARCHAR email
+        VARCHAR google_id
+        INTEGER status
+        BOOLEAN email_verified
+        TIMESTAMP last_login_at
+        VARCHAR created_by
         TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
+    }
+    user_profiles {
+        UUID user_id PK, FK
+        VARCHAR full_name
+        VARCHAR avatar_url
+        DATE date_of_birth
+        VARCHAR phone_number
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     roles {
-        UUID id PK
-        VARCHAR code UK
+        VARCHAR name PK
+        VARCHAR description
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     permissions {
-        UUID id PK
-        VARCHAR code UK
+        VARCHAR name PK
+        VARCHAR description
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     user_roles {
         UUID user_id FK
-        UUID role_id FK
+        VARCHAR role_name FK
     }
-    role_permissions {
-        UUID role_id FK
-        UUID permission_id FK
-    }
-    login_audit_logs {
-        UUID id PK
-        UUID user_id FK
-        VARCHAR ip_address
-        VARCHAR device
-        TIMESTAMP login_time
-        ENUM status
+    role_permission {
+        VARCHAR role_name FK
+        VARCHAR permission_name FK
     }
 ```
 
 ---
 
-### 5.2. Subscription & Payment Service (Billing & Quota)
-**Database**: MySQL - Thiết kế bóc tách rõ ràng giữa Kế hoạch (Package), Vận hành (Subscription), và Giao dịch tài chính (Transaction).
+### 4.2. Subscription Service Database (PostgreSQL - `subscription_service_db`)
+Quản lý các gói cước và theo dõi hạn mức sử dụng (Quotas) của từng người dùng:
 
-#### Danh sách các bảng chi tiết:
-- **`packages`**: Master Data các gói cước.
-  - `id` (PK, UUID)
-  - `code` (VARCHAR(50), UNIQUE)
-  - `name` (VARCHAR(100))
-  - `price` (DECIMAL)
-  - `billing_cycle` (ENUM: MONTHLY, YEARLY)
-- **`package_features`**: Giới hạn cụ thể của từng gói.
-  - `id` (PK, UUID)
-  - `package_id` (UUID, FK -> packages.id)
-  - `feature_key` (VARCHAR(50)) - VD: MAX_SLIDES_PER_MONTH
-  - `feature_value` (INT) - VD: 50
-- **`user_subscriptions`**: Gói cước user đang sử dụng hiện tại.
-  - `id` (PK, UUID)
-  - `user_id` (UUID, Index) *(ID tham chiếu chéo tới Core User)*
-  - `package_id` (UUID, FK -> packages.id)
-  - `start_date` (TIMESTAMP)
-  - `expire_date` (TIMESTAMP)
-  - `status` (ENUM: ACTIVE, EXPIRED)
-- **`subscription_history`**: Lưu vết mỗi khi user nâng cấp/hạ cấp gói. Bắt buộc để truy thu / giải quyết khiếu nại.
-  - `id` (PK, UUID)
-  - `user_subscription_id` (UUID, FK -> user_subscriptions.id)
-  - `action` (ENUM: UPGRADE, DOWNGRADE, CANCEL)
-  - `created_at` (TIMESTAMP)
-- **`invoices`**: Hóa đơn pháp lý sinh ra mỗi chu kỳ.
-  - `id` (PK, UUID)
-  - `user_id` (UUID, Index)
-  - `total_amount` (DECIMAL)
-  - `tax` (DECIMAL)
-  - `issue_date` (TIMESTAMP)
-- **`transactions`**: Lịch sử gọi cổng thanh toán.
-  - `id` (PK, UUID)
-  - `invoice_id` (UUID, FK -> invoices.id)
-  - `gateway` (ENUM: VNPAY, STRIPE, PAYPAL)
-  - `trans_ref` (VARCHAR(100))
-  - `status` (ENUM: PENDING, SUCCESS, FAILED)
-- **`discount_coupons`**: Mã giảm giá cho marketing.
-  - `id` (PK, UUID)
-  - `code` (VARCHAR(50), UNIQUE)
-  - `discount_percent` (DECIMAL)
-  - `max_usage` (INT)
-  - `expire_date` (TIMESTAMP)
-
-#### Sơ đồ Entity-Relationship (ERD):
 ```mermaid
 erDiagram
-    packages ||--o{ package_features : "has features"
-    packages ||--o{ user_subscriptions : "subscribed by"
+    subscription_packages ||--o{ package_features : "has features"
+    subscription_packages ||--o{ user_subscriptions : "subscribed by"
     user_subscriptions ||--o{ subscription_history : "tracks changes"
-    users ||--o{ user_subscriptions : "owns (cross-db ref)"
-    users ||--o{ invoices : "billed to (cross-db ref)"
-    invoices ||--o{ transactions : "paid via"
+    user_subscriptions ||--o{ user_feature_usages : "monitors usage"
 
-    packages {
+    subscription_packages {
         UUID id PK
-        VARCHAR code UK
+        VARCHAR code
         VARCHAR name
-        DECIMAL price
-        ENUM billing_cycle
+        TEXT description
+        DECIMAL price_vnd
+        DECIMAL price_usd
+        INTEGER billing_cycle
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     package_features {
         UUID id PK
         UUID package_id FK
         VARCHAR feature_key
-        INT feature_value
+        INTEGER feature_value
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     user_subscriptions {
         UUID id PK
@@ -446,405 +359,247 @@ erDiagram
         UUID package_id FK
         TIMESTAMP start_date
         TIMESTAMP expire_date
-        ENUM status
+        INTEGER status
+        TIMESTAMP quota_reset_date
+        BIGINT order_code
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
+    }
+    user_feature_usages {
+        UUID id PK
+        UUID user_id
+        VARCHAR feature_key
+        INTEGER usage_value
+        TIMESTAMP last_reset_time
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     subscription_history {
         UUID id PK
-        UUID user_subscription_id FK
-        ENUM action
+        UUID user_id
+        INTEGER action
+        VARCHAR previous_package_code
+        VARCHAR new_package_code
+        TEXT note
+        VARCHAR created_by
         TIMESTAMP created_at
-    }
-    invoices {
-        UUID id PK
-        UUID user_id
-        DECIMAL total_amount
-        DECIMAL tax
-        TIMESTAMP issue_date
-    }
-    transactions {
-        UUID id PK
-        UUID invoice_id FK
-        ENUM gateway
-        VARCHAR trans_ref
-        ENUM status
-    }
-    discount_coupons {
-        UUID id PK
-        VARCHAR code UK
-        DECIMAL discount_percent
-        INT max_usage
-        TIMESTAMP expire_date
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
 ```
 
 ---
 
-### 5.3. Template & Asset Service (Quản lý Giao diện)
-**Database**: MySQL - Tách bạch Template ra khỏi các Slide Layout để thư viện Python (python-pptx) dễ dàng đọc tọa độ x, y.
+### 4.3. Document Service Database (MySQL - `document_service_db`)
+Quản lý không gian làm việc thiết kế slide (Project Workspace) và các tiến trình đồng bộ, xuất bản slide:
 
-#### Danh sách các bảng chi tiết:
-- **`templates`**: Thông tin tổng quan bộ giao diện.
-  - `id` (PK, UUID)
-  - `name` (VARCHAR(100))
-  - `author` (VARCHAR(100))
-  - `thumbnail_url` (VARCHAR(255))
-  - `is_premium` (BOOLEAN)
-- **`template_categories`**: Phân loại Template theo ngành nghề (Công nghệ, Y tế, Giáo dục...).
-  - `id` (PK, UUID)
-  - `name` (VARCHAR(100))
-  - `template_id` (UUID, FK -> templates.id)
-- **`slide_layouts`**: Các loại bố cục bên trong 1 template.
-  - `id` (PK, UUID)
-  - `template_id` (UUID, FK -> templates.id)
-  - `layout_type` (ENUM: TITLE, 2_COLUMN, IMAGE_RIGHT)
-- **`layout_placeholders`**: Tọa độ chính xác để chèn nội dung. Worker sẽ chọc vào bảng này để map Text/Image.
-  - `id` (PK, UUID)
-  - `layout_id` (UUID, FK -> slide_layouts.id)
-  - `element_type` (ENUM: TEXT, IMAGE)
-  - `x_pos` (INT)
-  - `y_pos` (INT)
-  - `width` (INT)
-  - `height` (INT)
-  - `z_index` (INT)
-- **`user_favorite_templates`**: UX cá nhân hóa lưu template yêu thích.
-  - `id` (PK, UUID)
-  - `user_id` (UUID, Index) *(ID tham chiếu chéo)*
-  - `template_id` (UUID, FK -> templates.id)
-
-#### Sơ đồ Entity-Relationship (ERD):
 ```mermaid
 erDiagram
-    templates ||--o{ template_categories : "belongs to"
-    templates ||--o{ slide_layouts : "contains layouts"
-    slide_layouts ||--o{ layout_placeholders : "defines placeholders"
-    templates ||--o{ user_favorite_templates : "favorited by users"
-
-    templates {
-        UUID id PK
-        VARCHAR name
-        VARCHAR author
-        VARCHAR thumbnail_url
-        BOOLEAN is_premium
-    }
-    template_categories {
-        UUID id PK
-        VARCHAR name
-        UUID template_id FK
-    }
-    slide_layouts {
-        UUID id PK
-        UUID template_id FK
-        ENUM layout_type
-    }
-    layout_placeholders {
-        UUID id PK
-        UUID layout_id FK
-        ENUM element_type
-        INT x_pos
-        INT y_pos
-        INT width
-        INT height
-        INT z_index
-    }
-    user_favorite_templates {
-        UUID id PK
-        UUID user_id
-        UUID template_id FK
-    }
-```
-
----
-
-### 5.4. Document Management & Orchestration Service (Xử lý Nhiệm vụ AI)
-**Database**: MySQL/MongoDB - Trái tim hệ thống, quản lý tài liệu, làm việc nhóm, và theo dõi tiến trình sinh Slide của Qwen/FLUX.
-
-#### Danh sách các bảng chi tiết:
-- **`source_documents`**: File gốc do người dùng tải lên.
-  - `id` (PK, UUID)
-  - `user_id` (UUID, Index)
-  - `file_name` (VARCHAR(255))
-  - `s3_url` (VARCHAR(255))
-  - `page_count` (INT)
-  - `file_size` (BIGINT)
-- **`projects`** (Slide Projects): Không gian làm việc chính (Workspace) một File Trình Chiếu.
-  - `id` (PK, UUID)
-  - `owner_id` (UUID, Index)
-  - `source_doc_id` (UUID, FK -> source_documents.id)
-  - `template_id` (UUID)
-  - `name` (VARCHAR(255))
-  - `status` (ENUM: DRAFT, REVIEWING, PROCESSING, DONE)
-- **`project_collaborators`**: Tính năng share dự án (Làm việc nhóm).
-  - `id` (PK, UUID)
-  - `project_id` (UUID, FK -> projects.id)
-  - `user_id` (UUID, Index)
-  - `role` (ENUM: EDITOR, VIEWER)
-- **`slide_pages`**: Nội dung của từng trang chi tiết.
-  - `id` (PK, UUID)
-  - `project_id` (UUID, FK -> projects.id)
-  - `page_index` (INT)
-  - `layout_id` (UUID)
-  - `content_json` (JSON)
-  - `image_prompt` (TEXT)
-  - `image_url` (VARCHAR(255))
-- **`ai_task_logs`**: Bảng Operation Audit Queue. Hệ thống sập bước nào có thể query ra ngay.
-  - `id` (PK, UUID)
-  - `project_id` (UUID, FK -> projects.id)
-  - `task_type` (ENUM: EXTRACT_TEXT, GEN_IMAGE, RENDER_PPTX)
-  - `status` (ENUM: PENDING, PROCESSING, SUCCESS, FAILED)
-  - `started_at` (TIMESTAMP)
-  - `completed_at` (TIMESTAMP)
-  - `error_message` (TEXT)
-- **`generated_images`**: Thư viện ảnh AI sinh ra để tái lưu trữ dùng cho project khác.
-  - `id` (PK, UUID)
-  - `user_id` (UUID, Index)
-  - `prompt` (TEXT)
-  - `s3_url` (VARCHAR(255))
-  - `created_at` (TIMESTAMP)
-- **`project_exports`**: Lịch sử xuất lưu trữ để quản lý Quota Billing (Export ra PPT/PDF).
-  - `id` (PK, UUID)
-  - `project_id` (UUID, FK -> projects.id)
-  - `export_type` (ENUM: PPTX, PDF)
-  - `s3_url` (VARCHAR(255))
-  - `exported_at` (TIMESTAMP)
-
-#### Sơ đồ Entity-Relationship (ERD):
-```mermaid
-erDiagram
-    users ||--o{ source_documents : "uploads (cross-db ref)"
     source_documents ||--o{ projects : "creates project"
-    projects ||--o{ project_collaborators : "shared with"
     projects ||--o{ slide_pages : "contains pages"
     projects ||--o{ ai_task_logs : "processes tasks"
-    users ||--o{ generated_images : "owns assets (cross-db ref)"
     projects ||--o{ project_exports : "exported multiple times"
 
     source_documents {
-        UUID id PK
-        UUID user_id
+        VARCHAR id PK
+        VARCHAR user_id
         VARCHAR file_name
-        VARCHAR s3_url
-        INT page_count
+        INTEGER file_type
         BIGINT file_size
+        VARCHAR url
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     projects {
-        UUID id PK
-        UUID owner_id
-        UUID source_doc_id FK
-        UUID template_id
+        VARCHAR id PK
         VARCHAR name
-        ENUM status
-    }
-    project_collaborators {
-        UUID id PK
-        UUID project_id FK
-        UUID user_id
-        ENUM role
+        VARCHAR owner_id
+        VARCHAR source_doc_id FK
+        VARCHAR template_id
+        TEXT initial_prompt
+        VARCHAR slide_url
+        INTEGER status
+        VARCHAR ai_task_id
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     slide_pages {
-        UUID id PK
-        UUID project_id FK
-        INT page_index
-        UUID layout_id
-        JSON content_json
-        TEXT image_prompt
+        VARCHAR id PK
+        VARCHAR project_id FK
+        INTEGER page_index
+        VARCHAR title
+        TEXT bullets
+        TEXT notes
+        TEXT chart
+        TEXT table_data
+        TEXT rich_text
+        LONGTEXT elements
         VARCHAR image_url
+        VARCHAR layout
+        VARCHAR primary_visual
+        BOOLEAN likely_multi_pptx_slides
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     ai_task_logs {
-        UUID id PK
-        UUID project_id FK
-        ENUM task_type
-        ENUM status
+        VARCHAR id PK
+        VARCHAR project_id FK
+        INTEGER task_type
+        INTEGER status
+        TEXT error_message
         TIMESTAMP started_at
         TIMESTAMP completed_at
-        TEXT error_message
-    }
-    generated_images {
-        UUID id PK
-        UUID user_id
-        TEXT prompt
-        VARCHAR s3_url
+        VARCHAR created_by
         TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
     project_exports {
-        UUID id PK
-        UUID project_id FK
-        ENUM export_type
+        VARCHAR id PK
+        VARCHAR project_id FK
+        INTEGER export_type
         VARCHAR s3_url
-        TIMESTAMP exported_at
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
     }
 ```
 
 ---
 
-### 5.5. Notification Service (Bell Notifications)
-**Database**: MongoDB - Tối ưu lưu thông báo chuông/in-app theo dạng document, hỗ trợ đọc nhanh theo `user_id`, lọc `is_read` và sắp xếp theo thời gian.
+### 4.4. Template Service Database (MySQL - `template_service_db`)
+Quản lý kho mẫu slide thiết kế:
 
-#### Danh sách collection chi tiết:
-- **`notifications`**: Nội dung thông báo hiển thị ở quả chuông.
-  - `_id` (ObjectId)
-  - `user_id` (UUID/String, Index)
-  - `type` (String) - VD: BILLING, TASK_PROGRESS, SYSTEM
-  - `title` (String)
-  - `body` (String)
-  - `metadata` (Object) - lưu `project_id`, `task_id`, `invoice_id`...
-  - `channels` (Array<String>) - VD: ["BELL", "EMAIL"]
-  - `is_read` (Boolean, Default `false`)
-  - `read_at` (Date, nullable)
-  - `created_at` (Date, Index)
-- **`notification_delivery_logs`**: Nhật ký gửi theo kênh để debug/retry.
-  - `_id` (ObjectId)
-  - `notification_id` (ObjectId, Ref `notifications._id`)
-  - `channel` (String) - EMAIL/WEBSOCKET/SMS
-  - `status` (String) - PENDING/SENT/FAILED
-  - `error_message` (String, nullable)
-  - `created_at` (Date)
+```mermaid
+erDiagram
+    categories ||--o{ templates : "belongs to"
 
-#### Gợi ý index:
-- `notifications`: `{ user_id: 1, is_read: 1, created_at: -1 }`
-- `notification_delivery_logs`: `{ notification_id: 1, channel: 1, created_at: -1 }`
+    templates {
+        VARCHAR id PK
+        VARCHAR name
+        TEXT description
+        VARCHAR s3_url
+        INTEGER num_slides
+        BOOLEAN is_premium
+        VARCHAR category_id FK
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
+    }
+    categories {
+        VARCHAR id PK
+        VARCHAR name
+        VARCHAR description
+        VARCHAR created_by
+        TIMESTAMP created_at
+        VARCHAR updated_by
+        TIMESTAMP updated_at
+        BOOLEAN is_active
+    }
+```
+```
 
 ---
 
-## 6. Cách chạy local hiện tại
+## 5. Hướng dẫn khởi chạy hệ thống ở môi trường Local
 
-Phần backend business services và hạ tầng có thể chạy bằng Docker Compose. Riêng AI Service nên chạy local riêng để tiện debug model, API key và worker.
-
-### 6.1. Chuẩn bị
-
-Cần cài sẵn:
-- Docker Desktop
-- Java 21 nếu muốn chạy từng Spring service bằng IDE
-- Python 3.10+ cho AI Service
-- Node.js nếu cần chạy frontend riêng
-
-Khi chạy full Docker Compose, hãy tắt các Spring service đang chạy bằng IDE/Maven trước, vì các port `8080` đến `8084` sẽ bị trùng.
-
-### 6.2. Chạy AI Service local
-
-Terminal 1: chạy AI API.
-
-```powershell
-cd E:\DemoDoan\ai-service
-.\.venv\Scripts\activate
-python backend\main.py
-```
-
-Terminal 2: chạy AI worker.
-
-```powershell
-cd E:\DemoDoan\ai-service
-.\.venv\Scripts\activate
-cd backend
-python worker.py
-```
-
-Kiểm tra AI API:
-
-```text
-http://localhost:8000/docs
-```
-
-Docker services sẽ gọi AI qua biến:
-
+### 5.1. Cấu hình file biến môi trường (`.env`)
+Tạo tệp `.env` tại thư mục gốc của dự án (`D:\Code\AI-Slide-Generator\.env`) chứa thông tin cấu hình cổng cơ sở dữ liệu và các API Key bên thứ ba:
 ```env
-AI_URL_DOCKER=http://host.docker.internal:8000
+# Database Credentials
+POSTGRES_USER=ai_user
+POSTGRES_PASSWORD=ai_password
+MYSQL_ROOT_PASSWORD=ai_root_password
+MYSQL_USER=ai_user
+MYSQL_PASSWORD=ai_password
+
+# Stripe API Keys
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_CURRENCY=usd
+
+# PayOS API Keys
+PAYOS_CLIENT_ID=...
+PAYOS_API_KEY=...
+PAYOS_CHECKSUM_KEY=...
+PAYOS_RETURN_URL=http://localhost:5173/success
+PAYOS_CANCEL_URL=http://localhost:5173/cancel
+
+# JWT Security
+JWT_SIGNER_KEY=your_super_secret_jwt_key_32_characters_long
 ```
 
-### 6.3. Chạy full Backend bằng Docker Compose
-
-Từ thư mục root của project:
-
+### 5.2. Chạy cơ sở hạ tầng & Core Java Backend (Docker)
+Khởi động Docker Desktop, mở Terminal tại thư mục gốc của dự án và chạy:
 ```powershell
-cd E:\DemoDoan
 docker compose up -d --build
+```
+
+Kiểm tra trạng thái các container:
+```powershell
 docker compose ps
 ```
 
-Docker Compose sẽ chạy các thành phần chính:
-- `api-gateway`
-- `user-service`
-- `document-service`
-- `template-service`
-- `subscription-service`
-- `notification-service`
-- `postgres`
-- `mysql`
-- `redis`
-- `rabbitmq`
+Các dịch vụ sẽ lắng nghe tại các cổng tương ứng:
+- **API Gateway**: `http://localhost:8080` (Cổng giao tiếp duy nhất của Frontend)
+- **User Service**: `http://localhost:8081`
+- **Document Service**: `http://localhost:8082`
+- **Template Service**: `http://localhost:8083`
+- **Subscription Service**: `http://localhost:8084`
+- **Payment Service**: `http://localhost:8085`
+- **RabbitMQ Dashboard**: `http://localhost:15672` (Tài khoản mặc định: `ai_user` / `ai_password`)
 
-### 6.4. Các endpoint local
+### 5.3. Khởi chạy AI Service (Python FastAPI & Redis Worker)
+Vì AI Service yêu cầu cấu hình phần cứng (GPU) và tải mô hình nặng nên sẽ được chạy trực tiếp trên môi trường Localhost Host thay vì chạy Docker:
 
-Frontend nên gọi qua API Gateway:
+1. **Chạy API Server**:
+   ```powershell
+   cd D:\Code\AI-Slide-Generator\ai-service
+   .\.venv\Scripts\activate
+   cd backend
+   python main.py
+   ```
+   API tài liệu sẽ có sẵn tại: `http://localhost:8000/docs`
 
-```text
-http://localhost:8080
-```
+2. **Chạy Task Queue Worker**:
+   ```powershell
+   cd D:\Code\AI-Slide-Generator\ai-service
+   .\.venv\Scripts\activate
+   cd backend
+   python worker.py
+   ```
 
-Các service expose riêng để debug:
+---
 
-```text
-API Gateway:          http://localhost:8080
-User Service:         http://localhost:8081
-Document Service:     http://localhost:8082
-Template Service:     http://localhost:8083
-Subscription Service: http://localhost:8084
-AI Service:           http://localhost:8000
-RabbitMQ UI:          http://localhost:15672
-```
-
-MySQL trong Docker dùng port container `3306`, nhưng expose ra máy host là `3307` để tránh trùng MySQL local:
-
-```text
-localhost:3307 -> mysql:3306
-```
-
-### 6.5. Luồng gọi API cho FE
-
-FE chỉ cần gọi BE qua API Gateway. Không gọi trực tiếp AI Service.
-
-Đọc spec FE tại:
-
-```text
-fe_api_spec.md
-```
-
-Luồng chính:
-1. Đăng ký/đăng nhập qua `/api/auth/**`.
-2. Tạo project slide qua `/api/document/projects`.
-3. Lấy danh sách project qua `/api/document/projects`.
-4. Lấy slide pages qua `/api/document/projects/{projectId}/pages`.
-5. Cập nhật/sync slide pages qua các API document đã ghi trong `fe_api_spec.md`.
-
-### 6.6. Xem log và dừng hệ thống
-
-Xem log các service quan trọng:
-
-```powershell
-docker compose logs -f api-gateway document-service
-```
-
-Dừng toàn bộ Docker services:
-
-```powershell
-docker compose down
-```
-
-Nếu muốn reset sạch database Docker local, lệnh sau sẽ xóa cả volume dữ liệu:
-
-```powershell
-docker compose down -v
-docker compose up -d --build
-```
-
-## Documentation Source Of Truth
-
-This file describes the overall architecture, databases, and local operations.
-It is not the request/response contract used by FE.
-
-- FE quick start: `README_FE_API.md`
-- FE -> Java BE contract: `fe_api_spec.md`
-- Java BE -> Python AI contract: `ai-service/api_specification.md`
-- AI Service setup and operation: `ai-service/README.md`
-
-If an architectural example differs from an API contract, the corresponding
-contract file above is authoritative.
+## 6. Danh sách các file tài liệu hướng dẫn cụ thể
+Tất cả các dịch vụ nghiệp vụ đều có sẵn file tài liệu chi tiết hướng dẫn bên trong thư mục của service:
+- **API Gateway Guide**: [api-gateway/README.md](file:///D:/Code/AI-Slide-Generator/back-end/api-gateway/README.md)
+- **User Service Guide**: [user-service/README.md](file:///D:/Code/AI-Slide-Generator/back-end/user-service/README.md)
+- **Document Service Guide**: [document-service/README.md](file:///D:/Code/AI-Slide-Generator/back-end/document-service/README.md)
+- **Template Service Guide**: [template-service/README.md](file:///D:/Code/AI-Slide-Generator/back-end/template-service/README.md)
+- **Subscription Service Guide**: [subscription-service/README.md](file:///D:/Code/AI-Slide-Generator/back-end/subscription-service/README.md)
+- **Payment Service Guide**: [payment-service/README.md](file:///D:/Code/AI-Slide-Generator/back-end/payment-service/README.md)
+- **Notification Service Guide**: [notification-service/README.md](file:///D:/Code/AI-Slide-Generator/back-end/notification-service/README.md)
+- **Stripe & PayOS Integration Guide**: [PAYMENT_INTEGRATION_GUIDE_V2.md](file:///D:/Code/AI-Slide-Generator/back-end/payment-service/PAYMENT_INTEGRATION_GUIDE_V2.md)
+- **AI Service setup and operation**: [ai-service/README.md](file:///D:/Code/AI-Slide-Generator/ai-service/README.md)
