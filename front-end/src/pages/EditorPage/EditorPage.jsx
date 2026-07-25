@@ -84,6 +84,14 @@ const TEMPLATES = [
 const DEFAULT_LEFT_PANEL_WIDTH = 180;
 const DEFAULT_RIGHT_PANEL_WIDTH = 390;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const promptMentionsSlideTarget = (value) => {
+  const folded = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .toLowerCase();
+  return /\b(?:slide|trang)\s*(?:(?:so|thu)\s*)?\d+\b|\b\d+\s*(?:slide|trang)\b/.test(folded);
+};
 const SLIDE_LAYOUTS = [
   { value: 'title', label: 'Tiêu đề' },
   { value: 'content', label: 'Nội dung' },
@@ -668,10 +676,12 @@ export default function EditorPage() {
       setRevisionStatus('Đang gửi yêu cầu chỉnh sửa lên AI...');
 
       // 2. Trigger AI Revise
+      const promptHasExplicitSlide = promptMentionsSlideTarget(promptToSend);
+      const usePromptTarget = revisionScope === 'slide' && promptHasExplicitSlide;
       const payload = {
         revisionPrompt: promptToSend.trim(),
-        revisionScope: revisionScope,
-        slideNumber: revisionScope === 'slide' ? activeIdx + 1 : null
+        revisionScope: usePromptTarget ? 'auto' : revisionScope,
+        slideNumber: revisionScope === 'slide' && !usePromptTarget ? activeIdx + 1 : null
       };
 
       const reviseRes = await projectService.revise(id, payload);

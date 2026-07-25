@@ -32,6 +32,12 @@ models/
 # ☕ Java / Maven Microservices Build Outputs
 # ==========================================
 **/target/
+
+# Local deployment archives
+*.tar
+*.tar.gz
+*.tgz
+*.zip
 *.class
 *.jar
 *.war
