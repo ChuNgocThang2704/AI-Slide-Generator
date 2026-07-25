@@ -1,4 +1,6 @@
-# Python
+# ==========================================
+# 🐍 Python / AI Service Cache & Environments
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -6,6 +8,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 develop-eggs/
@@ -22,38 +25,46 @@ wheels/
 *.egg-info/
 *.egg
 .installed.cfg
+.cache/
+models/
 
-# Virtual environments
-venv/
-ENV/
-env/
-.venv/
-
-# Node/Frontend
-node_modules/
-dist/
-build/
-
-# Java/Maven build outputs
-target/
+# ==========================================
+# ☕ Java / Maven Microservices Build Outputs
+# ==========================================
+**/target/
 *.class
 *.jar
 *.war
 *.ear
 
-# IDEs
+# ==========================================
+# ⚛️ Node / Frontend Build Outputs (Không block source code)
+# ==========================================
+**/node_modules/
+**/dist/
+**/build/
+.npm/
+.pnpm-store/
+
+# ==========================================
+# 🛠️ IDEs & Editors Configuration
+# ==========================================
 .vscode/
 .idea/
 .agents/
 *.swp
 *.swo
 *~
+Thumbs.db
+.DS_Store
 
-# Uploads and outputs
+# ==========================================
+# 📂 Uploads, Debug Logs & Temporary Outputs
+# ==========================================
 uploads/
 outputs/
-backend/outputs/debug/
-backend/_tmp_retest.py
+**/outputs/debug/
+**/_tmp_retest.py
 payload.json
 scripts/_test_sdxl_remote.py
 scripts/_poll_result.py
@@ -64,33 +75,19 @@ scripts/_test_sdxl_out.png
 *.png
 *.jpg
 *.jpeg
+*.log
+logs/
 
-# Archives and packaged artifacts
-*.zip
-*.rar
-*.7z
-*.tar
-*.tar.gz
-*.tgz
-
-# AI/model artifacts
-*.pt
-*.pth
-*.ckpt
-*.safetensors
-*.onnx
-*.bin
-*.gguf
-
-# Environment variables & Credentials
+# ==========================================
+# 🔐 Security, Credentials & Env Files (Quan trọng)
+# ==========================================
 .env
 .env.local
 .env.*
 !.env.example
 !**/.env.example
-backend/.env
-backend/.env.local
-!backend/.env.example
+back-end/**/.env
+back-end/**/.env.local
 service-account.json
 *.pem
 *.key
@@ -98,25 +95,13 @@ service-account.json
 *.pfx
 *.jks
 *.keystore
-front-end/
-# Logs
-*.log
-logs/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Model cache
-.cache/
-models/
-
-# Test, coverage and tool caches
+# ==========================================
+# 📦 Test & Tool Caches
+# ==========================================
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 coverage/
 htmlcov/
-.npm/
-.pnpm-store/
