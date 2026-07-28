@@ -19,7 +19,9 @@ public enum ErrorCode {
     EMAIL_IS_REQUIRED(1509, "Email is required", HttpStatus.BAD_REQUEST),
     USER_IS_NOT_ACTIVE(1510, "User is inactive", HttpStatus.BAD_REQUEST),
     GOOGLE_AUTH_FAILED(1511, "Google authentication failed", HttpStatus.BAD_REQUEST),
-    INVALID_CODE_OR_EXPIRED(1512,"Invalid code or expired" ,HttpStatus.BAD_REQUEST );
+    INVALID_CODE_OR_EXPIRED(1512,"Invalid code or expired" ,HttpStatus.BAD_REQUEST ),
+    PASSWORD_NOT_MATCH(1513, "Password not match", HttpStatus.BAD_REQUEST),
+    RESET_SESSION_NOT_VERIFIED(1514, "Reset password session not verified", HttpStatus.BAD_REQUEST);
 
     ErrorCode(int code, String message, HttpStatusCode statusCode) {
         this.code = code;

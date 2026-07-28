@@ -105,6 +105,9 @@ app:
 | `POST` | `/api/auth/login` | Không | Đăng nhập bằng Email/Password (trả về Access/Refresh Token) |
 | `POST` | `/api/auth/refresh` | Không | Sử dụng Refresh Token lấy Access Token mới |
 | `POST` | `/api/auth/google` | Không | Đăng nhập/Đăng ký thông qua Google OAuth2 Token |
+| `POST` | `/api/auth/forgot-password` | Không | Yêu cầu gửi mã OTP quên mật khẩu về Email |
+| `POST` | `/api/auth/verify-reset-code` | Không | Xác thực mã OTP quên mật khẩu để tạo phiên đổi mật khẩu |
+| `POST` | `/api/auth/reset-password` | Không | Thiết lập mật khẩu mới (trong thời hạn phiên 5 phút) |
 | `GET` | `/api/users/profile` | Có | Lấy thông tin hồ sơ của tài khoản đang đăng nhập |
 | `PUT` | `/api/users/profile` | Có | Cập nhật thông tin họ tên, ảnh đại diện, ngày sinh, SĐT |
 | `POST` | `/api/users/change-password` | Có | Thay đổi mật khẩu người dùng |

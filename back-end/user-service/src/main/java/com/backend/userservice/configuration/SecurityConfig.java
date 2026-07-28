@@ -28,7 +28,8 @@ public class SecurityConfig {
 
     private static final String[] PUBLIC_POST_ENDPOINTS = {
         "/auth/register", "/auth/login", "/auth/logout", "/auth/refresh", "/auth/google/redirect",
-        "/auth/verify-code", "/auth/resend-verification"
+        "/auth/verify-code", "/auth/resend-verification", "/auth/forgot-password",
+        "/auth/reset-password", "/auth/verify-reset-code"
     };
 
     private static final String[] PUBLIC_GET_ENDPOINTS = {
