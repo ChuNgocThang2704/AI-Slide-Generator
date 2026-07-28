@@ -460,6 +460,87 @@ public class AuthenticationService {
         return candidate;
     }
 
+    public void forgotPassword(ForgotPasswordRequest request) {
+        log.info("[user-service] yêu cầu cấp lại mật khẩu cho email: {}", request.getEmail());
+        String email = request.getEmail().trim().toLowerCase();
+        UserEntity user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
+
+        String otpCode = String.format("%08d", new java.util.Random().nextInt(1000000));
+        String redisKey = "FORGOT_PASSWORD_OTP_" + email;
+        // Ghi đè mã OTP cũ nếu có và reset lại thời gian hết hạn 15 phút
+        redisTemplate.opsForValue().set(redisKey, otpCode, 15, TimeUnit.MINUTES);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("email", email);
+        payload.put("code", otpCode);
+        String username = "";
+        if (user.getProfile() != null) {
+            username = user.getProfile().getFullName();
+        } else {
+            username = "User";
+        }
+        payload.put("username", username);
+        EmailRequest emailRequest = EmailRequest.builder()
+                .to(email)
+                .type("RESET_PASSWORD")
+                .payload(payload)
+                .build();
+
+        try {
+            rabbitTemplate.convertAndSend(notificationQueue, emailRequest);
+            log.info("Đã đẩy yêu cầu gửi mail quên mật khẩu cho {} (OTP: {})", email, otpCode);
+        } catch (Exception e) {
+            log.error("Lỗi khi đẩy message quên mật khẩu: ", e);
+        }
+    }
+
+    public void verifyResetCode(VerifyResetCodeRequest request) {
+        log.info("[user-service] xác thực mã OTP quên mật khẩu cho email: {}", request.getEmail());
+        String email = request.getEmail().trim().toLowerCase();
+        UserEntity user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
+
+        String redisKey = "FORGOT_PASSWORD_OTP_" + email;
+        String savedOtp = (String) redisTemplate.opsForValue().get(redisKey);
+
+        if (savedOtp == null || !savedOtp.equals(request.getCode())) {
+            log.warn("Xác thực mã OTP quên mật khẩu thất bại cho email: {}", email);
+            throw new AppException(ErrorCode.INVALID_CODE_OR_EXPIRED);
+        }
+
+        // Tạo key xác nhận đã verify thành công trong 5 phút
+        String verifiedKey = "RESET_VERIFIED_" + email;
+        redisTemplate.opsForValue().set(verifiedKey, "true", 5, TimeUnit.MINUTES);
+        redisTemplate.delete(redisKey);
+
+        log.info("Xác thực OTP thành công. Đã tạo phiên đặt lại mật khẩu cho email: {}", email);
+    }
+
+    public void resetPassword(ResetPasswordRequest request) {
+        log.info("[user-service] đặt lại mật khẩu cho email: {}", request.getEmail());
+        String email = request.getEmail().trim().toLowerCase();
+        UserEntity user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
+
+        String verifiedKey = "RESET_VERIFIED_" + email;
+        Boolean isVerified = redisTemplate.hasKey(verifiedKey);
+
+        if (!isVerified) {
+            throw new AppException(ErrorCode.RESET_SESSION_NOT_VERIFIED);
+        }
+
+        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw new AppException(ErrorCode.PASSWORD_NOT_MATCH);
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(user);
+        redisTemplate.delete(verifiedKey);
+
+        log.info("Đặt lại mật khẩu thành công cho email: {}", email);
+    }
+
     private AuthenticationResponse buildAuthenticationResponse(UserEntity userEntity) {
         return AuthenticationResponse.builder()
                 .token(generateAccessToken(userEntity))

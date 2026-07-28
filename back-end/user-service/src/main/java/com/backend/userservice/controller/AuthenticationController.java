@@ -67,6 +67,31 @@ public class AuthenticationController {
         AuthenticationResponse result = authenticationService.refreshToken(request);
         return ApiResponse.<AuthenticationResponse>builder().data(result).build();
     }
+
+    @PostMapping("/forgot-password")
+    ApiResponse<String> forgotPassword(@RequestBody @Valid ForgotPasswordRequest request) {
+        authenticationService.forgotPassword(request);
+        return ApiResponse.<String>builder()
+                .data("Mã xác thực đặt lại mật khẩu đã được gửi tới email của bạn.")
+                .build();
+    }
+
+    @PostMapping("/verify-reset-code")
+    ApiResponse<String> verifyResetCode(@RequestBody @Valid VerifyResetCodeRequest request) {
+        authenticationService.verifyResetCode(request);
+        return ApiResponse.<String>builder()
+                .data("Xác thực OTP thành công! Vui lòng nhập mật khẩu mới để thiết lập.")
+                .build();
+    }
+
+    @PostMapping("/reset-password")
+    ApiResponse<String> resetPassword(@RequestBody @Valid ResetPasswordRequest request) {
+        authenticationService.resetPassword(request);
+        return ApiResponse.<String>builder()
+                .data("Đặt lại mật khẩu thành công! Bạn có thể dùng mật khẩu mới để đăng nhập.")
+                .build();
+    }
+
     @PostMapping("/logout")
     ApiResponse<Void> logout(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
