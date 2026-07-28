@@ -9,7 +9,7 @@ from services.lecture_quality import (
     select_relevant_source_excerpt,
 )
 from services.slide_quality import _preserve_lecture_density, _preserve_slide_layouts
-from services.slide_text_quality import _sanitize_inline_markup
+from services.slide_text_quality import _deck_title_needs_review, _sanitize_inline_markup
 from services.text_utils import plain_slide_text
 
 
@@ -32,6 +32,14 @@ class LectureQualityTests(unittest.TestCase):
             detect_lecture_mode(
                 "Python functions",
                 "Create a lecture for beginner students with learning objectives.",
+            )
+        )
+
+    def test_vietnamese_lecture_request_in_source_enables_mode(self):
+        self.assertTrue(
+            detect_lecture_mode(
+                "Tạo 12 slide bài giảng bằng tiếng Việt cho sinh viên mới bắt đầu.",
+                "",
             )
         )
 
@@ -108,6 +116,24 @@ class LectureQualityTests(unittest.TestCase):
         }
         result = enrich_lecture_deck(deck, source)
         self.assertEqual(result["slides"][0]["source_pages"], [])
+
+    def test_deck_title_matching_objective_label_requires_review(self):
+        deck = {
+            "title": "Mục tiêu học tập",
+            "slides": [
+                {
+                    "title": "Mục tiêu học tập",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Giải thích biến và biểu thức."],
+                },
+                {
+                    "title": "Biến trong Python",
+                    "pedagogical_role": "concept",
+                    "bullets": ["Biến tham chiếu đến một giá trị."],
+                },
+            ],
+        }
+        self.assertTrue(_deck_title_needs_review(deck))
 
     def test_late_learning_objectives_are_moved_after_intro(self):
         deck = {
@@ -306,6 +332,32 @@ class LectureQualityTests(unittest.TestCase):
         self.assertEqual(result["slides"][0]["layout"], "intro")
         self.assertEqual(result["slides"][-1]["layout"], "thankyou")
         self.assertEqual(result["slides"][1]["title"], "Topic 1")
+
+    def test_boundary_replaces_unfinished_practice_with_complete_closing(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        deck = {
+            "title": "Python",
+            "learning_objectives": [
+                "Giải thích biến và biểu thức trong Python.",
+                "Áp dụng đúng thứ tự ưu tiên của toán tử.",
+            ],
+            "slides": [
+                {"title": "Python", "layout": "intro", "bullets": ["Bài giảng Python."]},
+                {
+                    "title": "Bài tập",
+                    "layout": "normal",
+                    "pedagogical_role": "practice",
+                    "bullets": ["Xác định lỗi trong các đoạn mã sau:", "1. print('Xin chào')"],
+                },
+            ],
+        }
+        result = extractor._ensure_deck_boundaries(deck, 2)
+        closing = result["slides"][-1]
+        self.assertEqual(closing["layout"], "thankyou")
+        self.assertEqual(closing["pedagogical_role"], "summary")
+        self.assertEqual(closing["bullets"], deck["learning_objectives"])
+        self.assertNotIn("Xác định lỗi trong các đoạn mã sau:", closing["bullets"])
 
     def test_technical_sanitizer_preserves_python_operators_and_identifiers(self):
         text = "Use miles * 1.61, 2 ** 3, and obj.__init__() in this example."

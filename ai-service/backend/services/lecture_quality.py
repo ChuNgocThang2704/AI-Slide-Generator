@@ -17,6 +17,10 @@ _LECTURE_TERMS = (
     "learning objective", "lecture", "lesson", "textbook", "chapter",
     "exercise", "course", "curriculum", "tutorial", "workshop",
 )
+_LECTURE_REQUEST_TERMS = (
+    "bai giang", "giao an", "bai hoc", "muc tieu hoc tap",
+    "learning objective", "lecture", "lesson", "course", "curriculum", "tutorial",
+)
 _EDUCATIONAL_SOURCE_PATTERNS = (
     r"\bchapter\s+\d+\b",
     r"\b(?:section|exercise|example)\s+\d+(?:\.\d+)*\b",
@@ -45,7 +49,9 @@ def detect_lecture_mode(source_text: str, user_instruction: str = "") -> bool:
     """Detect teaching-oriented requests and textbook-like source material."""
     instruction = _fold(user_instruction)
     source = _fold((source_text or "")[:30000])
-    if any(term in instruction for term in _LECTURE_TERMS):
+    if any(term in instruction for term in _LECTURE_REQUEST_TERMS):
+        return True
+    if any(term in source[:3000] for term in _LECTURE_REQUEST_TERMS):
         return True
     pattern_hits = sum(bool(re.search(pattern, source, re.IGNORECASE)) for pattern in _EDUCATIONAL_SOURCE_PATTERNS)
     pedagogical_hits = sum(source.count(term) for term in _LECTURE_TERMS)

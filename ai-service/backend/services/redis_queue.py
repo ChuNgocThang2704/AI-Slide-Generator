@@ -969,6 +969,11 @@ class RedisQueue:
                 structured_content,
                 boundary_target,
             )
+            structured_content = enrich_lecture_deck(
+                structured_content,
+                raw_content or "",
+                task_data.get("user_instruction") or "",
+            )
             boundary_indices = {0, len(structured_content.get("slides") or []) - 1}
             for boundary_idx in boundary_indices:
                 if boundary_idx < 0:

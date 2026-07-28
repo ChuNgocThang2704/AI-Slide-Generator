@@ -1215,6 +1215,11 @@ async def generate_slide_spec(
                     structured,
                     boundary_target,
                 )
+                structured = enrich_lecture_deck(
+                    structured,
+                    raw_content_bg or "",
+                    user_instruction or "",
+                )
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 visual_plan_bg = await build_visual_plan(
                     content_extractor,

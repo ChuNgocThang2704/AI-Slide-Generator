@@ -1266,6 +1266,8 @@ class SlidePipelineMixin:
         first_layout = str((slides[0] or {}).get("layout") or "").strip().lower() if isinstance(slides[0], dict) else ""
         if first_layout not in {"intro", "title"}:
             slides.insert(0, cover)
+        elif isinstance(slides[0], dict):
+            slides[0]["title"] = deck_title
 
         # Section generation can occasionally exceed its allocation. Keep both
         # deck boundaries and remove overflow from the end of the content run.
@@ -1273,14 +1275,56 @@ class SlidePipelineMixin:
             slides.pop(-2)
 
         closing = slides[-1] if isinstance(slides[-1], dict) else {}
-        closing["title"] = "Tổng kết và Hỏi đáp" if vietnamese else "Summary and Q&A"
-        closing["layout"] = "thankyou"
-        closing["pedagogical_role"] = "summary"
-        closing["bullets"] = [
+        closing_layout = str(closing.get("layout") or "").strip().lower()
+        closing_role = str(closing.get("pedagogical_role") or "").strip().lower()
+        closing_title_folded = self._fold_language_text(str(closing.get("title") or ""))
+        is_existing_closing = (
+            closing_layout in {"thankyou", "thank_you"}
+            or closing_role == "summary"
+            or any(
+                marker in closing_title_folded
+                for marker in ("tong ket", "ket luan", "summary", "conclusion", "q&a", "hoi dap")
+            )
+        )
+        existing_bullets = [
             str(item).strip()
             for item in (closing.get("bullets") or [])
             if str(item).strip()
-        ][:4] or (["Cảm ơn và mời đặt câu hỏi."] if vietnamese else ["Thank you. Questions are welcome."])
+        ]
+        if is_existing_closing:
+            closing_bullets = existing_bullets[:4]
+        else:
+            objectives = [
+                str(item).strip()
+                for item in (structured.get("learning_objectives") or [])
+                if str(item).strip()
+            ]
+            closing_bullets = objectives[:2]
+        if not closing_bullets:
+            closing_bullets = (
+                [
+                    f"Các nội dung trọng tâm về {deck_title} đã được hệ thống hóa.",
+                    "Cảm ơn và mời đặt câu hỏi.",
+                ]
+                if vietnamese
+                else [
+                    f"The key ideas about {deck_title} have been consolidated.",
+                    "Thank you. Questions are welcome.",
+                ]
+            )
+        closing["title"] = "Tổng kết và Hỏi đáp" if vietnamese else "Summary and Q&A"
+        closing["layout"] = "thankyou"
+        closing["pedagogical_role"] = "summary"
+        closing["bullets"] = closing_bullets
+        closing["notes"] = (
+            f"Khép lại bài trình bày bằng cách nhắc lại các ý chính về {deck_title}. "
+            "Mời người học nêu câu hỏi, chia sẻ điểm còn chưa rõ và liên hệ nội dung với phần thực hành."
+            if vietnamese
+            else (
+                f"Close the presentation by revisiting the key ideas about {deck_title}. "
+                "Invite questions, clarify remaining uncertainties, and connect the lesson to practice."
+            )
+        )
         slides[-1] = closing
 
         structured["slides"] = slides[:target_slides]

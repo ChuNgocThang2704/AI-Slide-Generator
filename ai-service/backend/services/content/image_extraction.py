@@ -158,9 +158,22 @@ class ImageExtractionMixin:
         if not self.vllm_available and not self.gemini_available:
             return {}
         try:
+            language_rule = ""
+            if hasattr(self, "_output_language_instruction"):
+                language_rule = str(self._output_language_instruction() or "")
             raw = await self._llm_completion_plain_text(
                 [
-                    {"role": "system", "content": system},
+                    {
+                        "role": "system",
+                        "content": (
+                            system
+                            + "\n"
+                            + language_rule
+                            + "Apply the target language to every human-readable title, header, label, "
+                            "definition, and table/chart cell. Preserve code, formulas, identifiers, "
+                            "proper names, and standard technical symbols exactly.\n"
+                        ),
+                    },
                     {"role": "user", "content": f"Slide:\n{context}\n\nJSON:"},
                 ],
                 max_tokens=max_tokens,

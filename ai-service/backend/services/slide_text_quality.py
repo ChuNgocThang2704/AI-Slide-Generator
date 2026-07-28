@@ -25,6 +25,79 @@ def _normalize_for_match(text: str) -> str:
     return "".join(ch for ch in nfd if unicodedata.category(ch) != "Mn").replace("đ", "d").replace("Đ", "D").lower()
 
 
+def _deck_title_needs_review(structured: Dict[str, Any]) -> bool:
+    title = _normalize_for_match(structured.get("title") or "").strip()
+    slides = structured.get("slides") or []
+    if not title or not isinstance(slides, list):
+        return True
+    structural_roles = {"learning_objectives", "summary", "knowledge_check", "practice"}
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        slide_title = _normalize_for_match(slide.get("title") or "").strip()
+        role = str(slide.get("pedagogical_role") or "").strip().lower()
+        if title == slide_title and role in structural_roles:
+            return True
+    return False
+
+
+async def _review_deck_title(
+    content_extractor,
+    structured: Dict[str, Any],
+    source_language: str,
+) -> Dict[str, Any]:
+    if not _deck_title_needs_review(structured):
+        return structured
+    slides = structured.get("slides") or []
+    payload = {
+        "current_deck_title": str(structured.get("title") or ""),
+        "requested_language": source_language,
+        "user_request": str(
+            getattr(content_extractor, "_user_instruction", "")
+            or getattr(content_extractor, "_source_content", "")
+            or ""
+        )[:1200],
+        "outline": [
+            {
+                "title": str(slide.get("title") or ""),
+                "role": str(slide.get("pedagogical_role") or ""),
+                "first_bullet": str((slide.get("bullets") or [""])[0] or ""),
+            }
+            for slide in slides
+            if isinstance(slide, dict)
+        ],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You repair the title of an entire presentation deck. Infer one concise title that represents "
+                "the shared subject of the full outline and the user's request. Never use a structural section "
+                "label such as learning objectives, introduction, agenda, summary, practice, or Q&A as the deck "
+                "title. Keep the requested language and preserve technical names. Return strict JSON only: "
+                "{\"title\":\"...\"}."
+            ),
+        },
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+    try:
+        raw = await content_extractor._llm_completion_plain_text(
+            messages,
+            max_tokens=180,
+            temperature=0.05,
+            json_mode=True,
+        )
+        parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
+        candidate = _sanitize_inline_markup((parsed or {}).get("title") or "")
+        if candidate and 2 <= len(candidate.split()) <= 18:
+            improved = copy.deepcopy(structured)
+            improved["title"] = candidate[:160]
+            return improved
+    except Exception as error:
+        print(f"[slide_text_quality] deck title review failed: {error}")
+    return structured
+
+
 def _title_is_truncated_bullet(title: str, bullets: List[str]) -> bool:
     """True nếu title là tiền tố bị cắt cụt (hoặc cắt dở từ) của một bullet.
 
@@ -748,6 +821,11 @@ async def improve_final_slide_quality(
         return structured
 
     improved = copy.deepcopy(structured)
+    improved = await _review_deck_title(
+        content_extractor,
+        improved,
+        source_language,
+    )
     slides = improved.get("slides") or []
     # Force every final slide through semantic QA. Mechanical scoring alone cannot
     # reliably identify a grammatically incomplete sentence ending in a period.
