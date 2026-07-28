@@ -113,6 +113,111 @@ class LectureQualityTests(unittest.TestCase):
         self.assertEqual(result["slides"][1]["pedagogical_role"], "learning_objectives")
         self.assertEqual(result["slides"][1]["title"], "Learning Objectives")
 
+    def test_enrichment_derives_objectives_from_real_slide_topics(self):
+        deck = {
+            "title": "Python Variables",
+            "presentation_mode": "lecture",
+            "learning_objectives": [],
+            "slides": [
+                {"title": "Python Variables", "layout": "intro", "bullets": ["Overview."]},
+                {"title": "Assignment Statements", "bullets": ["Assignment binds a name."]},
+                {"title": "Expression Evaluation", "bullets": ["Operators produce values."]},
+                {"title": "Operator Precedence", "bullets": ["Precedence controls order."]},
+                {"title": "Summary", "layout": "thankyou", "bullets": ["Review."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(deck, "", "Create a beginner lecture in English.")
+
+        objective_slide = next(
+            slide
+            for slide in result["slides"]
+            if slide.get("pedagogical_role") == "learning_objectives"
+        )
+        self.assertEqual(objective_slide["title"], "Learning Objectives")
+        self.assertGreaterEqual(len(objective_slide["bullets"]), 2)
+        self.assertTrue(any("assignment" in item.lower() for item in objective_slide["bullets"]))
+
+    def test_enrichment_reuses_knowledge_check_as_requested_practice(self):
+        deck = {
+            "title": "Biến trong Python",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Giải thích biến.", "Vận dụng phép gán."],
+            "slides": [
+                {"title": "Biến trong Python", "layout": "intro", "bullets": ["Tổng quan."]},
+                {
+                    "title": "Kiểm tra lỗi phép gán",
+                    "pedagogical_role": "knowledge_check",
+                    "bullets": ["Tìm lỗi trong đoạn mã."],
+                },
+                {"title": "Tổng kết", "layout": "thankyou", "bullets": ["Ôn tập."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(
+            deck,
+            "",
+            "Tạo bài giảng có một slide bài tập thực hành.",
+        )
+
+        practice = next(
+            slide for slide in result["slides"] if slide.get("pedagogical_role") == "practice"
+        )
+        self.assertIn("Bài tập thực hành", practice["title"])
+        self.assertEqual(practice["bullets"], ["Tìm lỗi trong đoạn mã."])
+
+    def test_enrichment_reuses_existing_objective_titled_slide(self):
+        deck = {
+            "title": "Biến trong Python",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Giải thích biến.", "Vận dụng phép gán."],
+            "slides": [
+                {"title": "Biến trong Python", "layout": "intro", "bullets": ["Tổng quan."]},
+                {
+                    "title": "Giới thiệu và Mục tiêu bài học",
+                    "pedagogical_role": "concept",
+                    "bullets": ["Nội dung bài học."],
+                },
+                {"title": "Phép gán", "bullets": ["Phép gán liên kết tên với giá trị."]},
+                {"title": "Tổng kết", "layout": "thankyou", "bullets": ["Ôn tập."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(deck, "", "Tạo bài giảng bằng tiếng Việt.")
+        objective_slides = [
+            slide
+            for slide in result["slides"]
+            if slide.get("pedagogical_role") == "learning_objectives"
+        ]
+
+        self.assertEqual(len(objective_slides), 1)
+        self.assertEqual(objective_slides[0]["bullets"], deck["learning_objectives"])
+
+    def test_enrichment_creates_requested_practice_from_content_fallback(self):
+        deck = {
+            "title": "Biến trong Python",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Giải thích biến.", "Vận dụng phép gán."],
+            "slides": [
+                {"title": "Biến trong Python", "layout": "intro", "bullets": ["Tổng quan."]},
+                {"title": "Phép gán", "bullets": ["Phép gán liên kết tên với giá trị."]},
+                {"title": "Từ khóa", "bullets": ["Không dùng từ khóa làm tên biến."]},
+                {"title": "Tổng kết", "layout": "thankyou", "bullets": ["Ôn tập."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(
+            deck,
+            "",
+            "Tạo bài giảng có một slide bài tập thực hành.",
+        )
+        practice = next(
+            slide for slide in result["slides"] if slide.get("pedagogical_role") == "practice"
+        )
+
+        self.assertIn("Bài tập thực hành", practice["title"])
+        self.assertEqual(len(practice["bullets"]), 3)
+
     def test_enrichment_merges_or_removes_dangling_bullet_labels(self):
         deck = {
             "presentation_mode": "lecture",

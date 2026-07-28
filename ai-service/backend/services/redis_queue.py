@@ -445,6 +445,7 @@ class RedisQueue:
                 doc_title_hint=doc_title_hint,
             )
             user_instruction = str(task_data.get("user_instruction") or "").strip()
+            instruction_text = user_instruction or str(raw_content or "")
             if user_instruction and _has_explicit_slide_outline(user_instruction):
                 structured_content = await content_extractor.revise_slide_deck(
                     structured_content,
@@ -492,14 +493,21 @@ class RedisQueue:
             await self.update_task_status(task_id, "processing", progress=58)
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
+            from services.deck_contract import (
+                assert_deck_structure_locked,
+                finalize_deck_for_visuals,
+            )
 
-            boundary_target = int(target_slides_override) if target_slides_override else len(
-                structured_content.get("slides") or []
-            )
-            structured_content = content_extractor._ensure_deck_boundaries(
+            structured_content = await finalize_deck_for_visuals(
+                content_extractor,
                 structured_content,
-                boundary_target,
+                raw_content=raw_content or "",
+                user_instruction=instruction_text,
+                task_id=task_id,
+                plan=plan_norm,
+                target_slides=target_slides_override,
             )
+            locked_signature = assert_deck_structure_locked(structured_content)
 
             visual_context = "\n\n".join(
                 part
@@ -542,7 +550,6 @@ class RedisQueue:
                     len(structured_content.get("slides") or []),
                 ),
             )
-            from services.slide_text_quality import improve_final_slide_quality
             note_slides = structured_content.get("slides") or []
             for idx, spec in table_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
@@ -550,26 +557,7 @@ class RedisQueue:
             for idx, spec in chart_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["chart"] = spec
-            structured_content = await improve_final_slide_quality(
-                content_extractor,
-                structured_content,
-                task_id=task_id,
-                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-            )
-            from services.plan_limits import enforce_plan_slide_limit
-            structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
-            from services.deck_coherence import improve_deck_coherence
-            structured_content = await improve_deck_coherence(
-                content_extractor,
-                structured_content,
-                task_id=task_id,
-            )
-            from services.lecture_quality import enrich_lecture_deck
-            structured_content = enrich_lecture_deck(
-                structured_content,
-                raw_content or "",
-                task_data.get("user_instruction") or "",
-            )
+            assert_deck_structure_locked(structured_content, locked_signature)
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
 
@@ -649,6 +637,7 @@ class RedisQueue:
                     print(f"[worker] Task {task_id}: Post-image text expansion failed: {post_img_err!r}")
 
             # ── Generate PPTX ─────────────────────────────────────────
+            assert_deck_structure_locked(structured_content, locked_signature)
             await self.update_task_status(task_id, "processing", progress=80)
             slide_generator = SlideGenerator()
             st_raw = task_data.get("slide_theme")
@@ -846,14 +835,21 @@ class RedisQueue:
             await self.update_task_status(task_id, "processing", progress=58)
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
+            from services.deck_contract import (
+                assert_deck_structure_locked,
+                finalize_deck_for_visuals,
+            )
 
-            boundary_target = int(target_slides_override) if target_slides_override else len(
-                structured_content.get("slides") or []
-            )
-            structured_content = content_extractor._ensure_deck_boundaries(
+            structured_content = await finalize_deck_for_visuals(
+                content_extractor,
                 structured_content,
-                boundary_target,
+                raw_content=raw_content or "",
+                user_instruction=instruction_text,
+                task_id=task_id,
+                plan=plan_norm,
+                target_slides=target_slides_override,
             )
+            locked_signature = assert_deck_structure_locked(structured_content)
 
             visual_context = "\n\n".join(
                 part
@@ -954,7 +950,6 @@ class RedisQueue:
                     slides[idx].pop("chart", None)
                     slides[idx]["layout"] = "text_image"
 
-            from services.slide_text_quality import improve_final_slide_quality
             note_slides = structured_content.get("slides") or []
             for idx, spec in table_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
@@ -962,50 +957,10 @@ class RedisQueue:
             for idx, spec in chart_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["chart"] = spec
-            structured_content = await improve_final_slide_quality(
-                content_extractor,
-                structured_content,
-                task_id=task_id,
-                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-            )
-            from services.plan_limits import enforce_plan_slide_limit
-            structured_content = enforce_plan_slide_limit(structured_content, plan_norm)
-            from services.deck_coherence import improve_deck_coherence
-            structured_content = await improve_deck_coherence(
-                content_extractor,
-                structured_content,
-                task_id=task_id,
-            )
-            from services.lecture_quality import enrich_lecture_deck
-            structured_content = enrich_lecture_deck(
-                structured_content,
-                raw_content or "",
-                task_data.get("user_instruction") or "",
-            )
+            assert_deck_structure_locked(structured_content, locked_signature)
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
-
-            # Nothing may recompose or translate the generated deck after this
-            # final contract pass.
-            structured_content = await improve_final_slide_quality(
-                content_extractor,
-                structured_content,
-                task_id=task_id,
-                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-            )
-            boundary_target = int(target_slides_override) if target_slides_override else len(
-                structured_content.get("slides") or []
-            )
-            structured_content = content_extractor._ensure_deck_boundaries(
-                structured_content,
-                boundary_target,
-            )
-            structured_content = enrich_lecture_deck(
-                structured_content,
-                raw_content or "",
-                task_data.get("user_instruction") or "",
-            )
             boundary_indices = {0, len(structured_content.get("slides") or []) - 1}
             for boundary_idx in boundary_indices:
                 if boundary_idx < 0:
@@ -1061,14 +1016,16 @@ class RedisQueue:
                 return
 
             # ── Build Spec Payload ────────────────────────────────────
+            assert_deck_structure_locked(structured_content, locked_signature)
             await self.update_task_status(task_id, "processing", progress=80)
+            from services.deck_contract import paths_by_slide_id, specs_by_slide_id
 
             spec_payload = _build_slide_spec_payload(
                 task_id=task_id,
                 structured_content=structured_content,
-                chart_specs=chart_specs,
-                table_specs=table_specs,
-                image_paths=image_paths,
+                chart_specs=specs_by_slide_id(structured_content, chart_specs),
+                table_specs=specs_by_slide_id(structured_content, table_specs),
+                image_paths=paths_by_slide_id(structured_content, image_paths),
                 slide_theme=task_data.get("slide_theme")
             )
 

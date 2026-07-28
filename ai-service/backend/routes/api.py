@@ -189,8 +189,12 @@ def _resolve_unique_visual_specs(
         if not isinstance(slide, dict):
             continue
         raw_specs: List[Dict[str, Any]] = []
-        if isinstance(external.get(idx), dict):
-            raw_specs.append(external[idx])
+        slide_id = str(slide.get("slide_id") or "").strip()
+        external_spec = external.get(slide_id) if slide_id else None
+        if not isinstance(external_spec, dict):
+            external_spec = external.get(idx)
+        if isinstance(external_spec, dict):
+            raw_specs.append(external_spec)
         embedded = slide.get(kind)
         if isinstance(embedded, dict):
             raw_specs.append(embedded)
@@ -235,6 +239,7 @@ def _build_slide_spec_payload(
             continue
         row: Dict[str, Any] = {
             "index": idx,
+            "slide_id": str(slide.get("slide_id") or f"slide-{idx + 1:03d}"),
             "title": _plain_slide_text(slide.get("title") or ""),
             "bullets": [_plain_slide_text(x) for x in (slide.get("bullets") or slide.get("content") or []) if _plain_slide_text(x)],
             "notes": _plain_slide_text(slide.get("notes") or slide.get("script") or ""),
@@ -255,8 +260,9 @@ def _build_slide_spec_payload(
             row["chart"] = c_spec
         if idx in unique_tables:
             row["table"] = unique_tables[idx]
-        if image_paths and idx in image_paths:
-            img_path = str(image_paths[idx])
+        image_key = row["slide_id"] if image_paths and row["slide_id"] in image_paths else idx
+        if image_paths and image_key in image_paths:
+            img_path = str(image_paths[image_key])
             img_url = _image_url_from_path(img_path)
             img = {
                 "path": img_path,
@@ -315,6 +321,7 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
         if not isinstance(slide, dict):
             continue
         row: Dict[str, Any] = {
+            "slide_id": str(slide.get("slide_id") or f"slide-{idx + 1:03d}"),
             "title": _plain_slide_text(slide.get("title") or f"Slide {idx + 1}"),
             "bullets": [
                 _plain_slide_text(x)
@@ -498,6 +505,13 @@ def _review_revised_spec_payload(
     for idx, slide in enumerate(slides):
         if not isinstance(slide, dict):
             continue
+        if not str(slide.get("slide_id") or "").strip():
+            old_slide_id = (
+                old_slides[idx].get("slide_id")
+                if idx < len(old_slides) and isinstance(old_slides[idx], dict)
+                else None
+            )
+            slide["slide_id"] = str(old_slide_id or f"slide-{idx + 1:03d}")
         slide["index"] = idx
         if slide.get("table"):
             slide["layout"] = "text_table"
@@ -699,6 +713,8 @@ async def _build_revised_slide_spec_payload(
                 continue
             if not slide.get("image_url") and old_slide.get("image_url"):
                 slide["image_url"] = old_slide.get("image_url")
+            if old_slide.get("slide_id") and not slide.get("slide_id"):
+                slide["slide_id"] = old_slide.get("slide_id")
             if idx not in plan_targets:
                 if "table" not in slide and isinstance(old_slide.get("table"), dict):
                     slide["table"] = old_slide.get("table")
@@ -717,6 +733,41 @@ async def _build_revised_slide_spec_payload(
 
     if await should_stop():
         raise TaskCancelledError()
+
+    from services.slide_text_quality import improve_slide_titles_quality, improve_speaker_notes_quality
+    revised = await improve_slide_titles_quality(
+        content_extractor,
+        revised,
+        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+    )
+    revised = await improve_speaker_notes_quality(
+        content_extractor,
+        revised,
+        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+    )
+    if wants_text_revision or wants_deck_restructure:
+        from services.deck_coherence import improve_deck_coherence
+        revised = await improve_deck_coherence(
+            content_extractor,
+            revised,
+            task_id=task_id,
+            allowed_indices=plan_targets or None,
+        )
+
+    from services.deck_contract import (
+        assert_deck_structure_locked,
+        assign_stable_slide_ids,
+        deck_structure_signature,
+    )
+    if wants_deck_restructure:
+        revised = content_extractor._ensure_deck_boundaries(
+            revised,
+            len(revised.get("slides") or []),
+        )
+    revised = assign_stable_slide_ids(revised)
+    locked_signature = deck_structure_signature(revised)
+    revised["_structure_locked"] = True
+    revised["_structure_signature"] = list(locked_signature)
 
     visual_plan = await build_visual_plan(
         content_extractor,
@@ -867,7 +918,6 @@ async def _build_revised_slide_spec_payload(
         explicit_chart_type_targets,
     )
 
-    from services.slide_text_quality import improve_slide_titles_quality, improve_speaker_notes_quality
     note_slides = revised.get("slides") or []
     for idx, spec in table_specs.items():
         if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
@@ -875,24 +925,7 @@ async def _build_revised_slide_spec_payload(
     for idx, spec in chart_specs.items():
         if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
             note_slides[idx]["chart"] = spec
-    revised = await improve_slide_titles_quality(
-        content_extractor,
-        revised,
-        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-    )
-    revised = await improve_speaker_notes_quality(
-        content_extractor,
-        revised,
-        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-    )
-    if wants_text_revision or wants_deck_restructure:
-        from services.deck_coherence import improve_deck_coherence
-        revised = await improve_deck_coherence(
-            content_extractor,
-            revised,
-            task_id=task_id,
-            allowed_indices=plan_targets or None,
-        )
+    assert_deck_structure_locked(revised, locked_signature)
 
     image_paths = None
     if want_images and wants_image_revision:
@@ -952,12 +985,14 @@ async def _build_revised_slide_spec_payload(
                     image_paths[idx] = old_url
             changed_fields.append("image_partial")
 
+    assert_deck_structure_locked(revised, locked_signature)
+    from services.deck_contract import paths_by_slide_id, specs_by_slide_id
     spec_payload = _build_slide_spec_payload(
         task_id=task_id,
         structured_content=revised,
-        chart_specs=chart_specs,
-        table_specs=table_specs,
-        image_paths=image_paths,
+        chart_specs=specs_by_slide_id(revised, chart_specs),
+        table_specs=specs_by_slide_id(revised, table_specs),
+        image_paths=paths_by_slide_id(revised, image_paths),
         slide_theme=slide_theme,
     )
     spec_payload = _review_revised_spec_payload(
@@ -1224,48 +1259,38 @@ async def generate_slide_spec(
                         raw_content_bg or "",
                         task_id=task_id_bg,
                     )
-                structured = _enforce_plan_slide_limit(structured, plan_norm)
-                from services.deck_coherence import improve_deck_coherence
-                structured = await improve_deck_coherence(
+                from services.deck_contract import (
+                    assert_deck_structure_locked,
+                    finalize_deck_for_visuals,
+                )
+                structured = await finalize_deck_for_visuals(
                     content_extractor,
                     structured,
+                    raw_content=raw_content_bg or "",
+                    user_instruction=user_instruction or "",
                     task_id=task_id_bg,
+                    plan=plan_norm,
+                    target_slides=target_slides_override,
                 )
-                from services.lecture_quality import enrich_lecture_deck
-                structured = enrich_lecture_deck(
-                    structured,
-                    raw_content_bg or "",
-                    user_instruction or "",
-                )
-                from services.slide_text_quality import improve_final_slide_quality
-                structured = await improve_final_slide_quality(
-                    content_extractor,
-                    structured,
-                    task_id=task_id_bg,
-                    source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-                )
-                boundary_target = int(target_slides_override) if target_slides_override else len(
-                    structured.get("slides") or []
-                )
-                structured = content_extractor._ensure_deck_boundaries(
-                    structured,
-                    boundary_target,
-                )
-                structured = enrich_lecture_deck(
-                    structured,
-                    raw_content_bg or "",
-                    user_instruction or "",
-                )
+                locked_signature = assert_deck_structure_locked(structured)
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
+                visual_context_bg = "\n\n".join(
+                    part
+                    for part in (
+                        f"USER REQUEST:\n{user_instruction}" if user_instruction else "",
+                        f"SOURCE CONTENT:\n{raw_content_bg}" if raw_content_bg else "",
+                    )
+                    if part
+                )
                 visual_plan_bg = await build_visual_plan(
                     content_extractor,
                     structured,
-                    raw_content_bg or "",
+                    visual_context_bg,
                     want_images=want_images_bg,
                 )
                 visual_plan_bg.update(
                     _explicit_visual_targets_from_prompt(
-                        raw_content_bg or "",
+                        user_instruction or raw_content_bg or "",
                         len(structured.get("slides") or []),
                     )
                 )
@@ -1277,7 +1302,7 @@ async def generate_slide_spec(
                     structured,
                     task_id=task_id_bg,
                     should_stop=should_stop,
-                    raw_content=raw_content_bg or "",
+                    raw_content=visual_context_bg,
                     visual_plan=visual_plan_bg,
                 )
                 chart_specs_bg = await build_chart_specs_for_slides(
@@ -1286,13 +1311,14 @@ async def generate_slide_spec(
                     task_id=task_id_bg,
                     should_stop=should_stop,
                     table_indices=set(table_specs_bg.keys()),
-                    raw_content=raw_content_bg or "",
+                    raw_content=visual_context_bg,
                     visual_plan=visual_plan_bg,
                 )
+                assert_deck_structure_locked(structured, locked_signature)
                 _apply_explicit_chart_type_targets(
                     chart_specs_bg,
                     _explicit_chart_type_targets_from_prompt(
-                        raw_content_bg or "",
+                        user_instruction or raw_content_bg or "",
                         len(structured.get("slides") or []),
                     ),
                 )
@@ -1322,15 +1348,18 @@ async def generate_slide_spec(
                             force_target_indices=sorted(
                                 idx
                                 for idx, visual in _explicit_visual_targets_from_prompt(
-                                    raw_content_bg or "",
+                                    user_instruction or raw_content_bg or "",
                                     len(structured.get("slides") or []),
                                 ).items()
                                 if str(visual or "").strip().lower() == "image"
                             ),
                             force_instructions={
-                                idx: _explicit_slide_instruction_from_prompt(raw_content_bg or "", idx)
+                                idx: _explicit_slide_instruction_from_prompt(
+                                    user_instruction or raw_content_bg or "",
+                                    idx,
+                                )
                                 for idx, visual in _explicit_visual_targets_from_prompt(
-                                    raw_content_bg or "",
+                                    user_instruction or raw_content_bg or "",
                                     len(structured.get("slides") or []),
                                 ).items()
                                 if str(visual or "").strip().lower() == "image"
@@ -1346,13 +1375,15 @@ async def generate_slide_spec(
                 if await should_stop():
                     return
 
+                assert_deck_structure_locked(structured, locked_signature)
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=80)
+                from services.deck_contract import paths_by_slide_id, specs_by_slide_id
                 spec_payload = _build_slide_spec_payload(
                     task_id=task_id_bg,
                     structured_content=structured,
-                    chart_specs=chart_specs_bg,
-                    table_specs=table_specs_bg,
-                    image_paths=image_paths_bg,
+                    chart_specs=specs_by_slide_id(structured, chart_specs_bg),
+                    table_specs=specs_by_slide_id(structured, table_specs_bg),
+                    image_paths=paths_by_slide_id(structured, image_paths_bg),
                     slide_theme=slide_theme_bg,
                 )
 

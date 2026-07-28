@@ -392,6 +392,7 @@ def fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]]
 
 def internal_slide_to_spec_row(idx: int, slide: Dict[str, Any]) -> Dict[str, Any]:
     row: Dict[str, Any] = {
+        "slide_id": str(slide.get("slide_id") or f"slide-{idx + 1:03d}"),
         "index": idx,
         "title": plain_slide_text(slide.get("title") or f"Slide {idx + 1}"),
         "bullets": [

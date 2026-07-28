@@ -117,27 +117,51 @@ def enrich_lecture_deck(
     if isinstance(raw_objectives, list):
         objectives = [str(item).strip() for item in raw_objectives if str(item).strip()] + objectives
     objectives = _dedupe(objectives)[:5]
+    language_source = " ".join(
+        [str(deck.get("title") or ""), str(user_instruction or "")]
+        + [str(item) for item in objectives]
+    )
+    vietnamese = bool(
+        re.search(
+            r"[ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]",
+            language_source,
+            re.IGNORECASE,
+        )
+    )
+    if len(objectives) < 2:
+        objectives = _fallback_learning_objectives(
+            deck,
+            [slide for slide in slides if isinstance(slide, dict)],
+            vietnamese=vietnamese,
+        )
 
+    objective_title_terms = (
+        "muc tieu",
+        "learning objective",
+        "lesson objective",
+        "course objective",
+    )
     objective_index = next(
         (
             idx
             for idx, slide in enumerate(slides)
-            if isinstance(slide, dict) and slide.get("pedagogical_role") == "learning_objectives"
+            if isinstance(slide, dict)
+            and (
+                slide.get("pedagogical_role") == "learning_objectives"
+                or any(
+                    term in _fold(slide.get("title") or "")
+                    for term in objective_title_terms
+                )
+            )
         ),
         None,
     )
+    if objective_index is not None:
+        objective_slide = slides[objective_index]
+        objective_slide["pedagogical_role"] = "learning_objectives"
+        if len(objectives) >= 2:
+            objective_slide["bullets"] = objectives
     if objective_index is None and len(objectives) >= 2:
-        language_source = " ".join(
-            [str(deck.get("title") or ""), str(user_instruction or "")]
-            + [str(item) for item in objectives]
-        )
-        vietnamese = bool(
-            re.search(
-                r"[ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]",
-                language_source,
-                re.IGNORECASE,
-            )
-        )
         objective_slide = {
             "title": "Mục tiêu học tập" if vietnamese else "Learning Objectives",
             "bullets": objectives,
@@ -167,6 +191,70 @@ def enrich_lecture_deck(
             term in first_title for term in intro_terms
         )
         slides.insert(1 if has_intro else 0, objective_slide)
+
+    folded_instruction = _fold(user_instruction)
+    wants_practice = any(
+        term in folded_instruction
+        for term in ("bai tap", "thuc hanh", "luyen tap", "practice", "exercise", "activity")
+    )
+    has_practice = any(
+        isinstance(slide, dict)
+        and (
+            str(slide.get("pedagogical_role") or "").strip().lower() == "practice"
+            or any(
+                term in _fold(slide.get("title") or "")
+                for term in ("bai tap", "thuc hanh", "luyen tap", "practice", "exercise", "activity")
+            )
+        )
+        for slide in slides
+    )
+    if wants_practice and not has_practice:
+        synthesized_practice = False
+        candidate_index = next(
+            (
+                idx
+                for idx in range(len(slides) - 1, -1, -1)
+                if isinstance(slides[idx], dict)
+                and str(slides[idx].get("pedagogical_role") or "").strip().lower()
+                in {"knowledge_check", "worked_example"}
+            ),
+            None,
+        )
+        if candidate_index is None:
+            synthesized_practice = True
+            candidate_index = next(
+                (
+                    idx
+                    for idx in range(len(slides) - 2, 0, -1)
+                    if isinstance(slides[idx], dict)
+                    and str(slides[idx].get("pedagogical_role") or "").strip().lower()
+                    not in {"learning_objectives", "summary", "practice"}
+                    and str(slides[idx].get("layout") or "").strip().lower()
+                    not in {"intro", "title", "thankyou", "thank_you"}
+                ),
+                None,
+            )
+        if candidate_index is not None:
+            practice_slide = slides[candidate_index]
+            original_title = str(practice_slide.get("title") or "").strip()
+            practice_slide["pedagogical_role"] = "practice"
+            practice_slide["title"] = (
+                f"Bài tập thực hành: {original_title}"
+                if vietnamese
+                else f"Practice: {original_title}"
+            )
+            if synthesized_practice and vietnamese:
+                practice_slide["bullets"] = [
+                    f"Vận dụng các khái niệm chính về {original_title.lower()} vào một tình huống cụ thể.",
+                    "Trình bày từng bước thực hiện và giải thích lựa chọn của bạn.",
+                    "Đối chiếu kết quả với nội dung đã học và nêu một lỗi thường gặp.",
+                ]
+            elif synthesized_practice:
+                practice_slide["bullets"] = [
+                    f"Apply the key ideas from {original_title.lower()} to a concrete scenario.",
+                    "Show each step and explain the choices you make.",
+                    "Check the result against the lesson and identify one common mistake.",
+                ]
 
     deck["presentation_mode"] = "lecture"
     deck["learning_objectives"] = objectives
@@ -359,3 +447,61 @@ def _dedupe(items: Sequence[str]) -> List[str]:
             seen.add(key)
             result.append(item)
     return result
+
+
+def _fallback_learning_objectives(
+    deck: Dict[str, Any],
+    slides: Sequence[Dict[str, Any]],
+    *,
+    vietnamese: bool,
+) -> List[str]:
+    structural_terms = (
+        "muc tieu",
+        "learning objective",
+        "tong ket",
+        "ket luan",
+        "summary",
+        "conclusion",
+        "bai tap",
+        "thuc hanh",
+        "practice",
+        "exercise",
+        "kiem tra",
+        "knowledge check",
+        "quiz",
+    )
+    topics: List[str] = []
+    seen_topics: set[str] = set()
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        layout = str(slide.get("layout") or "").strip().lower()
+        role = str(slide.get("pedagogical_role") or "").strip().lower()
+        title = str(slide.get("title") or "").strip()
+        folded = _fold(title)
+        if (
+            not title
+            or layout in {"intro", "title", "thankyou", "thank_you"}
+            or role in {"learning_objectives", "summary", "practice", "knowledge_check"}
+            or any(term in folded for term in structural_terms)
+            or folded in seen_topics
+        ):
+            continue
+        topics.append(title)
+        seen_topics.add(folded)
+        if len(topics) >= 3:
+            break
+
+    if not topics:
+        deck_title = str(deck.get("title") or "").strip()
+        topics = [deck_title] if deck_title else []
+    verbs = (
+        ("Giải thích", "Phân tích", "Vận dụng kiến thức về")
+        if vietnamese
+        else ("Explain", "Analyze", "Apply knowledge of")
+    )
+    return [
+        f"{verbs[index]} {topic[:1].lower() + topic[1:]}."
+        for index, topic in enumerate(topics[:3])
+        if topic
+    ]
