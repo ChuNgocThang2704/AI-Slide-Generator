@@ -44,14 +44,16 @@ Ultra `30`. When the quota is exhausted, BE returns the existing
 automatically refunded. FE can read `MAX_REVISIONS_PER_DAY` from the existing
 subscription quotas endpoint; it must not send or choose the account plan.
 
-When FE has one selected slide, send `revisionScope="slide"` and the 1-based
-`slideNumber`. For multi-slide natural-language edits, send the slide numbers in
-`revisionPrompt` with `revisionScope="auto"`. For a full-deck rewrite, send
-`revisionScope="deck"` without a slide target.
+For the natural-language editor, send `revisionScope="auto"` and the 1-based
+`contextSlideNumber` of the slide currently open. The selected slide is only
+context: the AI planner may choose another slide, several slides, or the whole
+deck from `revisionPrompt`. Reserve `slideNumber` for a forced programmatic
+target outside the conversational edit flow.
 
 ## FE Responsibilities
 
 - Send the user's prompt/file data to BE.
+- When a file is selected, require a meaningful prompt that states the purpose and scope. Do not synthesize a fallback such as `Tao slide tu file`; BE returns HTTP 400 for unclear generation instructions.
 - Poll project progress until completed.
 - Render slides from `/pages`.
 - After revise completes, reload `/pages` and replace local slide state.

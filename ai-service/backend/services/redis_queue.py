@@ -99,8 +99,11 @@ def exc_to_error_message(exc: BaseException) -> str:
     return f"{name} (no message)"
 
 
-# TTL mặc định: 4 giờ — đủ cho cả task lớn (nhiều slide + ảnh FLUX).
-_TASK_TTL = 14_400
+# Keep completed specs long enough for users to revise older presentations.
+_TASK_TTL = max(
+    14_400,
+    int(os.getenv("REDIS_TASK_TTL_SECONDS", str(30 * 24 * 60 * 60))),
+)
 
 
 class RedisQueue:
@@ -490,6 +493,14 @@ class RedisQueue:
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
 
+            boundary_target = int(target_slides_override) if target_slides_override else len(
+                structured_content.get("slides") or []
+            )
+            structured_content = content_extractor._ensure_deck_boundaries(
+                structured_content,
+                boundary_target,
+            )
+
             visual_plan = await build_visual_plan(
                 content_extractor,
                 structured_content,
@@ -545,7 +556,12 @@ class RedisQueue:
                 structured_content,
                 task_id=task_id,
             )
-
+            from services.lecture_quality import enrich_lecture_deck
+            structured_content = enrich_lecture_deck(
+                structured_content,
+                raw_content or "",
+                task_data.get("user_instruction") or "",
+            )
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
 
@@ -815,11 +831,6 @@ class RedisQueue:
                     raw_content or "",
                     task_id=task_id,
                 )
-                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
-                    structured_content = await content_extractor._force_slide_count_exact(
-                        structured_content, int(target_slides_override)
-                    )
-
             if await self.is_task_cancelled(task_id):
                 return
 
@@ -827,6 +838,14 @@ class RedisQueue:
             await self.update_task_status(task_id, "processing", progress=58)
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
+
+            boundary_target = int(target_slides_override) if target_slides_override else len(
+                structured_content.get("slides") or []
+            )
+            structured_content = content_extractor._ensure_deck_boundaries(
+                structured_content,
+                boundary_target,
+            )
 
             visual_plan = await build_visual_plan(
                 content_extractor,
@@ -941,9 +960,44 @@ class RedisQueue:
                 structured_content,
                 task_id=task_id,
             )
+            from services.lecture_quality import enrich_lecture_deck
+            structured_content = enrich_lecture_deck(
+                structured_content,
+                raw_content or "",
+                task_data.get("user_instruction") or "",
+            )
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
+
+            # Nothing may recompose or translate the generated deck after this
+            # final contract pass.
+            structured_content = await improve_final_slide_quality(
+                content_extractor,
+                structured_content,
+                task_id=task_id,
+                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            )
+            boundary_target = int(target_slides_override) if target_slides_override else len(
+                structured_content.get("slides") or []
+            )
+            structured_content = content_extractor._ensure_deck_boundaries(
+                structured_content,
+                boundary_target,
+            )
+            structured_content = enrich_lecture_deck(
+                structured_content,
+                raw_content or "",
+                task_data.get("user_instruction") or "",
+            )
+            boundary_indices = {0, len(structured_content.get("slides") or []) - 1}
+            for boundary_idx in boundary_indices:
+                if boundary_idx < 0:
+                    continue
+                visual_plan[boundary_idx] = "none"
+                image_target_indices.discard(boundary_idx)
+                table_specs.pop(boundary_idx, None)
+                chart_specs.pop(boundary_idx, None)
 
             image_paths = None
             if want_img:

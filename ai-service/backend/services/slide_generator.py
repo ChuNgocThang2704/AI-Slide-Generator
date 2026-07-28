@@ -733,7 +733,7 @@ class SlideGenerator:
         sf = sb.text_frame
         sf.clear()
         sp = sf.paragraphs[0]
-        sp.text = "Tạo bởi AI Slide Generator"
+        sp.text = "Tạo bởi LecGen"
         sp.alignment = PP_ALIGN.CENTER
         sp.font.name = self.font_body
         sp.font.size = Pt(18)
@@ -774,7 +774,7 @@ class SlideGenerator:
         sf = sb.text_frame
         sf.clear()
         sp = sf.paragraphs[0]
-        sp.text = "Tạo bởi AI Slide Generator"
+        sp.text = "Tạo bởi LecGen"
         sp.alignment = PP_ALIGN.CENTER
         sp.font.name = self.font_body
         sp.font.size = Pt(15)
@@ -1026,7 +1026,7 @@ class SlideGenerator:
         ftf = fbox.text_frame
         ftf.clear()
         fp = ftf.paragraphs[0]
-        fp.text = "AI Slide Generator"
+        fp.text = "LecGen"
         fp.alignment = PP_ALIGN.RIGHT
         fp.font.name = self.font_body
         fp.font.size = Pt(11)

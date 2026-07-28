@@ -16,6 +16,7 @@ from services.content.prompts import (
     BULLET_JSON_SCHEMA,
     BULLETS_JSON_SCHEMA,
 )
+from services.lecture_quality import lecture_prompt_block
 
 # Các cờ cấu hình được sử dụng bởi các bước xử lý — được import trễ để tránh lỗi vòng lặp phụ thuộc.
 # Các cấu hình này được giải quyết lúc chạy chương trình thông qua phạm vi mô-đun ContentExtractor.
@@ -49,13 +50,16 @@ class SlidePipelineMixin:
     def _user_instruction_block(self) -> str:
         """Trả về khối hướng dẫn của người dùng để inject vào system prompt nếu có."""
         instruction = getattr(self, "_user_instruction", None)
-        if not instruction or not str(instruction).strip():
-            return ""
-        return (
-            f"USER REQUIREMENT (Apply this to guide the slide structure and focus. "
-            f"Do NOT create a slide about this requirement itself):\n"
-            f"{str(instruction).strip()}\n\n"
-        )
+        blocks: List[str] = []
+        if getattr(self, "_lecture_mode", False):
+            blocks.append(lecture_prompt_block())
+        if instruction and str(instruction).strip():
+            blocks.append(
+                f"USER REQUIREMENT (Apply this to guide the slide structure and focus. "
+                f"Do NOT create a slide about this requirement itself):\n"
+                f"{str(instruction).strip()}\n\n"
+            )
+        return "".join(blocks)
 
     def _build_expand_messages(self, content: str, enable_deep: bool) -> List[Dict[str, str]]:
         """Bước mở rộng (Expansion step): BẮT BUỘC phải mở rộng (không tóm tắt). Đầu ra: {"expanded_text": "..."}"""
@@ -261,7 +265,10 @@ class SlidePipelineMixin:
             + high_slide_block
             + self._output_language_instruction()
             + "OUTPUT: JSON only. Schema:\n"
-            "{\"title\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\",\"...\",\"...\"],\"notes\":\"speaker script\",\"layout\":\"timeline|split_columns|text_image|normal\"}]}\n"
+            "{\"title\":\"...\",\"presentation_mode\":\"presentation|lecture\",\"learning_objectives\":[\"...\"],"
+            "\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\",\"...\",\"...\"],\"notes\":\"speaker script\","
+            "\"layout\":\"intro|timeline|split_columns|text_image|normal|thankyou\",\"pedagogical_role\":\"concept\","
+            "\"source_pages\":[1]}]}\n"
         )
         user_msg = (
             f"SECTION TOPIC: {title}\n\n"
@@ -485,7 +492,7 @@ class SlidePipelineMixin:
             + "REVISION RULES:\n"
             "- Apply the user's request directly while preserving useful content from the current deck.\n"
             "- Keep the same topic unless the user explicitly asks to change it.\n"
-            "- Keep the slide count close to the current deck unless the user asks for a different count.\n"
+            "- Keep exactly the same slide count unless the user explicitly asks to add, remove, merge, split, or set a different count.\n"
             "- You may rewrite titles, bullets, notes, and layout fields when needed.\n"
             "- Each slide should have 3-4 concise, complete, presentation-style bullets.\n"
             "- Remove duplication and fix vague, broken, or generic bullets.\n"
@@ -636,6 +643,7 @@ class SlidePipelineMixin:
         self,
         structured: Dict[str, Any],
         revision_prompt: str,
+        context_slide_number: Optional[int] = None,
     ) -> List[Dict[str, str]]:
         compact = {
             "title": structured.get("title") or "",
@@ -664,12 +672,18 @@ class SlidePipelineMixin:
             "- If the request asks for table/chart/layout/design, include change_layout.\n"
             "- If the request asks to add, remove, merge, split, or reorder slides, include restructure_deck.\n"
             "- If the target is unclear but says whole/all/toan bo/deck, use scope deck.\n"
-            "- Prefer scope slides when a target slide is mentioned; otherwise use deck.\n\n"
+            "- Infer scope semantically from the complete request; do not rely on a fixed keyword list.\n"
+            "- A selected slide is weak UI context, not a forced target. Use it only when the request "
+            "does not identify another target and is naturally a single-slide edit.\n"
+            "- Requests such as adding more visuals throughout the presentation may target several "
+            "appropriate slides even when a selected slide is provided.\n"
+            "- Prefer scope slides when one or more target slides are intended; otherwise use deck.\n\n"
             + "Return ONLY JSON with this shape:\n"
             "{\"scope\":\"slides|deck\",\"target_slide_numbers\":[1],\"operations\":[{\"type\":\"rewrite_text|regenerate_image|change_layout|restructure_deck\",\"instruction\":\"...\"}],\"preserve_unmentioned\":true}\n"
         )
         user_msg = (
             f"Current deck summary JSON:\n{payload}\n\n"
+            f"Selected slide context (optional, not a forced target): {context_slide_number or 'none'}\n\n"
             f"User edit request:\n{revision_prompt}\n\n"
             "Return the plan JSON only."
         )
@@ -679,6 +693,7 @@ class SlidePipelineMixin:
         self,
         structured: Dict[str, Any],
         revision_prompt: str,
+        context_slide_number: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Plan a natural-language revision request before applying it."""
         base = self._normalize_structured_content(structured)
@@ -692,7 +707,12 @@ class SlidePipelineMixin:
                 "preserve_unmentioned": True,
             }
 
-        msgs = self._build_revision_plan_messages(base, prompt)
+        msgs = self._build_revision_plan_messages(
+            base,
+            prompt,
+            context_slide_number=context_slide_number,
+        )
+        planner_succeeded = False
         try:
             plan = await self._request_json_dict(
                 msgs,
@@ -701,9 +721,17 @@ class SlidePipelineMixin:
                 compose_mode=False,
                 structured_output=None,
             )
+            planner_succeeded = isinstance(plan, dict) and bool(plan)
         except Exception as e:
             print(f"[revision_plan] planner failed: {e}")
             plan = {}
+            if context_slide_number and 1 <= context_slide_number <= slide_count:
+                plan = {
+                    "scope": "slides",
+                    "target_slide_numbers": [context_slide_number],
+                    "operations": [{"type": "rewrite_text", "instruction": prompt}],
+                    "preserve_unmentioned": True,
+                }
 
         if not isinstance(plan, dict):
             plan = {}
@@ -746,6 +774,7 @@ class SlidePipelineMixin:
             "target_slide_numbers": sorted(set(target_numbers)),
             "operations": operations,
             "preserve_unmentioned": bool(plan.get("preserve_unmentioned", True)),
+            "planner_succeeded": planner_succeeded,
         }
 
     def _build_repair_bullet_messages(
@@ -1118,7 +1147,11 @@ class SlidePipelineMixin:
         if not isinstance(slides, list) or not slides:
             return structured
 
-        min_b = max(2, int(LLM_FINAL_DENSITY_MIN_BULLETS))
+        lecture_mode = bool(
+            getattr(self, "_lecture_mode", False)
+            or str(structured.get("presentation_mode") or "").strip().lower() == "lecture"
+        )
+        default_min_b = max(2, int(LLM_FINAL_DENSITY_MIN_BULLETS))
         max_rw = max(0, int(LLM_FINAL_DENSITY_MAX_REWRITES))
         rewrites = 0
         deck_title = str(structured.get("title") or "Bài thuyết trình")
@@ -1132,6 +1165,13 @@ class SlidePipelineMixin:
         for i, s in enumerate(slides):
             if not isinstance(s, dict):
                 continue
+            role = str(s.get("pedagogical_role") or "").strip().lower()
+            layout = str(s.get("layout") or "").strip().lower()
+            min_b = 1 if layout in {"intro", "title", "thankyou", "thank_you"} else (
+                max(default_min_b, 4) if lecture_mode and role not in {
+                    "knowledge_check", "practice", "summary",
+                } else default_min_b
+            )
             bs = s.get("bullets") or []
             if not isinstance(bs, list):
                 bs = []
@@ -1158,6 +1198,13 @@ class SlidePipelineMixin:
             if not isinstance(s, dict):
                 continue
             title = str(s.get("title") or "Nội dung")
+            role = str(s.get("pedagogical_role") or "").strip().lower()
+            layout = str(s.get("layout") or "").strip().lower()
+            min_b = 1 if layout in {"intro", "title", "thankyou", "thank_you"} else (
+                max(default_min_b, 4) if lecture_mode and role not in {
+                    "knowledge_check", "practice", "summary",
+                } else default_min_b
+            )
             bullets = s.get("bullets") or []
             if not isinstance(bullets, list):
                 bullets = []
@@ -1184,6 +1231,121 @@ class SlidePipelineMixin:
             except Exception as e:
                 print(f"Final density gate failed ({title!r}): {e}")
 
+        return structured
+
+    def _ensure_deck_boundaries(
+        self,
+        structured: Dict[str, Any],
+        target_slides: int,
+    ) -> Dict[str, Any]:
+        """Add a cover and turn the final summary into a closing slide."""
+        if not isinstance(structured, dict):
+            return structured
+        slides = structured.get("slides") or []
+        if not isinstance(slides, list) or not slides:
+            return structured
+
+        lang = str(getattr(self, "_slide_lang_hint", "") or "").lower()
+        vietnamese = lang == "vi"
+        deck_title = str(structured.get("title") or "").strip() or (
+            "Bài trình chiếu" if vietnamese else "Presentation"
+        )
+        cover = {
+            "title": deck_title,
+            "bullets": [
+                "Bài giảng tổng quan và các nội dung trọng tâm."
+                if vietnamese
+                else "Lecture overview and key concepts."
+            ],
+            "notes": "",
+            "layout": "intro",
+            "pedagogical_role": "concept",
+            "source_pages": [],
+        }
+
+        first_layout = str((slides[0] or {}).get("layout") or "").strip().lower() if isinstance(slides[0], dict) else ""
+        if first_layout not in {"intro", "title"}:
+            slides.insert(0, cover)
+        elif isinstance(slides[0], dict):
+            slides[0]["title"] = deck_title
+
+        # Section generation can occasionally exceed its allocation. Keep both
+        # deck boundaries and remove overflow from the end of the content run.
+        while len(slides) > target_slides and len(slides) > 2:
+            slides.pop(-2)
+
+        closing = slides[-1] if isinstance(slides[-1], dict) else {}
+        closing_layout = str(closing.get("layout") or "").strip().lower()
+        closing_role = str(closing.get("pedagogical_role") or "").strip().lower()
+        closing_title_folded = self._fold_language_text(str(closing.get("title") or ""))
+        is_existing_closing = (
+            closing_layout in {"thankyou", "thank_you"}
+            or closing_role == "summary"
+            or any(
+                marker in closing_title_folded
+                for marker in ("tong ket", "ket luan", "summary", "conclusion", "q&a", "hoi dap")
+            )
+        )
+        existing_bullets = [
+            str(item).strip()
+            for item in (closing.get("bullets") or [])
+            if str(item).strip()
+        ]
+        if is_existing_closing:
+            closing_bullets = existing_bullets[:4]
+        else:
+            objectives = [
+                str(item).strip()
+                for item in (structured.get("learning_objectives") or [])
+                if str(item).strip()
+            ]
+            closing_bullets = objectives[:2]
+        if not closing_bullets:
+            closing_bullets = (
+                [
+                    f"Các nội dung trọng tâm về {deck_title} đã được hệ thống hóa.",
+                    "Cảm ơn và mời đặt câu hỏi.",
+                ]
+                if vietnamese
+                else [
+                    f"The key ideas about {deck_title} have been consolidated.",
+                    "Thank you. Questions are welcome.",
+                ]
+            )
+        closing["title"] = "Tổng kết và Hỏi đáp" if vietnamese else "Summary and Q&A"
+        closing["layout"] = "thankyou"
+        closing["pedagogical_role"] = "summary"
+        closing["bullets"] = closing_bullets
+        closing["notes"] = (
+            f"Khép lại bài trình bày bằng cách nhắc lại các ý chính về {deck_title}. "
+            "Mời người học nêu câu hỏi, chia sẻ điểm còn chưa rõ và liên hệ nội dung với phần thực hành."
+            if vietnamese
+            else (
+                f"Close the presentation by revisiting the key ideas about {deck_title}. "
+                "Invite questions, clarify remaining uncertainties, and connect the lesson to practice."
+            )
+        )
+        slides[-1] = closing
+
+        structured["slides"] = slides[:target_slides]
+
+        # Drop fragmented ASCII diagrams that document extraction incorrectly
+        # split into separate bullets.
+        for slide in structured["slides"]:
+            if not isinstance(slide, dict):
+                continue
+            bullets = [str(item).strip() for item in (slide.get("bullets") or []) if str(item).strip()]
+            art_indices = [
+                idx for idx, item in enumerate(bullets)
+                if re.fullmatch(r"[+\-|_=:\s]{4,}", item)
+            ]
+            if len(art_indices) >= 2:
+                start = art_indices[0]
+                if start > 0 and bullets[start - 1].rstrip().endswith(":"):
+                    start -= 1
+                end = art_indices[-1]
+                bullets = bullets[:start] + bullets[end + 1:]
+            slide["bullets"] = bullets
         return structured
 
     async def _refine_deck_with_optional_second(self, structured: Dict[str, Any]) -> Dict[str, Any]:
@@ -1312,6 +1474,10 @@ class SlidePipelineMixin:
             self._llm_system_prefix()
             + "You are a premium presentation editor.\n\n"
             + "TASK: Conduct a comprehensive revision of the generated slide deck JSON to guarantee professional quality.\n\n"
+            + "DECK BOUNDARIES: Keep the exact slide count. Rewrite slide 1 as a cover with layout='intro', "
+            "the deck topic as title, and at most two concise subtitle bullets. Rewrite the final slide as a "
+            "closing with layout='thankyou', one or two key takeaways plus an optional Q&A invitation, and at most four bullets. "
+            "Do not append extra slides.\n\n"
             + "CRITICAL QUALITY RULES:\n"
             "1. NO TRUNCATION: Fix any bullet point that is cut off or incomplete. Vietnamese bullets MUST NOT end with a preposition/conjunction/function word followed by a period (e.g., 'của.', 'cho.', 'với.', 'để.', 'gồm.', 'và.', 'hoặc.'). Complete the sentence or rewrite it.\n"
             f"2. BULLET LENGTH & STRUCTURE: Each bullet must be a single complete sentence, containing roughly {BULLET_WORD_RANGE} words (hard max {MAX_WORDS_PER_BULLET} words). No bullet should be a single phrase/label or a huge paragraph.\n"
@@ -1321,7 +1487,7 @@ class SlidePipelineMixin:
             + ANTI_TRUNCATION_TOKEN_RULE
             + self._output_language_instruction()
             + "Return ONLY valid JSON. Schema:\n"
-            "{\"title\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\"],\"notes\":\"...\"}]}\n"
+            "{\"title\":\"...\",\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\"],\"notes\":\"...\",\"layout\":\"intro|normal|thankyou\"}]}\n"
         )
         user_msg = (
             "Review and revise the following slide deck JSON to apply the quality rules:\n\n"
@@ -1347,7 +1513,12 @@ class SlidePipelineMixin:
                 compose_mode=True,
                 structured_output="slide_deck",
             )
-            has_slides = isinstance(refined, dict) and isinstance(refined.get("slides"), list) and len(refined.get("slides")) > 0
+            expected_count = len(structured.get("slides") or [])
+            has_slides = (
+                isinstance(refined, dict)
+                and isinstance(refined.get("slides"), list)
+                and len(refined.get("slides")) == expected_count
+            )
             if has_slides:
                 print("[slide_pipeline] unified post-process success")
                 # Sau khi LLM sửa, chạy canonicalize lần nữa để chuẩn hóa tiêu đề
@@ -1391,9 +1562,11 @@ class SlidePipelineMixin:
         sections = await self._group_content_final(expanded)
         print(f"[slide_pipeline] group done sections={len(sections or [])}")
         print("[slide_pipeline] generate sections start")
+        content_target = max(5, target_slides - 1)
         structured = await self._generate_slides_for_sections(
-            sections, target_slides=target_slides
+            sections, target_slides=content_target
         )
+        structured = self._ensure_deck_boundaries(structured, target_slides)
         print(
             f"[slide_pipeline] generate sections done slides={len((structured or {}).get('slides') or [])}"
         )

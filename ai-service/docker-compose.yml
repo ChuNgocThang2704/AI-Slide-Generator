@@ -1,13 +1,21 @@
 services:
   api:
     build: .
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_TASK_TTL_SECONDS=${REDIS_TASK_TTL_SECONDS:-2592000}
       - FREE_CHAR_LIMIT=${FREE_CHAR_LIMIT:-10000}
       - PRO_CHAR_LIMIT=${PRO_CHAR_LIMIT:-50000}
       - ULTRA_CHAR_LIMIT=${ULTRA_CHAR_LIMIT:-100000}
+      - FREE_SLIDE_LIMIT=${FREE_SLIDE_LIMIT:-10}
+      - PRO_SLIDE_LIMIT_MAX=${PRO_SLIDE_LIMIT_MAX:-30}
+      - ULTRA_SLIDE_LIMIT_MAX=${ULTRA_SLIDE_LIMIT_MAX:-50}
+      - FREE_IMAGE_LIMIT=${FREE_IMAGE_LIMIT:-5}
+      - PRO_IMAGE_LIMIT_MAX=${PRO_IMAGE_LIMIT_MAX:-15}
+      - ULTRA_IMAGE_LIMIT_MAX=${ULTRA_IMAGE_LIMIT_MAX:-35}
       - IMAGE_MODEL_TYPE=${IMAGE_MODEL_TYPE:-flux}
       - IMAGE_GEN_API_BASE_URL=${IMAGE_GEN_API_BASE_URL:-http://host.docker.internal:8080}
       - IMAGE_SENSITIVE_ALLOW_FLUX=${IMAGE_SENSITIVE_ALLOW_FLUX:-true}
@@ -24,6 +32,7 @@ services:
 
   frontend:
     image: node:20-alpine
+    restart: unless-stopped
     working_dir: /app
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     ports:
@@ -36,12 +45,20 @@ services:
 
   worker:
     build: .
+    restart: unless-stopped
     command: ["python", "backend/worker.py"]
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - REDIS_TASK_TTL_SECONDS=${REDIS_TASK_TTL_SECONDS:-2592000}
       - FREE_CHAR_LIMIT=${FREE_CHAR_LIMIT:-10000}
       - PRO_CHAR_LIMIT=${PRO_CHAR_LIMIT:-50000}
       - ULTRA_CHAR_LIMIT=${ULTRA_CHAR_LIMIT:-100000}
+      - FREE_SLIDE_LIMIT=${FREE_SLIDE_LIMIT:-10}
+      - PRO_SLIDE_LIMIT_MAX=${PRO_SLIDE_LIMIT_MAX:-30}
+      - ULTRA_SLIDE_LIMIT_MAX=${ULTRA_SLIDE_LIMIT_MAX:-50}
+      - FREE_IMAGE_LIMIT=${FREE_IMAGE_LIMIT:-5}
+      - PRO_IMAGE_LIMIT_MAX=${PRO_IMAGE_LIMIT_MAX:-15}
+      - ULTRA_IMAGE_LIMIT_MAX=${ULTRA_IMAGE_LIMIT_MAX:-35}
       - IMAGE_MODEL_TYPE=${IMAGE_MODEL_TYPE:-flux}
       - IMAGE_GEN_API_BASE_URL=${IMAGE_GEN_API_BASE_URL:-http://host.docker.internal:8080}
       - IMAGE_SENSITIVE_ALLOW_FLUX=${IMAGE_SENSITIVE_ALLOW_FLUX:-true}
@@ -58,6 +75,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
     volumes:

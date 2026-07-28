@@ -14,8 +14,9 @@ const PLANS = [
     desc: 'Lý tưởng để bắt đầu trải nghiệm',
     icon: <Sparkles size={22} />,
     color: '#6c63ff',
-    features: [
-      'Tối đa 10 slides / presentation',
+      features: [
+        'Tối đa 3 bài trình chiếu / ngày',
+        'Tối đa 10 slides / presentation',
       'Tối đa 5 hình ảnh / presentation',
       'Giới hạn 10.000 ký tự nội dung',
       '2 lượt chỉnh sửa bằng AI mỗi ngày',
@@ -27,14 +28,15 @@ const PLANS = [
   {
     id: 'pro',
     name: 'Pro',
-    price: '20',
+    price: '199.000đ',
     period: 'tháng',
     desc: 'Dành cho cá nhân và chuyên nghiệp',
     icon: <Zap size={22} />,
     color: '#f72585',
     popular: true,
-    features: [
-      'Tối đa 30 slides / presentation',
+      features: [
+        'Tối đa 20 bài trình chiếu / ngày',
+        'Tối đa 30 slides / presentation',
       'Tối đa 15 hình ảnh / presentation',
       'Giới hạn 50.000 ký tự nội dung',
       '10 lượt chỉnh sửa bằng AI mỗi ngày',
@@ -47,13 +49,14 @@ const PLANS = [
   {
     id: 'ultra',
     name: 'Ultra',
-    price: '49',
+    price: '499.000đ',
     period: 'tháng',
     desc: 'Dành cho đội ngũ và doanh nghiệp',
     icon: <Crown size={22} />,
     color: '#fbbf24',
-    features: [
-      'Tối đa 50 slides / presentation',
+      features: [
+        'Không giới hạn bài trình chiếu / ngày',
+        'Tối đa 50 slides / presentation',
       'Tối đa 35 hình ảnh / presentation',
       'Giới hạn 100.000 ký tự nội dung',
       '30 lượt chỉnh sửa bằng AI mỗi ngày',
@@ -479,7 +482,7 @@ export default function PricingPage() {
               { q: 'Tôi có thể hủy bất cứ lúc nào không?', a: 'Có, bạn có thể hủy gói bất cứ lúc nào. Gói sẽ vẫn hoạt động đến hết chu kỳ thanh toán.' },
               { q: 'Xuất PDF có giữ nguyên định dạng không?', a: 'Có, slide được xuất PDF với đúng màu sắc, font chữ và bố cục như trên web.' },
               { q: 'AI tạo slide có chính xác không?', a: 'AI được fine-tune để tạo nội dung chuyên nghiệp. Bạn vẫn có thể chỉnh sửa trực tiếp sau khi tạo.' },
-              { q: 'Có giới hạn nào trong gói Free không?', a: 'Gói Free cho phép tạo 5 slides/tháng và lưu tối đa 10 presentations. Đủ để bạn trải nghiệm.' },
+              { q: 'Có giới hạn nào trong gói Free không?', a: 'Gói Free cho phép tạo 3 bài trình chiếu mỗi ngày, tối đa 10 slide và 5 ảnh cho mỗi bài.' },
             ].map((faq, i) => (
               <div key={i} className="faq-card">
                 <h4 className="faq-q">{faq.q}</h4>

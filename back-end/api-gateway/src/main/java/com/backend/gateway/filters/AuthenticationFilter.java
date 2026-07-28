@@ -37,6 +37,7 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
             "/api/auth/google/login",
             "/api/auth/google/redirect",
             "/api/auth/register",
+            "/api/auth/resend-verification",
             "/api/auth/verify-code",
             "/api/auth/refresh",
             "/api/auth/forgot-password",

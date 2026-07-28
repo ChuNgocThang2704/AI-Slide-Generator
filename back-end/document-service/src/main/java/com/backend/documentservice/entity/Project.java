@@ -1,6 +1,8 @@
 package com.backend.documentservice.entity;
 
+import com.backend.documentservice.converter.StringListConverter;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -15,6 +17,7 @@ import org.hibernate.annotations.Where;
 import org.hibernate.annotations.JdbcTypeCode;
 
 import java.sql.Types;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -44,8 +47,7 @@ public class Project extends AbstractAuditingEntity {
     private UUID sourceDocId;
 
     @Column(name = "template_id")
-    @JdbcTypeCode(Types.VARCHAR)
-    private UUID templateId;
+    private String templateId;
 
     @Column(name = "initial_prompt", columnDefinition = "TEXT")
     private String initialPrompt;
@@ -58,4 +60,11 @@ public class Project extends AbstractAuditingEntity {
 
     @Column(name = "ai_task_id")
     private String aiTaskId;
+
+    @Column(name = "presentation_mode")
+    private String presentationMode;
+
+    @Convert(converter = StringListConverter.class)
+    @Column(name = "learning_objectives", columnDefinition = "TEXT")
+    private List<String> learningObjectives;
 }

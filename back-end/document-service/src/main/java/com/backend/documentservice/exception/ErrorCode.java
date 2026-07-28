@@ -17,6 +17,7 @@ public enum ErrorCode {
     ACCESS_DENIED(403, "You do not have permission to access this resource", HttpStatus.FORBIDDEN),
     PROJECT_NOT_FOUND(404, "Project not found", HttpStatus.NOT_FOUND),
     DOCUMENT_NOT_FOUND(404, "Document not found", HttpStatus.NOT_FOUND),
+    INVALID_GENERATION_PROMPT(400, "Yêu cầu tạo slide chưa đủ rõ", HttpStatus.BAD_REQUEST),
     CONFIG_NOT_FOUND(404, "AI Configuration not found", HttpStatus.NOT_FOUND),
     QUOTA_EXCEEDED(400, "Daily slide generation limit reached", HttpStatus.BAD_REQUEST),
     AI_API_ERROR(400, "Lỗi từ AI Engine", HttpStatus.BAD_REQUEST),

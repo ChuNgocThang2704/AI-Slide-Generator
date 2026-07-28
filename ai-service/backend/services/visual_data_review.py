@@ -7,6 +7,7 @@ chỉ là các ứng viên phải vượt qua cùng một quy tắc kiểm tra.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -111,6 +112,37 @@ def _is_complete_table(spec: Any) -> bool:
     )
 
 
+def _spec_fingerprint(spec: Dict[str, Any]) -> str:
+    canonical = json.dumps(spec or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _remove_duplicate_specs(
+    specs: Dict[int, Dict[str, Any]],
+    debug_records: List[Dict[str, Any]],
+) -> Dict[int, Dict[str, Any]]:
+    """Keep one occurrence of identical visual data and mark later copies."""
+    filtered: Dict[int, Dict[str, Any]] = {}
+    owners: Dict[str, int] = {}
+    records_by_index = {
+        rec.get("slide_index"): rec
+        for rec in debug_records
+        if isinstance(rec, dict) and isinstance(rec.get("slide_index"), int)
+    }
+    for idx, spec in sorted(specs.items()):
+        fingerprint = _spec_fingerprint(spec)
+        if fingerprint not in owners:
+            owners[fingerprint] = idx
+            filtered[idx] = spec
+            continue
+        rec = records_by_index.get(idx)
+        if rec is not None:
+            rec["status"] = "duplicate_rejected"
+            rec["duplicate_of_slide_index"] = owners[fingerprint]
+            rec["reject_reason"] = "Identical visual data is already used on another slide"
+    return filtered
+
+
 async def _repair_rejected_table(
     content_extractor,
     candidate: Dict[str, Any],
@@ -154,6 +186,9 @@ async def review_visual_data_specs(
 ) -> Tuple[Dict[int, Dict[str, Any]], List[Dict[str, Any]]]:
     """Trả về các đặc tả đã được lọc và các bản ghi debug đã cập nhật."""
     if not specs or not VISUAL_DATA_REVIEW_ENABLE:
+        return specs, debug_records
+    specs = _remove_duplicate_specs(specs, debug_records)
+    if not specs:
         return specs, debug_records
     if not hasattr(content_extractor, "_llm_completion_plain_text"):
         return specs, debug_records

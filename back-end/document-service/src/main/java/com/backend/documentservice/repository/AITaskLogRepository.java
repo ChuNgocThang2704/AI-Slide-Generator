@@ -10,4 +10,5 @@ import java.util.UUID;
 @Repository
 public interface AITaskLogRepository extends JpaRepository<AITaskLog, UUID> {
     List<AITaskLog> findByProjectId(UUID projectId);
+    List<AITaskLog> findByProjectIdOrderByStartedAtDesc(UUID projectId);
 }

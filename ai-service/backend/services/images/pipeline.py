@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
 import httpx
@@ -979,33 +980,44 @@ async def _score_slide_for_image_async(
     title = str(slide.get("title") or "").strip().lower()
     bullets = slide.get("bullets") or slide.get("content") or []
     
-    # 1. Bỏ qua slide chứa bảng hoặc biểu đồ, hoặc slide index 0 (Slide mở đầu/thành viên)
-    if idx == 0:
-        print(f"[slide_images] Forced skip image for slide 0 (cover/intro)")
-        return 0
+    # Existing table/chart data already owns the primary visual area.
     if table_specs and idx in table_specs:
         return 0
     if chart_specs and idx in chart_specs:
         return 0
 
-    # 1b. Cổng kiểm tra heuristic dự phòng (chống AI phân loại nhầm slide metadata)
-    meta_keywords = (
-        "thành viên", "nhóm thực hiện", "sinh viên", "giảng viên", "giáo viên", "advisor", "member", "presenter", "author",
-        "mục lục", "agenda", "nội dung chính", "lời cảm ơn", "thank you", "q&a", "hỏi đáp", "kết luận", "chương", "phân công"
-    )
-    if any(k in title for k in meta_keywords):
-        print(f"[slide_images] Heuristic skipped image for metadata slide {idx} ('{title}')")
-        return 0
-
-    # 2. Gọi AI để lấy phân loại ngữ nghĩa của slide
+    # Ask semantic AI before considering keyword fallback.
     from .semantics import _get_image_semantic
     semantic = await _get_image_semantic(content_extractor, slide)
     content_type = str(semantic.get("content_type") or "normal").strip().lower()
+    semantic_source = str(semantic.get("source") or "").strip().lower()
+    try:
+        semantic_confidence = float(semantic.get("confidence") or 0.0)
+    except Exception:
+        semantic_confidence = 0.0
     
     # 3. Lọc bỏ các slide mang tính chất giới thiệu/kết luận/bảng biểu bằng AI
     if content_type in ("intro", "outro", "data"):
         print(f"[slide_images] AI classified slide {idx} as '{content_type}', skipping image.")
         return 0
+
+    if semantic_confidence < 0.5 or semantic_source.startswith(("rule", "fallback")):
+        folded_title = unicodedata.normalize("NFD", title)
+        folded_title = "".join(
+            char for char in folded_title if unicodedata.category(char) != "Mn"
+        ).replace("\u0111", "d")
+        metadata_terms = (
+            "thanh vien", "nhom thuc hien", "sinh vien", "giang vien",
+            "giao vien", "advisor", "member", "presenter", "author",
+            "muc luc", "agenda", "noi dung chinh", "loi cam on",
+            "thank you", "q&a", "hoi dap", "ket luan", "phan cong",
+        )
+        if any(term in folded_title for term in metadata_terms):
+            print(
+                f"[slide_images] Low-confidence fallback skipped metadata slide {idx} "
+                f"('{title}')"
+            )
+            return 0
         
     # 4. Slide tiếp nối (tiếp theo) ưu tiên thấp
     if re.search(r"\s*\((?:tiếp|tiep|continued)\)\s*$", title):

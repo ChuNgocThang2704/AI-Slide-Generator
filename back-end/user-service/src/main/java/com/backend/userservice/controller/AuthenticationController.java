@@ -61,6 +61,15 @@ public class AuthenticationController {
                 .build();
     }
 
+    @PostMapping("/resend-verification")
+    ApiResponse<String> resendVerification(@RequestBody @Valid ResendVerificationRequest request) {
+        authenticationService.resendVerification(request.getEmail());
+        return ApiResponse.<String>builder()
+                .data("Verification code resent")
+                .build();
+    }
+
+
     @PostMapping("/refresh")
     ApiResponse<AuthenticationResponse> refresh(@RequestBody CheckTokenRequest request)
             throws ParseException, JOSEException {
@@ -93,11 +102,16 @@ public class AuthenticationController {
     }
 
     @PostMapping("/logout")
-    ApiResponse<Void> logout(HttpServletRequest request) {
+    ApiResponse<Void> logout(
+            HttpServletRequest request,
+            @RequestBody(required = false) CheckTokenRequest refreshRequest) {
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
             String token = header.substring(7);
             authenticationService.logout(token);
+        }
+        if (refreshRequest != null) {
+            authenticationService.logoutRefreshToken(refreshRequest.getToken());
         }
         return ApiResponse.<Void>builder()
                 .message("Logout successfully")

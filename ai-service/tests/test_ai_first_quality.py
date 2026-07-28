@@ -29,6 +29,17 @@ class VisualExtractor:
         return json.dumps({"slides": [{"slide_index": 0, "visual": self.visual}]})
 
 
+class AllNoneVisualExtractor:
+    async def _llm_completion_plain_text(self, messages, **kwargs):
+        payload = json.loads(messages[-1]["content"])
+        return json.dumps({
+            "slides": [
+                {"slide_index": slide["slide_index"], "visual": "none"}
+                for slide in payload["slides"]
+            ],
+        })
+
+
 class FailingTitleExtractor:
     async def _llm_completion_plain_text(self, messages, **kwargs):
         raise RuntimeError("provider unavailable")
@@ -95,6 +106,38 @@ class AiFirstQualityTest(unittest.IsolatedAsyncioTestCase):
         plan = await build_visual_plan(VisualExtractor("none"), deck, "", want_images=False)
 
         self.assertEqual(plan[0], "table")
+
+    async def test_requested_images_rejects_degenerate_all_none_plan(self):
+        deck = {"slides": [{
+            "title": "Historical context",
+            "bullets": ["A concrete event that benefits from an illustration"],
+            "layout": "text_only",
+        }]}
+
+        plan = await build_visual_plan(VisualExtractor("none"), deck, "", want_images=True)
+
+        self.assertEqual(plan[0], "image")
+
+    async def test_requested_images_enforces_deck_level_minimum(self):
+        deck = {
+            "slides": [
+                {"title": f"Topic {index}", "bullets": ["One", "Two"], "layout": "text_only"}
+                for index in range(10)
+            ],
+        }
+
+        plan = await build_visual_plan(AllNoneVisualExtractor(), deck, "", want_images=True)
+
+        self.assertGreaterEqual(sum(visual == "image" for visual in plan.values()), 3)
+        longest_none_run = 0
+        current_none_run = 0
+        for index in range(len(deck["slides"])):
+            if plan[index] == "none":
+                current_none_run += 1
+                longest_none_run = max(longest_none_run, current_none_run)
+            else:
+                current_none_run = 0
+        self.assertLessEqual(longest_none_run, 4)
 
     async def test_title_review_failure_does_not_rewrite_from_bullets(self):
         deck = {"slides": [{

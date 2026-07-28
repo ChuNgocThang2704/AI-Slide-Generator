@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore, useUIStore } from '../../store';
 import { adminService } from '../../services/adminService';
 import { 
-  Users, Settings, ShieldAlert, Trash2, Plus, 
-  Check, AlertTriangle, ShieldCheck, Loader2
+  Users, ShieldAlert, Trash2, Plus,
+  AlertTriangle, ShieldCheck, Loader2
 } from 'lucide-react';
 import './AdminPage.css';
 
@@ -13,33 +13,13 @@ export default function AdminPage() {
   const { addToast } = useUIStore();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState('configs');
+  const [activeTab, setActiveTab] = useState('users');
   const [loading, setLoading] = useState(false);
 
   // States for tab content
   const [usersList, setUsersList] = useState([]);
   const [rolesList, setRolesList] = useState([]);
   const [permsList, setPermsList] = useState([]);
-  const [aiConfigs, setAiConfigs] = useState([
-    {
-      roleCode: 'USER_FREE',
-      configName: 'Gói Miễn Phí',
-      language: 'Vietnamese',
-      tone: 'Professional',
-      maxProjectsPerDay: 3,
-      minPagesPerProject: 5,
-      maxPagesPerProject: 10
-    },
-    {
-      roleCode: 'USER_PRO',
-      configName: 'Gói Chuyên Nghiệp',
-      language: 'Vietnamese',
-      tone: 'Professional',
-      maxProjectsPerDay: 20,
-      minPagesPerProject: 5,
-      maxPagesPerProject: 25
-    }
-  ]);
 
   // Check Admin Privilege
   useEffect(() => {
@@ -68,15 +48,6 @@ export default function AdminPage() {
         const permsData = await adminService.getPermissions();
         setRolesList(rolesData || getMockRoles());
         setPermsList(permsData || getMockPermissions());
-      } else if (activeTab === 'configs') {
-        try {
-          const configs = await adminService.getAIConfigs();
-          if (configs && configs.length > 0) {
-            setAiConfigs(configs);
-          }
-        } catch (e) {
-          console.log('Không lấy được configs từ BE, sử dụng cấu hình mặc định');
-        }
       }
     } catch (err) {
       console.error(err);
@@ -89,26 +60,6 @@ export default function AdminPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleSyncConfigs = async () => {
-    setLoading(true);
-    try {
-      await adminService.syncAIConfigs(aiConfigs);
-      addToast('🎉 Đồng bộ cấu hình AI thành công!', 'success');
-    } catch (err) {
-      addToast(err.message || 'Đồng bộ cấu hình thất bại', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleConfigChange = (index, field, value) => {
-    setAiConfigs(prev => {
-      const updated = [...prev];
-      updated[index] = { ...updated[index], [field]: value };
-      return updated;
-    });
   };
 
   const handleDeleteUser = async (userId) => {
@@ -139,13 +90,6 @@ export default function AdminPage() {
           {/* Left Sidebar Menu */}
           <div className="admin-sidebar">
             <button 
-              className={`admin-menu-btn ${activeTab === 'configs' ? 'active' : ''}`}
-              onClick={() => setActiveTab('configs')}
-            >
-              <Settings size={16} />
-              <span>Cấu hình gói AI</span>
-            </button>
-            <button 
               className={`admin-menu-btn ${activeTab === 'users' ? 'active' : ''}`}
               onClick={() => setActiveTab('users')}
             >
@@ -167,69 +111,6 @@ export default function AdminPage() {
               <div className="admin-loading-overlay">
                 <Loader2 className="spin" size={24} />
                 <span>Đang xử lý dữ liệu...</span>
-              </div>
-            )}
-
-            {/* TAB: CẤU HÌNH AI */}
-            {activeTab === 'configs' && (
-              <div className="tab-pane">
-                <div className="pane-header">
-                  <h3>⚙️ Cấu hình giới hạn gói dịch vụ</h3>
-                  <p>Thiết lập giới hạn số slide, số project và tone sinh slide cho từng nhóm thành viên.</p>
-                </div>
-
-                <div className="configs-list">
-                  {aiConfigs.map((config, index) => (
-                    <div key={config.roleCode} className="config-card">
-                      <div className="cc-header">
-                        <h4>{config.configName} ({config.roleCode})</h4>
-                      </div>
-                      
-                      <div className="cc-grid">
-                        <div className="form-group">
-                          <label className="form-label">Dự án tối đa / ngày</label>
-                          <input 
-                            type="number" 
-                            className="input"
-                            value={config.maxProjectsPerDay}
-                            onChange={(e) => handleConfigChange(index, 'maxProjectsPerDay', parseInt(e.target.value))}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Số slide tối thiểu</label>
-                          <input 
-                            type="number" 
-                            className="input"
-                            value={config.minPagesPerProject}
-                            onChange={(e) => handleConfigChange(index, 'minPagesPerProject', parseInt(e.target.value))}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Số slide tối đa</label>
-                          <input 
-                            type="number" 
-                            className="input"
-                            value={config.maxPagesPerProject}
-                            onChange={(e) => handleConfigChange(index, 'maxPagesPerProject', parseInt(e.target.value))}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">Ngôn ngữ mặc định</label>
-                          <input 
-                            type="text" 
-                            className="input"
-                            value={config.language}
-                            onChange={(e) => handleConfigChange(index, 'language', e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <button className="btn btn-primary" onClick={handleSyncConfigs} disabled={loading} style={{ marginTop: 16 }}>
-                  <Check size={16} /> Lưu & Đồng bộ cấu hình
-                </button>
               </div>
             )}
 

@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
 import { projectService, documentService } from '../../services/documentService';
-import { Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X } from 'lucide-react';
+import { evaluatePromptQuality } from '../../utils/promptQuality';
+import { Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X, LayoutDashboard, AlertCircle, CheckCircle2 } from 'lucide-react';
 import './GeneratePage.css';
 
 const PROMPT_SUGGESTIONS = [
@@ -39,8 +40,9 @@ export default function GeneratePage() {
   const [form, setForm] = useState({
     prompt: '',
     slideCount: 8,
-    templateId: 'clean-white',
+    templateId: 'soft-blue',
   });
+  const promptQuality = evaluatePromptQuality(form.prompt, { hasFile: Boolean(uploadedFileData) });
 
   // Progress states
   const [showProgress, setShowProgress] = useState(false);
@@ -147,10 +149,20 @@ export default function GeneratePage() {
     }
   };
 
+  const handleTrackOnDashboard = () => {
+    if (pollingIntervalId) {
+      clearInterval(pollingIntervalId);
+      setPollingIntervalId(null);
+    }
+    setShowProgress(false);
+    setLoading(false);
+    navigate('/dashboard');
+  };
+
   // Create project
   const handleCreate = async () => {
-    if (!form.prompt.trim() && !uploadedFileData) {
-      addToast('Vui lòng nhập chủ đề hoặc tải lên tệp tin tài liệu', 'error');
+    if (!promptQuality.valid) {
+      addToast(promptQuality.message, 'error');
       return;
     }
 
@@ -161,7 +173,7 @@ export default function GeneratePage() {
       setProgressVal(0);
       setProgressStatus('Đang khởi tạo project...');
       setShowProgress(true);
-      const promptText = form.prompt.trim() || `Tạo slide từ tệp tin ${uploadedFileData.fileName}`;
+      const promptText = form.prompt.trim();
       
       const project = await projectService.create(
         promptText,
@@ -248,6 +260,15 @@ export default function GeneratePage() {
               onChange={(e) => setForm({ ...form, prompt: e.target.value })}
               disabled={loading || uploading}
             />
+            <div className={`gen2-prompt-quality ${promptQuality.level}`} role="status">
+              {promptQuality.valid
+                ? <CheckCircle2 size={16} aria-hidden="true" />
+                : <AlertCircle size={16} aria-hidden="true" />}
+              <div>
+                <strong>{promptQuality.label}</strong>
+                <span>{promptQuality.message}</span>
+              </div>
+            </div>
             <div className="gen2-suggestions">
               {PROMPT_SUGGESTIONS.map((suggestion) => (
                 <button
@@ -308,7 +329,7 @@ export default function GeneratePage() {
             id="create-btn"
             className="btn btn-primary btn-lg gen2-submit"
             onClick={handleCreate}
-            disabled={loading || uploading || (!form.prompt.trim() && !uploadedFileData)}
+            disabled={loading || uploading || !promptQuality.valid}
           >
             {loading && !showProgress ? (
               <>
@@ -346,13 +367,23 @@ export default function GeneratePage() {
             
             <p className="gen2-progress-status">{progressStatus}</p>
             
-            <button 
-              type="button" 
-              className="btn btn-secondary gen2-progress-cancel" 
-              onClick={handleCancel}
-            >
-              Hủy tác vụ
-            </button>
+            <div className="gen2-progress-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleTrackOnDashboard}
+              >
+                <LayoutDashboard size={16} />
+                Theo dõi ở Dashboard
+              </button>
+              <button
+                type="button"
+                className="btn gen2-progress-cancel"
+                onClick={handleCancel}
+              >
+                Hủy tác vụ
+              </button>
+            </div>
           </div>
         </div>
       )}

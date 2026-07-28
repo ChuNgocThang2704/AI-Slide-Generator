@@ -12,7 +12,7 @@
 	<artifactId>payment-service</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>payment-service</name>
-	<description>Payment Service for PSlideAI with Stripe and PayOS Integration</description>
+	<description>Payment Service for LecGen with Stripe and PayOS Integration</description>
 
 	<properties>
 		<java.version>21</java.version>

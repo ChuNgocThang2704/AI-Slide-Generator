@@ -51,7 +51,7 @@ export default function VerifyCodePage() {
     setLoading(true);
     try {
       // Gọi register lại để gửi mã mới
-      await authService.register(pendingEmail, '');
+      await authService.resendVerification(pendingEmail);
       addToast('Mã xác thực đã được gửi lại. Kiểm tra email của bạn.', 'success');
       setResendCountdown(60);
     } catch (err) {
@@ -72,7 +72,7 @@ export default function VerifyCodePage() {
           <Link to="/" className="verify-logo">
             <div className="logo-icon"><Sparkles size={20} /></div>
             <span style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.3rem' }}>
-              PSlide<span className="gradient-text">AI</span>
+              Lec<span className="gradient-text">Gen</span>
             </span>
           </Link>
 

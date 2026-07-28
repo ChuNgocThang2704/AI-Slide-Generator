@@ -15,7 +15,7 @@ public class ProjectCreateRequest {
 
     private String prompt;
 
-    private UUID templateId;
+    private String templateId;
 
     private UUID sourceDocId;
 

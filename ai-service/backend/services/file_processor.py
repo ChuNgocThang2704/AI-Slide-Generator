@@ -238,11 +238,11 @@ class FileProcessor:
         """Dùng PyMuPDF (fitz) — giữ đúng khoảng trắng và cấu trúc dòng."""
         doc = fitz.open(str(file_path))
         pages: list[str] = []
-        for page in doc:
+        for page_number, page in enumerate(doc, start=1):
             # "text" mode + preserve_whitespace giữ đúng layout
             text = page.get_text("text")  # type: ignore[arg-type]
             if text and text.strip():
-                pages.append(text)
+                pages.append(f"[[SOURCE_PAGE:{page_number}]]\n{text}")
         doc.close()
         return "\n\n".join(pages)
 
@@ -251,10 +251,10 @@ class FileProcessor:
         import pdfplumber  # lazy import
         text_content: list[str] = []
         with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
+            for page_number, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text(x_tolerance=2, y_tolerance=3)
                 if text:
-                    text_content.append(text)
+                    text_content.append(f"[[SOURCE_PAGE:{page_number}]]\n{text}")
         return "\n\n".join(text_content)
 
     def _extract_pdf_text(self, file_path: Path) -> str:

@@ -17,5 +17,6 @@ public class ProjectReviseRequest {
     private String revisionScope;
     private Integer slideIndex;
     private Integer slideNumber;
+    private Integer contextSlideNumber;
     private Integer imageLimit;
 }

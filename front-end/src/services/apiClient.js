@@ -16,6 +16,8 @@ const apiClient = axios.create({
   },
 });
 
+let refreshPromise = null;
+
 apiClient.interceptors.request.use((config) => {
   const { token } = useAuthStore.getState();
   if (token) {
@@ -91,10 +93,78 @@ function responseMessage(data, status) {
 
 apiClient.interceptors.response.use(
   (response) => response,
-  (axiosError) => {
+  async (axiosError) => {
     const response = axiosError.response;
     const status = response?.status;
     const data = response?.data;
+    const originalRequest = axiosError.config || {};
+    const requestUrl = String(originalRequest.url || '');
+    const authState = useAuthStore.getState();
+    const isAuthRequest = requestUrl.startsWith('/auth/');
+    const failedAuthorization = String(
+      originalRequest.headers?.Authorization || originalRequest.headers?.authorization || '',
+    );
+
+    if (
+      status === 401
+      && authState.token
+      && !isAuthRequest
+      && !originalRequest._retry
+      && failedAuthorization
+      && failedAuthorization !== `Bearer ${authState.token}`
+    ) {
+      originalRequest._retry = true;
+      originalRequest.headers = originalRequest.headers || {};
+      originalRequest.headers.Authorization = `Bearer ${authState.token}`;
+      return apiClient(originalRequest);
+    }
+
+    if (
+      status === 401
+      && authState.token
+      && authState.refreshToken
+      && !isAuthRequest
+      && !originalRequest._retry
+    ) {
+      originalRequest._retry = true;
+      try {
+        if (!refreshPromise) {
+          refreshPromise = axios
+            .post(
+              `${API_BASE_URL}/auth/refresh`,
+              { token: authState.refreshToken },
+              { headers: { 'Content-Type': 'application/json' } },
+            )
+            .then((refreshResponse) => {
+              const payload = refreshResponse?.data?.data ?? refreshResponse?.data;
+              if (!payload?.token) {
+                throw new Error('Refresh response does not contain an access token');
+              }
+              useAuthStore.getState().updateTokens(
+                payload.token,
+                payload.refreshToken || authState.refreshToken,
+              );
+              return payload.token;
+            })
+            .finally(() => {
+              refreshPromise = null;
+            });
+        }
+
+        const newToken = await refreshPromise;
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return apiClient(originalRequest);
+      } catch {
+        useAuthStore.getState().logout();
+        const refreshError = new Error('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại');
+        refreshError.name = 'ApiError';
+        refreshError.status = 401;
+        refreshError.code = 401;
+        refreshError.details = null;
+        return Promise.reject(refreshError);
+      }
+    }
 
     let message;
     if (!response) {
@@ -112,7 +182,6 @@ apiClient.interceptors.response.use(
     error.details = data?.details || data?.errors || data?.detail || null;
 
     const hadToken = Boolean(useAuthStore.getState().token);
-    const isAuthRequest = String(axiosError.config?.url || '').startsWith('/auth/');
     if (status === 401 && hadToken && !isAuthRequest) {
       useAuthStore.getState().logout();
       error.message = 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại';

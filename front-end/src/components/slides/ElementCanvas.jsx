@@ -14,6 +14,10 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const SNAP_DISTANCE = 6;
 let elementClipboard = null;
 const normalizeColor = (value) => String(value || '').replace(/\s+/g, '').toLowerCase();
+const isFormEditingTarget = (target) => {
+  const element = target instanceof Element ? target : document.activeElement;
+  return Boolean(element?.closest?.('input, textarea, select, [contenteditable="true"], [role="textbox"]'));
+};
 const DEFAULT_THEME_TEXT_COLORS = new Set(
   Object.values(THEMES)
     .flatMap((item) => [item.text, item.textSub])
@@ -231,7 +235,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
   useEffect(() => {
     if (readonly) return undefined;
     const onPaste = (event) => {
-      if (event.defaultPrevented || document.activeElement?.isContentEditable) return;
+      if (event.defaultPrevented || isFormEditingTarget(event.target)) return;
       const imageItem = [...(event.clipboardData?.items || [])].find((item) => item.type.startsWith('image/'));
       if (imageItem) {
         const file = imageItem.getAsFile();
@@ -261,7 +265,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
   useEffect(() => {
     if (readonly) return undefined;
     const onKeyDown = (event) => {
-      if (document.activeElement?.isContentEditable) return;
+      if (isFormEditingTarget(event.target)) return;
       const command = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
 

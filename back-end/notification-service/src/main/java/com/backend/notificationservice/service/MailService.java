@@ -24,7 +24,7 @@ public class MailService {
     @Value("${spring.mail.username}")
     private String fromAddress;
 
-    @Value("${app.mail.from-name:PSlideAI}")
+    @Value("${app.mail.from-name:LecGen}")
     private String fromName;
 
     public void sendHtmlMail(String to, String subject, String templateName, Map<String, Object> contextData) {

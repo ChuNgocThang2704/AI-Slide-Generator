@@ -73,6 +73,7 @@ def validate_plan_limits(
     plan: str,
     slide_count: Optional[int],
     raw_content: Optional[str] = None,
+    count_detection_content: Optional[str] = None,
 ) -> Tuple[Optional[int], Optional[int]]:
     """Validate input limits and resolve only an explicitly requested count."""
     plan_norm = (plan or "pro").strip().lower()
@@ -93,8 +94,13 @@ def validate_plan_limits(
         )
 
     actual_slide_count = slide_count
-    if (actual_slide_count is None or actual_slide_count <= 0) and raw_content:
-        actual_slide_count = detect_requested_slide_count(raw_content)
+    detection_content = (
+        count_detection_content
+        if count_detection_content is not None
+        else raw_content
+    )
+    if (actual_slide_count is None or actual_slide_count <= 0) and detection_content:
+        actual_slide_count = detect_requested_slide_count(detection_content)
 
     if actual_slide_count and actual_slide_count > 0:
         if actual_slide_count > slide_limit_max:
@@ -129,3 +135,35 @@ def as_bool_flag(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def validate_generation_instruction(text: Optional[str], *, has_file: bool) -> str:
+    instruction = str(text or "").strip()
+    words = [
+        token
+        for token in re.findall(r"[\wÀ-ỹ]+", instruction, flags=re.UNICODE)
+        if len(token) >= 2
+    ]
+    if len(instruction) < 10 or len(words) < 3:
+        detail = (
+            "Vui lòng mô tả mục đích và phạm vi nội dung cần tạo từ tài liệu."
+            if has_file
+            else "Vui lòng mô tả rõ chủ đề hoặc mục tiêu của bài trình chiếu."
+        )
+        raise HTTPException(status_code=400, detail=detail)
+
+    folded = re.sub(r"\s+", " ", instruction.lower()).strip()
+    if has_file and re.fullmatch(
+        r"(?:hãy\s+)?(?:tạo|tao|làm|lam|create|make)\s+"
+        r"(?:slide|slides|presentation)"
+        r"(?:\s+(?:từ|tu|from)\s+(?:file|tệp|tep|tài liệu|tai lieu).*)?",
+        folded,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Yêu cầu còn quá chung chung. Hãy nêu mục đích và phạm vi "
+                "như toàn bộ tài liệu hoặc chương cụ thể."
+            ),
+        )
+    return instruction

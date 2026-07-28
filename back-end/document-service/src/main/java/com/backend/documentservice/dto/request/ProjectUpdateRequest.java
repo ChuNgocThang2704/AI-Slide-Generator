@@ -11,6 +11,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class ProjectUpdateRequest {
     private String name;
+    private String templateId;
     private Integer status;
     private String slideUrl;
 }

@@ -231,7 +231,7 @@ services:
     env_file:
       - .env
     environment:
-      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-PSlideAI}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-LecGen}
       RABBIT_HOST: rabbitmq
       RABBIT_PORT: 5672
       RABBIT_USER: ${RABBIT_USER:-ai_user}

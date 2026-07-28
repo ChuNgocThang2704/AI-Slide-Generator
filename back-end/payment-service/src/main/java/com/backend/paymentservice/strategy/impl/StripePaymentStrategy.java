@@ -75,7 +75,7 @@ public class StripePaymentStrategy implements PaymentStrategy {
                                                     .setUnitAmount(unitAmount)
                                                     .setProductData(
                                                             SessionCreateParams.LineItem.PriceData.ProductData.builder()
-                                                                    .setName(request.getDescription() != null ? request.getDescription() : "Thanh toán gói cước PSlideAI")
+                                                                    .setName(request.getDescription() != null ? request.getDescription() : "Thanh toán gói cước LecGen")
                                                                     .build()
                                                     )
                                                     .build()

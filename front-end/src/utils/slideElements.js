@@ -18,10 +18,93 @@ const textElement = (role, content, x, y, width, height, style = {}) => ({
   style: { fontFamily: 'Inter, sans-serif', fontSize: 22, color: '#1a1a1a', textAlign: 'left', fontWeight: 400, ...style },
 });
 
+const isVietnameseSlide = (slide) => {
+  const language = String(slide?.language || slide?.lang || '').toLowerCase();
+  if (language.startsWith('vi')) return true;
+  if (language.startsWith('en')) return false;
+  const text = [slide?.title, slide?.subtitle, ...(slide?.bullets || [])].filter(Boolean).join(' ');
+  return /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i.test(text)
+    || /\b(bài giảng|tổng kết|mục tiêu|nội dung|cảm ơn)\b/i.test(text);
+};
 export function createElementsFromSlide(slide, theme = 'clean-white') {
   if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
+  const isVietnamese = isVietnameseSlide(slide);
+
+  if (slide?.type === 'title') {
+    elements.push(textElement('custom', isVietnamese ? 'BÀI GIẢNG' : 'LECTURE', 110, 116, 740, 34, {
+      fontFamily: colors.body,
+      fontSize: 14,
+      color: colors.sub,
+      fontWeight: 700,
+      textAlign: 'center',
+      letterSpacing: 2,
+    }));
+    elements.push(textElement('title', slide?.title || slide?.richText?.title, 110, 164, 740, 132, {
+      fontFamily: colors.title,
+      fontSize: 48,
+      color: colors.text,
+      fontWeight: 800,
+      lineHeight: 1.12,
+      textAlign: 'center',
+    }));
+    const subtitle = slide?.subtitle
+      || (Array.isArray(slide?.bullets) ? slide.bullets[0] : '')
+      || slide?.richText?.subtitle
+      || '';
+    if (subtitle) {
+      elements.push(textElement('body', subtitle, 180, 318, 600, 90, {
+        fontFamily: colors.body,
+        fontSize: 20,
+        color: colors.sub,
+        lineHeight: 1.45,
+        textAlign: 'center',
+      }));
+    }
+    return elements;
+  }
+
+  if (slide?.type === 'thankyou') {
+    elements.push(textElement('custom', isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE', 130, 112, 700, 34, {
+      fontFamily: colors.body,
+      fontSize: 14,
+      color: colors.sub,
+      fontWeight: 700,
+      textAlign: 'center',
+      letterSpacing: 2,
+    }));
+    elements.push(textElement('title', slide?.title || (isVietnamese ? 'Tổng kết và Hỏi đáp' : 'Summary and Q&A'), 120, 164, 720, 112, {
+      fontFamily: colors.title,
+      fontSize: 46,
+      color: colors.text,
+      fontWeight: 800,
+      lineHeight: 1.15,
+      textAlign: 'center',
+    }));
+    const closingItems = Array.isArray(slide?.bullets)
+      ? slide.bullets
+      : [slide?.subtitle, slide?.contact].filter(Boolean);
+    if (closingItems.length) {
+      elements.push(textElement(
+        'body',
+        `<ul>${closingItems.map((item) => `<li>${item}</li>`).join('')}</ul>`,
+        190,
+        302,
+        580,
+        132,
+        {
+          fontFamily: colors.body,
+          fontSize: 19,
+          color: colors.sub,
+          lineHeight: 1.5,
+          textAlign: 'left',
+        },
+      ));
+    }
+    return elements;
+  }
+
   elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 58, {
     fontFamily: colors.title, fontSize: 34, color: colors.text, fontWeight: 700, lineHeight: 1.2,
   }));
