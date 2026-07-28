@@ -493,6 +493,14 @@ class RedisQueue:
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
 
+            boundary_target = int(target_slides_override) if target_slides_override else len(
+                structured_content.get("slides") or []
+            )
+            structured_content = content_extractor._ensure_deck_boundaries(
+                structured_content,
+                boundary_target,
+            )
+
             visual_plan = await build_visual_plan(
                 content_extractor,
                 structured_content,
@@ -830,6 +838,14 @@ class RedisQueue:
             await self.update_task_status(task_id, "processing", progress=58)
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
+
+            boundary_target = int(target_slides_override) if target_slides_override else len(
+                structured_content.get("slides") or []
+            )
+            structured_content = content_extractor._ensure_deck_boundaries(
+                structured_content,
+                boundary_target,
+            )
 
             visual_plan = await build_visual_plan(
                 content_extractor,

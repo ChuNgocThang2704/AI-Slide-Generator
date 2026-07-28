@@ -532,7 +532,11 @@ def _table_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
                 sentence_like_cells += 1
     if total_cells == 0:
         return False
-    if sentence_like_cells > max(2, total_cells // 2):
+    if (
+        sentence_like_cells > max(2, total_cells // 2)
+        and header_hits < min(2, len(headers))
+        and first_col_hits < min(2, len(rows))
+    ):
         return False
     has_grid = "|" in text and text.count("|") >= 4
     return has_grid or first_col_hits >= min(2, len(rows)) or header_hits >= min(2, len(headers))

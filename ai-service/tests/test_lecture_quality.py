@@ -1,6 +1,10 @@
 import unittest
 
-from routes.api import _build_slide_spec_payload, _structured_content_from_spec_payload
+from routes.api import (
+    _build_slide_spec_payload,
+    _resolve_unique_visual_specs,
+    _structured_content_from_spec_payload,
+)
 from services.content_extractor import ContentExtractor
 from services.lecture_quality import (
     detect_lecture_mode,
@@ -9,6 +13,7 @@ from services.lecture_quality import (
     select_relevant_source_excerpt,
 )
 from services.slide_quality import _preserve_lecture_density, _preserve_slide_layouts
+from services.slide_tables import _table_spec_has_text_evidence
 from services.slide_text_quality import _deck_title_needs_review, _sanitize_inline_markup
 from services.text_utils import plain_slide_text
 
@@ -416,6 +421,48 @@ class LectureQualityTests(unittest.TestCase):
         body = result["slides"][1]["bullets"]
         self.assertEqual(body, ["A variable refers to a stored value."])
 
+    def test_duplicate_table_is_kept_on_most_relevant_slide(self):
+        table = {
+            "title": "Top-down and Bottom-up comparison",
+            "headers": ["Approach", "Mechanism", "Benefit"],
+            "rows": [
+                ["Top-down", "Memoization", "Computes required states"],
+                ["Bottom-up", "Tabulation", "Avoids recursion overhead"],
+            ],
+        }
+        slides = [
+            {
+                "title": "Dynamic programming overview",
+                "bullets": ["Dynamic programming solves overlapping subproblems."],
+            },
+            {
+                "title": "Top-down and Bottom-up",
+                "bullets": ["Compare memoization with tabulation and recursion overhead."],
+                "table": table,
+            },
+        ]
+
+        resolved = _resolve_unique_visual_specs(slides, {0: table}, "table")
+
+        self.assertNotIn(0, resolved)
+        self.assertEqual(resolved[1], table)
+
+    def test_comparison_table_accepts_supported_sentence_cells(self):
+        spec = {
+            "headers": ["Tiêu chí", "Ghi nhớ", "Lập bảng"],
+            "rows": [
+                ["Cách tiếp cận", "Bắt đầu từ bài toán lớn.", "Bắt đầu từ bài toán con."],
+                ["Tính toán", "Chỉ tính trạng thái cần thiết.", "Tính tất cả trạng thái."],
+                ["Bộ nhớ", "Dùng ngăn xếp đệ quy.", "Dùng bảng và vòng lặp."],
+            ],
+        }
+        evidence = (
+            "So sánh Ghi nhớ và Lập bảng. Tiêu chí gồm Cách tiếp cận, "
+            "Tính toán và Bộ nhớ. Ghi nhớ bắt đầu từ bài toán lớn; "
+            "Lập bảng bắt đầu từ bài toán con."
+        )
+
+        self.assertTrue(_table_spec_has_text_evidence(spec, evidence))
 
 if __name__ == "__main__":
     unittest.main()

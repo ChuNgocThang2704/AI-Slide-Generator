@@ -177,6 +177,44 @@ def _infer_slide_layout(
     return "text_only", None
 
 
+def _resolve_unique_visual_specs(
+    slides: List[Dict[str, Any]],
+    external_specs: Optional[dict],
+    kind: str,
+) -> Dict[int, Dict[str, Any]]:
+    """Attach each exact visual spec only to its most relevant slide."""
+    candidates: Dict[str, List[Tuple[int, Dict[str, Any], float]]] = {}
+    external = external_specs or {}
+    for idx, slide in enumerate(slides):
+        if not isinstance(slide, dict):
+            continue
+        raw_specs: List[Dict[str, Any]] = []
+        if isinstance(external.get(idx), dict):
+            raw_specs.append(external[idx])
+        embedded = slide.get(kind)
+        if isinstance(embedded, dict):
+            raw_specs.append(embedded)
+
+        slide_text = " ".join(
+            [str(slide.get("title") or "")]
+            + [str(item) for item in (slide.get("bullets") or slide.get("content") or [])]
+        )
+        slide_tokens = set(re.findall(r"[a-z0-9]+", _fold_revision_text(slide_text)))
+        for spec in raw_specs:
+            canonical = json.dumps(spec, ensure_ascii=False, sort_keys=True, default=str)
+            spec_tokens = set(re.findall(r"[a-z0-9]+", _fold_revision_text(canonical)))
+            overlap = len(slide_tokens & spec_tokens)
+            score = overlap / max(1, min(len(slide_tokens), len(spec_tokens)))
+            candidates.setdefault(canonical, []).append((idx, spec, score))
+
+    resolved: Dict[int, Tuple[Dict[str, Any], float]] = {}
+    for group in candidates.values():
+        idx, spec, score = max(group, key=lambda item: (item[2], -item[0]))
+        current = resolved.get(idx)
+        if current is None or score > current[1]:
+            resolved[idx] = (spec, score)
+    return {idx: spec for idx, (spec, _) in resolved.items()}
+
 def _build_slide_spec_payload(
     *,
     task_id: str,
@@ -188,6 +226,8 @@ def _build_slide_spec_payload(
     **kwargs,
 ) -> dict:
     slides = structured_content.get("slides") or []
+    unique_tables = _resolve_unique_visual_specs(slides, table_specs, "table")
+    unique_charts = _resolve_unique_visual_specs(slides, chart_specs, "chart")
     color_theme, slide_preset = _resolve_visual_theme(structured_content, slide_theme)
     out_slides: List[Dict[str, Any]] = []
     for idx, slide in enumerate(slides):
@@ -208,17 +248,13 @@ def _build_slide_spec_payload(
                 if str(page).isdigit() and int(page) > 0
             ],
         }
-        if chart_specs and idx in chart_specs:
-            c_spec = dict(chart_specs[idx])
+        if idx in unique_charts:
+            c_spec = dict(unique_charts[idx])
             c_spec["type"] = c_spec.get("chart_type")
             c_spec["categories"] = c_spec.get("labels")
             row["chart"] = c_spec
-        elif isinstance(slide.get("chart"), dict):
-            row["chart"] = slide.get("chart")
-        if table_specs and idx in table_specs:
-            row["table"] = table_specs[idx]
-        elif isinstance(slide.get("table"), dict):
-            row["table"] = slide.get("table")
+        if idx in unique_tables:
+            row["table"] = unique_tables[idx]
         if image_paths and idx in image_paths:
             img_path = str(image_paths[idx])
             img_url = _image_url_from_path(img_path)

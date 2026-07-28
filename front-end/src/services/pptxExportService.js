@@ -333,7 +333,7 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
     ], { margin: 0 }));
   } else if (slide.type === 'thankyou') {
     shapes.push(textBox(nextId++, 'Thank you', 2.1, 2.05, 9.1, 1.25, [
-      paragraph(slide.title || 'Cảm ơn!', { size: 36, color: t.text, bold: true, align: 'ctr' }),
+      paragraph(slide.title || (/[ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]/i.test([slide.subtitle, ...(slide.bullets || [])].filter(Boolean).join(' ')) ? 'Cảm ơn!' : 'Thank you!'), { size: 36, color: t.text, bold: true, align: 'ctr' }),
     ], { margin: 0, valign: 'mid' }));
     shapes.push(textBox(nextId++, 'Subtitle', 2.8, 3.35, 7.7, 0.9, [
       paragraph(slide.subtitle || '', { size: 15, color: t.textSub, align: 'ctr' }),

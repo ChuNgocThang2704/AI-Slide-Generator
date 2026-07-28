@@ -18,13 +18,22 @@ const textElement = (role, content, x, y, width, height, style = {}) => ({
   style: { fontFamily: 'Inter, sans-serif', fontSize: 22, color: '#1a1a1a', textAlign: 'left', fontWeight: 400, ...style },
 });
 
+const isVietnameseSlide = (slide) => {
+  const language = String(slide?.language || slide?.lang || '').toLowerCase();
+  if (language.startsWith('vi')) return true;
+  if (language.startsWith('en')) return false;
+  const text = [slide?.title, slide?.subtitle, ...(slide?.bullets || [])].filter(Boolean).join(' ');
+  return /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i.test(text)
+    || /\b(bài giảng|tổng kết|mục tiêu|nội dung|cảm ơn)\b/i.test(text);
+};
 export function createElementsFromSlide(slide, theme = 'clean-white') {
   if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
+  const isVietnamese = isVietnameseSlide(slide);
 
   if (slide?.type === 'title') {
-    elements.push(textElement('custom', 'BÀI GIẢNG', 110, 116, 740, 34, {
+    elements.push(textElement('custom', isVietnamese ? 'BÀI GIẢNG' : 'LECTURE', 110, 116, 740, 34, {
       fontFamily: colors.body,
       fontSize: 14,
       color: colors.sub,
@@ -57,7 +66,7 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
   }
 
   if (slide?.type === 'thankyou') {
-    elements.push(textElement('custom', 'KẾT THÚC BÀI GIẢNG', 130, 112, 700, 34, {
+    elements.push(textElement('custom', isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE', 130, 112, 700, 34, {
       fontFamily: colors.body,
       fontSize: 14,
       color: colors.sub,
@@ -65,7 +74,7 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
       textAlign: 'center',
       letterSpacing: 2,
     }));
-    elements.push(textElement('title', slide?.title || 'Tổng kết và Hỏi đáp', 120, 164, 720, 112, {
+    elements.push(textElement('title', slide?.title || (isVietnamese ? 'Tổng kết và Hỏi đáp' : 'Summary and Q&A'), 120, 164, 720, 112, {
       fontFamily: colors.title,
       fontSize: 46,
       color: colors.text,
