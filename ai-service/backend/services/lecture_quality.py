@@ -116,6 +116,7 @@ def enrich_lecture_deck(
     raw_objectives = deck.get("learning_objectives")
     if isinstance(raw_objectives, list):
         objectives = [str(item).strip() for item in raw_objectives if str(item).strip()] + objectives
+    objectives = _dedupe(objectives)[:5]
 
     objective_index = next(
         (
@@ -125,14 +126,50 @@ def enrich_lecture_deck(
         ),
         None,
     )
+    if objective_index is None and len(objectives) >= 2:
+        language_source = " ".join(
+            [str(deck.get("title") or ""), str(user_instruction or "")]
+            + [str(item) for item in objectives]
+        )
+        vietnamese = bool(
+            re.search(
+                r"[ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]",
+                language_source,
+                re.IGNORECASE,
+            )
+        )
+        objective_slide = {
+            "title": "Mục tiêu học tập" if vietnamese else "Learning Objectives",
+            "bullets": objectives,
+            "notes": "",
+            "layout": "text_only",
+            "pedagogical_role": "learning_objectives",
+            "source_pages": [],
+        }
+        intro_index = next(
+            (
+                idx
+                for idx, slide in enumerate(slides)
+                if isinstance(slide, dict)
+                and str(slide.get("layout") or "").strip().lower() in {"intro", "title"}
+            ),
+            None,
+        )
+        slides.insert(1 if intro_index == 0 else 0, objective_slide)
+        objective_index = 1 if intro_index == 0 else 0
     if objective_index is not None and objective_index > 1:
         objective_slide = slides.pop(objective_index)
-        first_title = _fold((slides[0] if slides and isinstance(slides[0], dict) else {}).get("title") or "")
+        first_slide = slides[0] if slides and isinstance(slides[0], dict) else {}
+        first_layout = str(first_slide.get("layout") or "").strip().lower()
+        first_title = _fold(first_slide.get("title") or "")
         intro_terms = ("introduction", "overview", "gioi thieu", "tong quan", "title")
-        slides.insert(1 if any(term in first_title for term in intro_terms) else 0, objective_slide)
+        has_intro = first_layout in {"intro", "title"} or any(
+            term in first_title for term in intro_terms
+        )
+        slides.insert(1 if has_intro else 0, objective_slide)
 
     deck["presentation_mode"] = "lecture"
-    deck["learning_objectives"] = _dedupe(objectives)[:5]
+    deck["learning_objectives"] = objectives
     _clean_fragmented_bullets(slides)
     return deck
 

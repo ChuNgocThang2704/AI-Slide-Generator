@@ -85,6 +85,34 @@ class LectureQualityTests(unittest.TestCase):
         self.assertEqual(result["slides"][2]["pedagogical_role"], "practice")
         self.assertTrue(result["learning_objectives"])
 
+    def test_enrichment_inserts_missing_learning_objectives_slide(self):
+        deck = {
+            "title": "Python Variables",
+            "presentation_mode": "lecture",
+            "learning_objectives": [
+                "Explain variables and assignment.",
+                "Apply expressions in short programs.",
+            ],
+            "slides": [
+                {
+                    "title": "Python Variables",
+                    "layout": "intro",
+                    "bullets": ["A beginner lecture."],
+                },
+                {
+                    "title": "Variables and Assignment",
+                    "layout": "normal",
+                    "bullets": ["A variable refers to a value."],
+                },
+            ],
+        }
+
+        result = enrich_lecture_deck(deck, "", "Create a lecture in English.")
+
+        self.assertEqual(result["slides"][0]["layout"], "intro")
+        self.assertEqual(result["slides"][1]["pedagogical_role"], "learning_objectives")
+        self.assertEqual(result["slides"][1]["title"], "Learning Objectives")
+
     def test_enrichment_merges_or_removes_dangling_bullet_labels(self):
         deck = {
             "presentation_mode": "lecture",
@@ -420,6 +448,72 @@ class LectureQualityTests(unittest.TestCase):
         result = extractor._ensure_deck_boundaries(deck, 3)
         body = result["slides"][1]["bullets"]
         self.assertEqual(body, ["A variable refers to a stored value."])
+
+    def test_boundary_moves_existing_intro_before_learning_objectives(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        deck = {
+            "title": "Biến, Biểu thức và Câu lệnh trong Python",
+            "slides": [
+                {
+                    "title": "Mục tiêu học tập",
+                    "layout": "normal",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Giải thích được biến và biểu thức."],
+                },
+                {
+                    "title": "Biến, Biểu thức và Câu lệnh trong Python",
+                    "layout": "intro",
+                    "bullets": ["Bài giảng cho người mới bắt đầu."],
+                },
+                {
+                    "title": "Tổng kết",
+                    "layout": "normal",
+                    "bullets": ["Ôn tập các khái niệm chính."],
+                },
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 3)
+
+        self.assertEqual(result["slides"][0]["layout"], "intro")
+        self.assertEqual(result["slides"][1]["pedagogical_role"], "learning_objectives")
+        self.assertEqual(result["slides"][-1]["layout"], "thankyou")
+
+    def test_boundary_replaces_generic_deck_title_with_subject_title(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        deck = {
+            "title": "Bài thuyết trình",
+            "slides": [
+                {
+                    "title": "Mục tiêu học tập về Python",
+                    "layout": "normal",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Nhận biết các khái niệm."],
+                },
+                {
+                    "title": "Bài thuyết trình",
+                    "layout": "intro",
+                    "bullets": ["Bài giảng tổng quan."],
+                },
+                {
+                    "title": "Giới thiệu về Biến, Biểu thức và Câu lệnh trong Python",
+                    "layout": "normal",
+                    "bullets": ["Biến tham chiếu tới một giá trị."],
+                },
+                {
+                    "title": "Tổng kết",
+                    "layout": "normal",
+                    "bullets": ["Ôn tập."],
+                },
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 4)
+
+        self.assertEqual(result["title"], "Biến, Biểu thức và Câu lệnh trong Python")
+        self.assertEqual(result["slides"][0]["title"], result["title"])
 
     def test_duplicate_table_is_kept_on_most_relevant_slide(self):
         table = {

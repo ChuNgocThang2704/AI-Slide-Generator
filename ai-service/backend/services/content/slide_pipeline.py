@@ -1247,9 +1247,52 @@ class SlidePipelineMixin:
 
         lang = str(getattr(self, "_slide_lang_hint", "") or "").lower()
         vietnamese = lang == "vi"
-        deck_title = str(structured.get("title") or "").strip() or (
-            "Bài trình chiếu" if vietnamese else "Presentation"
-        )
+        deck_title = str(structured.get("title") or "").strip()
+        generic_titles = {
+            "bai thuyet trinh",
+            "bai trinh chieu",
+            "presentation",
+            "slide presentation",
+            "lecture presentation",
+        }
+        if self._fold_language_text(deck_title) in generic_titles:
+            structural_markers = (
+                "muc tieu",
+                "learning objective",
+                "tong ket",
+                "ket luan",
+                "summary",
+                "conclusion",
+                "bai tap",
+                "thuc hanh",
+                "practice",
+                "exercise",
+                "activity",
+                "quiz",
+            )
+            intro_prefix = re.compile(
+                r"^\s*(?:giới\s+thiệu|gioi\s+thieu|tổng\s+quan|tong\s+quan|"
+                r"introduction|overview)\s*(?:về|ve|to|of)?\s*[:\-–—]?\s*",
+                re.IGNORECASE,
+            )
+            for candidate_slide in slides:
+                if not isinstance(candidate_slide, dict):
+                    continue
+                candidate = str(candidate_slide.get("title") or "").strip()
+                folded_candidate = self._fold_language_text(candidate)
+                if (
+                    not candidate
+                    or folded_candidate in generic_titles
+                    or any(marker in folded_candidate for marker in structural_markers)
+                ):
+                    continue
+                candidate = intro_prefix.sub("", candidate).strip(" :-–—")
+                if len(candidate.split()) >= 3:
+                    deck_title = candidate
+                    break
+        if not deck_title or self._fold_language_text(deck_title) in generic_titles:
+            deck_title = "Bài trình chiếu" if vietnamese else "Presentation"
+        structured["title"] = deck_title
         cover = {
             "title": deck_title,
             "bullets": [
@@ -1263,11 +1306,22 @@ class SlidePipelineMixin:
             "source_pages": [],
         }
 
-        first_layout = str((slides[0] or {}).get("layout") or "").strip().lower() if isinstance(slides[0], dict) else ""
-        if first_layout not in {"intro", "title"}:
+        intro_index = next(
+            (
+                idx
+                for idx, slide in enumerate(slides)
+                if isinstance(slide, dict)
+                and str(slide.get("layout") or "").strip().lower() in {"intro", "title"}
+            ),
+            None,
+        )
+        if intro_index is None:
             slides.insert(0, cover)
-        elif isinstance(slides[0], dict):
-            slides[0]["title"] = deck_title
+        else:
+            intro_slide = slides.pop(intro_index)
+            intro_slide["title"] = deck_title
+            intro_slide["layout"] = "intro"
+            slides.insert(0, intro_slide)
 
         # Section generation can occasionally exceed its allocation. Keep both
         # deck boundaries and remove overflow from the end of the content run.

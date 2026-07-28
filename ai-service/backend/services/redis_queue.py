@@ -501,15 +501,23 @@ class RedisQueue:
                 boundary_target,
             )
 
+            visual_context = "\n\n".join(
+                part
+                for part in (
+                    f"USER REQUEST:\n{instruction_text}" if instruction_text else "",
+                    f"SOURCE CONTENT:\n{raw_content}" if raw_content else "",
+                )
+                if part
+            )
             visual_plan = await build_visual_plan(
                 content_extractor,
                 structured_content,
-                raw_content or "",
+                visual_context,
                 want_images=_task_wants_images(task_data),
             )
             visual_plan.update(
                 _explicit_visual_targets_from_prompt(
-                    raw_content or "",
+                    instruction_text,
                     len(structured_content.get("slides") or []),
                 )
             )
@@ -517,14 +525,14 @@ class RedisQueue:
             table_specs = await build_table_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
-                raw_content=raw_content or "",
+                raw_content=visual_context,
                 visual_plan=visual_plan,
             )
             chart_specs = await build_chart_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
                 table_indices=set(table_specs.keys()),
-                raw_content=raw_content or "",
+                raw_content=visual_context,
                 visual_plan=visual_plan,
             )
             _apply_explicit_chart_type_targets(
@@ -847,10 +855,18 @@ class RedisQueue:
                 boundary_target,
             )
 
+            visual_context = "\n\n".join(
+                part
+                for part in (
+                    f"USER REQUEST:\n{instruction_text}" if instruction_text else "",
+                    f"SOURCE CONTENT:\n{raw_content}" if raw_content else "",
+                )
+                if part
+            )
             visual_plan = await build_visual_plan(
                 content_extractor,
                 structured_content,
-                raw_content or "",
+                visual_context,
                 want_images=_task_wants_images(task_data),
             )
             visual_plan.update(
@@ -912,20 +928,20 @@ class RedisQueue:
             table_specs = await build_table_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
-                raw_content=raw_content or "",
+                raw_content=visual_context,
                 visual_plan=visual_plan,
             )
             chart_specs = await build_chart_specs_for_slides(
                 content_extractor, structured_content,
                 task_id=task_id, should_stop=should_stop,
                 table_indices=set(table_specs.keys()),
-                raw_content=raw_content or "",
+                raw_content=visual_context,
                 visual_plan=visual_plan,
             )
             _apply_explicit_chart_type_targets(
                 chart_specs,
                 _explicit_chart_type_targets_from_prompt(
-                    raw_content or "",
+                    instruction_text,
                     len(structured_content.get("slides") or []),
                 ),
             )
