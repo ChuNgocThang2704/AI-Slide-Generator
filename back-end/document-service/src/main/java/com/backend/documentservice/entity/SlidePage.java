@@ -71,4 +71,10 @@ public class SlidePage extends AbstractAuditingEntity {
 
     @Column(name = "likely_multi_pptx_slides")
     private Boolean likelyMultiPptxSlides;
+
+    @Column(name = "pedagogical_role")
+    private String pedagogicalRole;
+
+    @Column(name = "source_pages", columnDefinition = "TEXT")
+    private String sourcePages;
 }

@@ -65,6 +65,18 @@ function currentElements(page, bullets) {
 
   const titleElement = elements.find((element) => element?.type === 'text' && element?.role === 'title');
   const bodyElement = elements.find((element) => element?.type === 'text' && element?.role === 'body');
+  const backendLayout = String(page?.layout || '').toLowerCase();
+  const isBoundarySlide = ['title', 'intro', 'thankyou', 'thank_you'].includes(backendLayout);
+  const genericCanvasLayout = titleElement
+    && titleElement.x === 64
+    && [44, 48].includes(Number(titleElement.y))
+    && (!bodyElement || (
+      bodyElement.x === 64
+      && [112, 140].includes(Number(bodyElement.y))
+    ));
+  // Migrate only the old generic boundary layout. Custom user positioning
+  // does not match these coordinates and remains untouched.
+  if (isBoundarySlide && genericCanvasLayout) return [];
   const legacyDefaultLayout = titleElement
     && Number(titleElement?.style?.fontSize) === 36
     && titleElement.x === 64
@@ -150,6 +162,8 @@ export function formatSlidePage(page) {
     notes: page.notes || '',
     primaryVisual: page.primaryVisual || '',
     likelyMultiPptxSlides: page.likelyMultiPptxSlides || false,
+    pedagogicalRole: page.pedagogicalRole || '',
+    sourcePages: Array.isArray(page.sourcePages) ? page.sourcePages : [],
   };
 }
 
@@ -174,5 +188,7 @@ export function toSlidePageUpdate(slide) {
     elements: Array.isArray(slide.elements) ? slide.elements : [],
     primaryVisual: slide.table ? 'table' : slide.chart ? 'chart' : slide.primaryVisual || '',
     likelyMultiPptxSlides: slide.likelyMultiPptxSlides || false,
+    pedagogicalRole: slide.pedagogicalRole || '',
+    sourcePages: Array.isArray(slide.sourcePages) ? slide.sourcePages : [],
   };
 }

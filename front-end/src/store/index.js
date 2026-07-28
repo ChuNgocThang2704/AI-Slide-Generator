@@ -11,8 +11,22 @@ export const useAuthStore = create(
       pendingEmail: null,
 
       login: (user, token, refreshToken = null) =>
-        set({ user, token, refreshToken, isAuthenticated: true, pendingEmail: null }),
-      logout: () => set({ user: null, token: null, refreshToken: null, isAuthenticated: false, pendingEmail: null }),
+        set((state) => {
+          if (state.user?.id && state.user.id !== user?.id) {
+            resetUserScopedStores();
+          }
+          return { user, token, refreshToken, isAuthenticated: true, pendingEmail: null };
+        }),
+      updateTokens: (token, refreshToken) =>
+        set((state) => ({
+          token,
+          refreshToken: refreshToken || state.refreshToken,
+          isAuthenticated: Boolean(token && state.user),
+        })),
+      logout: () => {
+        resetUserScopedStores();
+        set({ user: null, token: null, refreshToken: null, isAuthenticated: false, pendingEmail: null });
+      },
       setPendingEmail: (email) => set({ pendingEmail: email }),
       clearPendingEmail: () => set({ pendingEmail: null }),
       updateUser: (updates) =>
@@ -32,6 +46,7 @@ export const usePresentationStore = create(
 
       setPresentations: (presentations) => set({ presentations }),
       setCurrentPresentation: (pres) => set({ currentPresentation: pres }),
+      reset: () => set({ presentations: [], currentPresentation: null }),
 
       addPresentation: (pres) =>
         set((state) => ({
@@ -103,6 +118,11 @@ export const useProjectStore = create(
       setProjects: (projects) => set({ projects }),
       setProjectsPage: (page) => set({ projectsPage: page }),
       setCurrentProject: (project) => set({ currentProject: project }),
+      reset: () => set({
+        projects: [],
+        currentProject: null,
+        projectsPage: { content: [], totalElements: 0, totalPages: 0 },
+      }),
 
       addProject: (project) =>
         set((state) => ({
@@ -158,6 +178,11 @@ export const useDocumentStore = create(
       setDocuments: (documents) => set({ documents }),
       setDocumentsPage: (page) => set({ documentsPage: page }),
       setCurrentDocument: (document) => set({ currentDocument: document }),
+      reset: () => set({
+        documents: [],
+        currentDocument: null,
+        documentsPage: { content: [], totalElements: 0, totalPages: 0 },
+      }),
 
       addDocument: (document) =>
         set((state) => ({
@@ -191,3 +216,9 @@ export const useDocumentStore = create(
     }
   )
 );
+
+function resetUserScopedStores() {
+  usePresentationStore.getState().reset();
+  useProjectStore.getState().reset();
+  useDocumentStore.getState().reset();
+}

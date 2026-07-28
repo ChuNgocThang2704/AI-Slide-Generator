@@ -63,6 +63,49 @@ def _valid_deck(candidate: Any, expected_slides: int) -> bool:
     return True
 
 
+def _preserve_lecture_density(
+    reviewed: Dict[str, Any],
+    original: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Prevent a review pass from reducing teaching slides to sparse stubs."""
+    if str(original.get("presentation_mode") or "").strip().lower() != "lecture":
+        return reviewed
+    reviewed_slides = reviewed.get("slides") or []
+    original_slides = original.get("slides") or []
+    if len(reviewed_slides) != len(original_slides):
+        return reviewed
+    compact_roles = {"knowledge_check", "practice", "summary"}
+    for new_slide, old_slide in zip(reviewed_slides, original_slides):
+        if not isinstance(new_slide, dict) or not isinstance(old_slide, dict):
+            continue
+        role = str(old_slide.get("pedagogical_role") or "").strip().lower()
+        minimum = 3 if role in compact_roles else 4
+        new_bullets = [str(x).strip() for x in (new_slide.get("bullets") or []) if str(x).strip()]
+        old_bullets = [str(x).strip() for x in (old_slide.get("bullets") or []) if str(x).strip()]
+        if len(new_bullets) < minimum and len(old_bullets) >= minimum:
+            new_slide["bullets"] = old_bullets
+        if old_slide.get("pedagogical_role") and not new_slide.get("pedagogical_role"):
+            new_slide["pedagogical_role"] = old_slide["pedagogical_role"]
+        if old_slide.get("source_pages") and not new_slide.get("source_pages"):
+            new_slide["source_pages"] = old_slide["source_pages"]
+    reviewed["presentation_mode"] = "lecture"
+    return reviewed
+
+
+def _preserve_slide_layouts(reviewed: Dict[str, Any], original: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep renderer contracts when a text review omits layout metadata."""
+    reviewed_slides = reviewed.get("slides") or []
+    original_slides = original.get("slides") or []
+    if len(reviewed_slides) != len(original_slides):
+        return reviewed
+    for new_slide, old_slide in zip(reviewed_slides, original_slides):
+        if not isinstance(new_slide, dict) or not isinstance(old_slide, dict):
+            continue
+        if old_slide.get("layout") and not new_slide.get("layout"):
+            new_slide["layout"] = old_slide["layout"]
+    return reviewed
+
+
 async def improve_deck_source_grounding(
     content_extractor,
     structured: Dict[str, Any],
@@ -95,6 +138,14 @@ async def improve_deck_source_grounding(
             if isinstance(s, dict)
         ],
     }
+    from services.lecture_quality import select_relevant_source_excerpt
+
+    user_instruction = str(getattr(content_extractor, "_user_instruction", "") or "").strip()
+    source_excerpt = select_relevant_source_excerpt(
+        source,
+        user_instruction,
+        max_chars=9000,
+    )
     messages = [
         {
             "role": "system",
@@ -107,20 +158,26 @@ async def improve_deck_source_grounding(
                 "- Ensure every mandatory requested topic has a suitable slide. If one is missing, replace a redundant or lower-priority slide; never silently omit it.\n"
                 "- Remove or rewrite every claim, number, percentage, name, or result that is not grounded in the source.\n"
                 "- Add missing important source details to the most suitable slide while preserving the requested narrative order.\n"
+                "- For lecture decks, retain 4-6 substantive bullets on concept, explanation, and worked-example slides; "
+                "knowledge-check, practice, and summary slides may use 3-5. Never shorten a teaching slide into a stub.\n"
                 "- Improve vague bullets by replacing them with concrete terms, numbers, names, or results from the source.\n"
                 "- Keep related numeric series together on one suitable slide. For example Q1/Q2/Q3/Q4 values must not be split across unrelated slides.\n"
                 "- Keep requested comparison/table content together on the same slide; do not mix one comparison row with chart series data.\n"
                 "- A requested comparison table must remain recognizable in title/bullets as a comparison and include every requested column or row label.\n"
                 "- Preserve all technical terms, proper nouns, numbers, and user intent.\n"
-                "- Do not add chart/table/image fields. Return only title, slides, title/bullets/notes fields.\n"
+                "- The explicit user instruction is the authoritative scope. Do not replace a requested chapter, "
+                "section, audience, or teaching goal with a different part of the source.\n"
+                "- Do not add chart/table/image fields. Preserve each existing layout value, especially intro and thankyou.\n"
                 "Return ONLY valid JSON."
             ),
         },
         {
             "role": "user",
             "content": (
+                "EXPLICIT USER INSTRUCTION:\n"
+                f"{user_instruction or '(none)'}\n\n"
                 "SOURCE EXCERPT:\n"
-                f"{source[:9000]}\n\n"
+                f"{source_excerpt}\n\n"
                 "CURRENT DECK JSON:\n"
                 f"{json.dumps(deck_excerpt, ensure_ascii=False)}"
             ),
@@ -137,6 +194,8 @@ async def improve_deck_source_grounding(
         if not _valid_deck(reviewed, expected):
             print(f"[slide_quality] source grounding skipped: invalid deck for task {task_id}")
             return structured
+        reviewed = _preserve_slide_layouts(reviewed, structured)
+        reviewed = _preserve_lecture_density(reviewed, structured)
         normalized = content_extractor._normalize_structured_content(reviewed)
         from services.slide_text_quality import (
             improve_slide_titles_quality,
@@ -234,6 +293,8 @@ async def build_visual_plan(
                 "- table: for comparisons, before/after, pros/cons, options, criteria, status, or repeated key-value structure.\n"
                 "- image: for conceptual/story/domain slides when images are requested and chart/table is not better.\n"
                 "- none: for title, conclusion, thin, or abstract slides where a visual would add little value.\n"
+                "- When want_images=true, route at least 30% of the deck to image unless chart/table already "
+                "provides the visual. Avoid an overly text-only deck.\n"
                 "- Do not choose chart/table from prose if the data structure is weak.\n"
                 "Return strict JSON only: {\"slides\":[{\"slide_index\":number,\"visual\":\"none|image|chart|table\"}]}."
             ),
@@ -267,6 +328,61 @@ async def build_visual_plan(
                 if visual == "image" and not want_images:
                     visual = "none"
                 plan[idx] = visual
+        if want_images:
+            fallback_candidates = [
+                idx for idx, visual in fallback.items()
+                if visual == "image" and plan.get(idx) not in {"chart", "table"}
+            ]
+            minimum_images = min(
+                len(fallback_candidates),
+                max(1, (len(slides) * 3 + 9) // 10),
+            )
+            planned_images = sum(1 for visual in plan.values() if visual == "image")
+            if planned_images < minimum_images:
+                selected = {idx for idx, visual in plan.items() if visual == "image"}
+                remaining = {idx for idx in fallback_candidates if idx not in selected}
+                while planned_images < minimum_images and remaining:
+                    # Pick the candidate furthest from an existing image so the
+                    # deck does not receive all fallback visuals at the start.
+                    anchors = selected or {-1, len(slides)}
+                    idx = max(
+                        remaining,
+                        key=lambda candidate: (
+                            min(abs(candidate - anchor) for anchor in anchors),
+                            len((slides[candidate].get("bullets") or slides[candidate].get("content") or [])),
+                        ),
+                    )
+                    plan[idx] = "image"
+                    selected.add(idx)
+                    remaining.remove(idx)
+                    planned_images += 1
+                print(
+                    "[slide_quality] visual plan augmented: "
+                    f"{planned_images} image slide(s), minimum={minimum_images}"
+                )
+
+            # Even a sufficient total can be poor when all visuals are clustered.
+            # Break long text-only runs while suitable image candidates remain.
+            run_start = 0
+            while run_start < len(slides):
+                if plan.get(run_start) != "none":
+                    run_start += 1
+                    continue
+                run_end = run_start
+                while run_end + 1 < len(slides) and plan.get(run_end + 1) == "none":
+                    run_end += 1
+                if run_end - run_start + 1 > 4:
+                    eligible = [
+                        idx for idx in fallback_candidates
+                        if run_start <= idx <= run_end and plan.get(idx) == "none"
+                    ]
+                    if eligible:
+                        midpoint = (run_start + run_end) / 2
+                        chosen = min(eligible, key=lambda idx: abs(idx - midpoint))
+                        plan[chosen] = "image"
+                        planned_images += 1
+                        continue
+                run_start = run_end + 1
         print(f"[slide_quality] visual plan: {plan}")
         return plan
     except Exception as e:

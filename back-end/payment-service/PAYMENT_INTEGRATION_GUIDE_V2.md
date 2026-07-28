@@ -1,6 +1,6 @@
 # 💳 TÀI LIỆU KỸ THUẬT & TÍCH HỢP TỔNG HỢP V2 (PAYOS & STRIPE)
 
-Tài liệu này tổng hợp **toàn bộ nâng cấp kiến trúc mới nhất** cho hệ thống thanh toán của ứng dụng **AI Slide Generator**, bao gồm:
+Tài liệu này tổng hợp **toàn bộ nâng cấp kiến trúc mới nhất** cho hệ thống thanh toán của ứng dụng **LecGen**, bao gồm:
 * Áp dụng **Strategy Pattern** hỗ trợ đa cổng thanh toán song song (**PayOS** & **Stripe**).
 * Chuẩn hóa cơ chế lưu giá đa tiền tệ (**VNĐ** & **USD**) dưới Database và loại bỏ các thuộc tính dư thừa.
 * Phân tách Webhook Endpoints riêng biệt cho từng nhà cung cấp.

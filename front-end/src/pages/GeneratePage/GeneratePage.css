@@ -6,7 +6,7 @@
   background: radial-gradient(ellipse, rgba(108,99,255,0.12) 0%, transparent 65%);
   pointer-events: none; z-index: 0;
 }
-.gen2-page > :not(.gen2-bg) { position: relative; z-index: 1; }
+.gen2-page > :not(.gen2-bg):not(.gen2-progress-overlay) { position: relative; z-index: 1; }
 
 /* ── Input phase ── */
 .gen2-container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
@@ -25,6 +25,25 @@
 .gen2-field { display:flex; flex-direction:column; gap:10px; }
 .gen2-label { font-size:0.875rem; font-weight:600; color:rgba(255,255,255,0.75); }
 .gen2-textarea { resize:vertical; min-height:110px; }
+
+.gen2-prompt-quality {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.025);
+  border-radius: 8px;
+  color: rgba(255,255,255,0.55);
+}
+.gen2-prompt-quality > svg { flex: 0 0 auto; margin-top: 1px; }
+.gen2-prompt-quality > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gen2-prompt-quality strong { font-size: 0.78rem; color: rgba(255,255,255,0.78); }
+.gen2-prompt-quality span { font-size: 0.74rem; line-height: 1.45; }
+.gen2-prompt-quality.unclear,
+.gen2-prompt-quality.empty { border-color: rgba(251,191,36,0.25); color: #fbbf24; }
+.gen2-prompt-quality.sufficient { border-color: rgba(56,189,248,0.25); color: #7dd3fc; }
+.gen2-prompt-quality.detailed { border-color: rgba(52,211,153,0.28); color: #6ee7b7; }
 
 .gen2-suggestions { display:flex; flex-wrap:wrap; gap:8px; }
 
@@ -473,6 +492,13 @@
   font-weight: 500;
   min-height: 24px;
   animation: pulse-light 2s ease-in-out infinite;
+}
+
+.gen2-progress-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .gen2-progress-cancel {

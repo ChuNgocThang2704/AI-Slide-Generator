@@ -152,15 +152,8 @@ def _sanitize_inline_markup(text: str) -> str:
     t = "".join(cleaned_chars)
     t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
     t = re.sub(r"^\s*\*+", "", t)
-    t = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", t)
-    t = re.sub(r"__([^_\n]+)__", r"\1", t)
-    t = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", t)
-    t = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", t)
-    t = re.sub(r"\*{2,}", "", t)
-    t = re.sub(r"_{2,}", "", t)
-    t = re.sub(r"\*+\s*:", ":", t)
-    t = re.sub(r":\s*\*+\s*", ": ", t)
-    t = re.sub(r"\s+\*+\s+", " ", t)
+    # Preserve programming operators and identifiers (`*`, `**`, `_`,
+    # `__init__`). Removing Markdown markers here corrupted technical slides.
     t = re.sub(r"\s{2,}", " ", t)
     return t.strip()
 

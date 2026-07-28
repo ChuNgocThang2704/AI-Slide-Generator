@@ -3,6 +3,7 @@ package com.backend.documentservice.client;
 import com.backend.documentservice.configuration.FeignClientConfig;
 import com.backend.documentservice.dto.request.InternalQuotaRequest;
 import com.backend.documentservice.dto.response.ApiResponse;
+import com.backend.documentservice.dto.response.InternalUserStatusResponse;
 import com.backend.documentservice.dto.response.QuotaCheckResponse;
 import com.backend.documentservice.dto.response.QuotaConsumeResponse;
 import org.springframework.cloud.openfeign.FeignClient;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PathVariable;
 
 import java.util.UUID;
 
@@ -31,4 +33,7 @@ public interface SubscriptionClient {
 
     @PostMapping("/internal/quota/revert")
     ApiResponse<QuotaConsumeResponse> revertQuota(@RequestBody InternalQuotaRequest request);
+
+    @GetMapping("/internal/users/{userId}/status")
+    ApiResponse<InternalUserStatusResponse> getUserStatus(@PathVariable("userId") UUID userId);
 }

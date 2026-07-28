@@ -55,7 +55,7 @@ spring:
 
 app:
   mail:
-    from-name: ${MAIL_FROM_NAME} # Tên hiển thị người gửi (Ví dụ: PSlideAI)
+    from-name: ${MAIL_FROM_NAME} # Tên hiển thị người gửi (Ví dụ: LecGen)
   rabbitmq:
     queue: ${RABBIT_QUEUE}
 ```

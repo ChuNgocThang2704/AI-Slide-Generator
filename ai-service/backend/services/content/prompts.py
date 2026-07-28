@@ -178,11 +178,18 @@ SLIDE_DECK_JSON_SCHEMA: Dict[str, Any] = {
                     "title": {"type": "string"},
                     "bullets": {"type": "array", "items": {"type": "string"}},
                     "notes": {"type": "string"},
+                    "pedagogical_role": {
+                        "type": "string",
+                        "enum": ["learning_objectives", "concept", "worked_example", "demonstration", "practice", "knowledge_check", "summary"],
+                    },
+                    "source_pages": {"type": "array", "items": {"type": "integer"}},
                     "layout": {"type": "string", "enum": ["text_only", "text_image", "text_table", "text_chart", "split_columns", "timeline", "big_quote", "hero_stat", "intro", "normal"]},
                 },
                 "required": ["title", "bullets", "notes"],
             },
         },
+        "presentation_mode": {"type": "string", "enum": ["presentation", "lecture"]},
+        "learning_objectives": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["title", "slides"],
 }

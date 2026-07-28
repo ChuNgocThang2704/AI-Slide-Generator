@@ -1,4 +1,4 @@
-# 🎨 AI Slide Generator - Frontend
+# LecGen Frontend
 
 Giao diện ứng dụng tạo và chỉnh sửa slide thuyết trình tự động bằng AI (AI Presentation Generator), được xây dựng trên nền tảng **React + Vite** hiện đại, mượt mà và tối ưu trải nghiệm người dùng.
 

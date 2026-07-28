@@ -9,9 +9,9 @@ import {
 import './DashboardPage.css';
 
 const PLAN_INFO = {
-  free:  { label: 'Free',  color: '#6c63ff', desc: '5 slides/tháng',  price: 'Miễn phí' },
-  pro:   { label: 'Pro',   color: '#f72585', desc: '20 slides/ngày',  price: '$20/tháng' },
-  ultra: { label: 'Ultra', color: '#fbbf24', desc: 'Không giới hạn',  price: '$49/tháng' },
+  free:  { label: 'Free',  color: '#6c63ff', desc: '3 bài trình chiếu/ngày', price: 'Miễn phí' },
+  pro:   { label: 'Pro',   color: '#f72585', desc: '20 bài trình chiếu/ngày', price: '199.000đ/tháng' },
+  ultra: { label: 'Ultra', color: '#fbbf24', desc: 'Không giới hạn lượt tạo', price: '499.000đ/tháng' },
 };
 
 const getStatusBadge = (status) => {
@@ -117,11 +117,16 @@ export default function DashboardPage() {
     ? { title: 'Đã mở khóa Ultra', description: 'Toàn bộ tính năng cao cấp', clickable: false }
     : user?.plan === 'pro'
       ? { title: 'Nâng cấp Ultra', description: 'Giới hạn cao nhất + ảnh chất lượng cao', clickable: true }
-      : { title: 'Nâng cấp Pro', description: '20 slides/ngày + HD images', clickable: true };
+      : { title: 'Nâng cấp Pro', description: '20 bài trình chiếu/ngày + ảnh HD', clickable: true };
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    if (!window.confirm('Bạn có chắc muốn xóa presentation này?')) return;
+    const project = projects.find((item) => item.id === id);
+    const isGenerating = [0, 'CREATE', 'PROCESSING'].includes(project?.status);
+    const confirmation = isGenerating
+      ? 'Bài trình chiếu đang được tạo. Bạn có muốn hủy tác vụ và xóa bài này?'
+      : 'Bạn có chắc muốn xóa bài trình chiếu này?';
+    if (!window.confirm(confirmation)) return;
     try {
       setDeleting(id);
       await projectService.deleteMultiple([id]);

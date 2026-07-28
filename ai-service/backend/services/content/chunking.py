@@ -45,6 +45,7 @@ class ChunkingMixin:
         system_msg = self._llm_system_prefix() + (
             "You extract key points from long documents for later slide generation.\n\n"
             + self._output_language_instruction()
+            + self._user_instruction_block()
             + "TASK:\n"
             "- Extract only important ideas; drop redundant examples and filler.\n"
             "- Paraphrase in your own words; keep proper names, numbers, dates, and technical terms.\n"
@@ -58,6 +59,8 @@ class ChunkingMixin:
         )
         user_msg = (
             "Summarize this document chunk for the final slide step.\n\n"
+            "Prioritize content that directly supports the user's requested scope. "
+            "Do not replace it with earlier or more general sections.\n\n"
             f"TEXT:\n{content_preview}\n\n"
             "Return JSON starting with { and ending with }."
             + self._user_lang_reminder()

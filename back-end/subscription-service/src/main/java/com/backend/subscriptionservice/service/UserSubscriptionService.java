@@ -400,9 +400,9 @@ public class UserSubscriptionService {
 
     private String getDisplayName(String featureKey) {
         if (Constants.FEATURE_KEY.MAX_SLIDES_PER_DAY.equals(featureKey)) {
-            return "Số Slide được tạo trong ngày";
+            return "Số bài trình chiếu được tạo trong ngày";
         } else if (Constants.FEATURE_KEY.MAX_IMAGES_PER_SLIDE.equals(featureKey)) {
-            return "Số ảnh tối đa mỗi slide";
+            return "Số ảnh tối đa mỗi bài trình chiếu";
         }
         if (Constants.FEATURE_KEY.MAX_REVISIONS_PER_DAY.equals(featureKey)) {
             return "Số lần sửa slide trong ngày";

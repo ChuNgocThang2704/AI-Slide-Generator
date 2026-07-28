@@ -18,6 +18,7 @@ _ALLOWED_ISSUES = {
     "missing_transition",
     "contradiction",
     "visual_mismatch",
+    "missing_requirement",
 }
 _ISSUE_ALIASES = {
     "duplicate": "duplicate_content",
@@ -30,6 +31,8 @@ _ISSUE_ALIASES = {
     "transition": "missing_transition",
     "inconsistency": "contradiction",
     "visual_inconsistency": "visual_mismatch",
+    "missing_user_requirement": "missing_requirement",
+    "missing_requested_content": "missing_requirement",
 }
 
 
@@ -55,6 +58,7 @@ def _slide_summary(slide: Dict[str, Any], index: int) -> Dict[str, Any]:
         "has_table": isinstance(slide.get("table"), dict),
         "has_chart": isinstance(slide.get("chart"), dict),
         "has_image": bool(slide.get("image") or slide.get("image_url")),
+        "pedagogical_role": str(slide.get("pedagogical_role") or ""),
     }
 
 
@@ -91,6 +95,8 @@ async def _judge(
     slides = structured.get("slides") or []
     payload = {
         "deck_title": str(structured.get("title") or ""),
+        "presentation_mode": str(structured.get("presentation_mode") or "presentation"),
+        "user_instruction": str(getattr(content_extractor, "_user_instruction", "") or ""),
         "slides": [_slide_summary(slide, idx) for idx, slide in enumerate(slides) if isinstance(slide, dict)],
     }
     messages = [
@@ -99,10 +105,18 @@ async def _judge(
             "content": (
                 "You are a presentation deck coherence judge. Evaluate the deck as one narrative. "
                 "Report only material issues: duplicated ideas, off-topic slides, contradictions, weak progression, "
-                "missing transitions, or a table/chart/image layout that does not support the slide claim. "
+                "missing transitions, omitted explicit user requirements, or a table/chart/image layout that does "
+                "not support the slide claim. Treat the explicit user instruction as mandatory. In lecture mode, "
+                "verify requested objectives, examples, practice/knowledge checks, and summary are actually present. "
+                "Learning-objective and summary slides are protected roles: never target either one to repair a "
+                "different missing lecture component. If practice or a knowledge check is missing, target a "
+                "redundant or lower-priority middle concept/example slide and explicitly instruct replacing it "
+                "with a source-grounded activity. Do not propose adding a new slide when slide count is fixed. "
                 "Do not penalize style preferences and do not invent facts. Use zero-based slide indices. "
                 "The type must be exactly one of: duplicate_content, off_topic, weak_progression, "
-                "missing_transition, contradiction, visual_mismatch. A score below 8 must include at least one "
+                "missing_transition, contradiction, visual_mismatch, missing_requirement. "
+                "For a missing requirement, target the most redundant or lowest-priority slide that should be "
+                "replaced or adapted to satisfy it. A score below 8 must include at least one "
                 "high or medium issue with a concrete repair instruction. "
                 "Return strict JSON only: {\"score\": number from 0 to 10, "
                 "\"issues\":[{\"index\":number,\"type\":string,\"severity\":\"high|medium|low\","

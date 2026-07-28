@@ -84,13 +84,14 @@ const TEMPLATES = [
 const DEFAULT_LEFT_PANEL_WIDTH = 180;
 const DEFAULT_RIGHT_PANEL_WIDTH = 390;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-const promptMentionsSlideTarget = (value) => {
-  const folded = String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .toLowerCase();
-  return /\b(?:slide|trang)\s*(?:(?:so|thu)\s*)?\d+\b|\b\d+\s*(?:slide|trang)\b/.test(folded);
+const PEDAGOGICAL_ROLE_LABELS = {
+  learning_objectives: 'Mục tiêu học tập',
+  concept: 'Kiến thức trọng tâm',
+  worked_example: 'Ví dụ có hướng dẫn',
+  demonstration: 'Minh họa',
+  practice: 'Thực hành',
+  knowledge_check: 'Kiểm tra kiến thức',
+  summary: 'Tổng kết',
 };
 const SLIDE_LAYOUTS = [
   { value: 'title', label: 'Tiêu đề' },
@@ -133,7 +134,6 @@ export default function EditorPage() {
   const [rightTab, setRightTab] = useState('ai');
   const [slides, setSlides] = useState([]);
   const [revisionPrompt, setRevisionPrompt] = useState('');
-  const [revisionScope, setRevisionScope] = useState('slide'); // 'slide' or 'deck'
   const [revising, setRevising] = useState(false);
   const [revisionProgress, setRevisionProgress] = useState(0);
   const [revisionStatus, setRevisionStatus] = useState('');
@@ -175,11 +175,8 @@ export default function EditorPage() {
     const fetchSlides = async () => {
       setLoadingSlides(true);
       try {
-        let project = projects.find((p) => p.id === id);
-        if (!project) {
-          project = await projectService.getById(id);
-          setProjects([project, ...projects.filter((item) => item.id !== project.id)]);
-        }
+        const project = await projectService.getById(id);
+        setProjects([project, ...projects.filter((item) => item.id !== project.id)]);
         const pages = await projectService.getSlidePages(id);
         if (pages && pages.length > 0) {
           const formattedSlides = pages.map(formatSlidePage);
@@ -611,11 +608,16 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', handleHistoryShortcut);
   }, [handleRedo, handleUndo]);
 
-  const handleTemplateSwitch = (tmplId) => {
+  const handleTemplateSwitch = async (tmplId) => {
     const tmpl = TEMPLATES.find((t) => t.id === tmplId);
     if (!tmpl) return;
-    updateProject(id, { templateId: tmplId });
-    addToast(`Template đổi sang "${tmpl.name}" ✓`, 'success');
+    try {
+      await projectService.update(id, { templateId: tmplId });
+      updateProject(id, { templateId: tmplId });
+      addToast(`Template đổi sang "${tmpl.name}" ✓`, 'success');
+    } catch (error) {
+      addToast(error.message || 'Không thể lưu template', 'error');
+    }
   };
 
   const selectThumbnail = useCallback((event, index) => {
@@ -676,12 +678,10 @@ export default function EditorPage() {
       setRevisionStatus('Đang gửi yêu cầu chỉnh sửa lên AI...');
 
       // 2. Trigger AI Revise
-      const promptHasExplicitSlide = promptMentionsSlideTarget(promptToSend);
-      const usePromptTarget = revisionScope === 'slide' && promptHasExplicitSlide;
       const payload = {
         revisionPrompt: promptToSend.trim(),
-        revisionScope: usePromptTarget ? 'auto' : revisionScope,
-        slideNumber: revisionScope === 'slide' && !usePromptTarget ? activeIdx + 1 : null
+        revisionScope: 'auto',
+        contextSlideNumber: activeIdx + 1
       };
 
       const reviseRes = await projectService.revise(id, payload);
@@ -988,7 +988,7 @@ export default function EditorPage() {
     return <div className="editor-loading"><div className="spinner" /></div>;
   }
 
-  const { name: title, templateId = 'clean-white' } = project;
+  const { name: title, templateId = 'soft-blue' } = project;
   const activeSlide = slides[activeIdx];
   const fitScale = getScale();
   const scale = fitScale * zoomPercent / 100;
@@ -1304,24 +1304,6 @@ export default function EditorPage() {
                       </div>
                     </div>
 
-                    <div className="e2-ai-scope-selector">
-                      <label className="e2-scope-label">Phạm vi chỉnh sửa:</label>
-                      <div className="e2-scope-options">
-                        <button 
-                          className={`e2-scope-btn ${revisionScope === 'slide' ? 'active' : ''}`}
-                          onClick={() => setRevisionScope('slide')}
-                        >
-                          Slide {activeIdx + 1}
-                        </button>
-                        <button 
-                          className={`e2-scope-btn ${revisionScope === 'deck' ? 'active' : ''}`}
-                          onClick={() => setRevisionScope('deck')}
-                        >
-                          Toàn bộ slide
-                        </button>
-                      </div>
-                    </div>
-
                     {revising ? (
                       <div className="e2-ai-loading-box">
                         <Loader2 size={24} className="spin" style={{ color: '#a89fff', marginBottom: 10 }} />
@@ -1412,37 +1394,35 @@ export default function EditorPage() {
                     </label>
                     <InfoRow label="Template" value={TEMPLATES.find(t => t.id === templateId)?.name || templateId} />
                     <InfoRow label="Tiêu đề" value={activeSlide?.title || '—'} />
+                    {activeSlide?.pedagogicalRole && (
+                      <InfoRow
+                        label="Vai trò bài giảng"
+                        value={PEDAGOGICAL_ROLE_LABELS[activeSlide.pedagogicalRole] || activeSlide.pedagogicalRole}
+                      />
+                    )}
+                    {activeSlide?.sourcePages?.length > 0 && (
+                      <InfoRow label="Trang nguồn" value={activeSlide.sourcePages.join(', ')} />
+                    )}
                     
-                    <div style={{ marginTop: 20, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 15 }}>
-                      <label style={{ display: 'block', fontSize: '0.85rem', color: 'rgba(255,255,255,0.45)', marginBottom: 8, fontWeight: 'bold' }}>Ghi chú diễn giả (Speaker Notes)</label>
+                    <div className="e2-notes-section">
+                      <label className="e2-notes-label" htmlFor="speaker-notes">
+                        Ghi chú diễn giả
+                        <span>Speaker notes</span>
+                      </label>
                       <textarea
-                        style={{
-                          width: '100%',
-                          height: 120,
-                          background: 'rgba(255,255,255,0.05)',
-                          border: '1px solid rgba(255,255,255,0.1)',
-                          borderRadius: 6,
-                          color: 'white',
-                          padding: 8,
-                          fontSize: '0.85rem',
-                          resize: 'none',
-                          outline: 'none',
-                          transition: 'border-color 0.2s',
-                        }}
+                        id="speaker-notes"
+                        className="e2-notes-textarea"
                         placeholder="Nhập ghi chú hoặc lời thoại cho slide này..."
                         value={activeSlide?.notes || ''}
                         onChange={(e) => {
                           const updated = { ...activeSlide, notes: e.target.value };
                           handleSlideUpdate(updated);
                         }}
-                        onFocus={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.25)'}
-                        onBlur={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.1)'}
                       />
-                    </div>
-
-                    <div className="e2-notes-meta">
-                      <span>{activeSlide?.notes?.trim().split(/\s+/).filter(Boolean).length || 0} từ</span>
-                      <span>{activeSlide?.notes?.length || 0} ký tự</span>
+                      <div className="e2-notes-meta">
+                        <span>{activeSlide?.notes?.trim().split(/\s+/).filter(Boolean).length || 0} từ</span>
+                        <span>{activeSlide?.notes?.length || 0} ký tự</span>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1578,7 +1558,7 @@ function getMockSlides(topic) {
       type: 'thankyou',
       title: 'Cảm ơn!',
       subtitle: 'Rất mong nhận được câu hỏi và đóng góp ý kiến.',
-      contact: 'contact@pslideai.com',
+      contact: 'contact@lecgen.ai',
       imagePrompt: 'A simple thank you card',
       imageUrl: '',
       pageIndex: 4

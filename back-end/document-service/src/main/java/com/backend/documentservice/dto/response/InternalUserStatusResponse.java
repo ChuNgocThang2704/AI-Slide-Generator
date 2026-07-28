@@ -1,0 +1,21 @@
+package com.backend.documentservice.dto.response;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+import java.util.UUID;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class InternalUserStatusResponse {
+    private UUID userId;
+    private String packageCode;
+    private String roleName;
+    private Integer status;
+    private LocalDateTime expireDate;
+}

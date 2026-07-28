@@ -198,10 +198,10 @@ export async function exportEditablePptx({ slides, theme = 'clean-white', fileNa
   const pptx = new PptxGenJS();
   pptx.defineLayout({ name: 'GENSLIDE_WIDE', width: SLIDE_W, height: SLIDE_H });
   pptx.layout = 'GENSLIDE_WIDE';
-  pptx.author = 'PSlideAI';
+  pptx.author = 'LecGen';
   pptx.subject = 'Editable AI presentation';
   pptx.title = fileName;
-  pptx.company = 'PSlideAI';
+  pptx.company = 'LecGen';
   pptx.lang = 'vi-VN';
   pptx.theme = {
     headFontFace: 'Arial',

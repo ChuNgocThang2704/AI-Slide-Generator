@@ -91,7 +91,7 @@ export default function AuthPage({ mode = 'login' }) {
           <Link to="/" className="auth-logo">
             <div className="logo-icon"><Sparkles size={20} /></div>
             <span style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.3rem' }}>
-              PSlide<span className="gradient-text">AI</span>
+              Lec<span className="gradient-text">Gen</span>
             </span>
           </Link>
 
@@ -250,7 +250,7 @@ export default function AuthPage({ mode = 'login' }) {
                   type="button"
                   className="demo-btn"
                   onClick={() => {
-                    setForm({ name: 'Demo User', email: 'demo@genslidai.com', password: '123456' });
+                    setForm({ name: 'Demo User', email: 'demo@lecgen.ai', password: '123456' });
                     setTimeout(() => document.getElementById('auth-submit')?.click(), 100);
                   }}
                 >

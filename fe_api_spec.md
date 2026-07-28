@@ -52,7 +52,7 @@ Create from file:
 
 ```txt
 1. POST /api/document/source-documents/upload
-2. POST /api/document/projects with fileUrl/fileName/fileSize and optional prompt
+2. POST /api/document/projects with fileUrl/fileName/fileSize and a meaningful prompt
 3. Poll progress
 4. Fetch pages
 ```
@@ -88,6 +88,9 @@ Notes:
 
 - `prompt` is the main natural-language requirement.
 - For file input, upload the file first, then send `fileUrl`, `fileName`, and `fileSize`.
+- `prompt` is required for file input. It must describe both the intended output and scope, for example: `Tao bai giang 12 slide bang tieng Viet ve chuong 3, giu cac cong thuc va vi du quan trong.`
+- Do not send generic placeholders such as `Tao slide tu file`. BE and AI Service reject unclear requests with HTTP 400 before creating a generation task.
+- FE may show prompt quality as `Chua du ro`, `Du dung`, or `Chi tiet`. Only `Chua du ro` blocks submission; the other levels help the user improve output quality without forcing a rigid prompt template.
 - FE does not send `generate_images`. AI image generation is enabled by default inside AI Service.
 - FE does not send table/chart/image flags. AI Service detects visual type from prompt/content.
 
@@ -249,6 +252,14 @@ Render priority:
 POST /api/document/projects/{projectId}/revise
 ```
 
+For textbook or lecture-oriented inputs, `result.deck` may additionally contain:
+
+- `presentation_mode: "lecture"`
+- `learning_objectives: string[]`
+- Per slide: `pedagogical_role` and `source_pages: number[]`
+
+These fields are optional and backward compatible. Existing renderers may ignore them.
+
 Revision quota is enforced by BE from the authenticated user's subscription:
 
 | Plan | Revisions per day |
@@ -268,8 +279,7 @@ Request body:
 {
   "revisionPrompt": "Sua rieng slide 4: doi anh thanh bai do xe trong truong dai hoc hien dai co camera ANPR, cam bien IoT va bang dien tu hien thi so cho trong. Giu nguyen cac slide con lai.",
   "revisionScope": "auto",
-  "slideNumber": 4,
-  "slideIndex": null,
+  "contextSlideNumber": 2,
   "imageLimit": null
 }
 ```
@@ -287,18 +297,19 @@ Field notes:
 | Field | Required | Description |
 |---|---:|---|
 | `revisionPrompt` | Yes | Natural-language edit request. |
-| `revisionScope` | No | `auto`, `slide`, or `deck`. Send `slide` when the editor has one selected slide; use `deck` only for an explicit full-deck rewrite. |
-| `slideNumber` | No | 1-based selected slide number. Prefer this field when FE has a selected slide. |
-| `slideIndex` | No | 0-based selected slide index. Do not send both `slideIndex` and `slideNumber`. |
+| `revisionScope` | No | Keep `auto` for the natural-language editor so the AI planner decides one slide, several slides, or the whole deck. |
+| `contextSlideNumber` | No | 1-based slide currently open in the editor. This is weak context and never overrides an explicit target in the prompt. |
+| `slideNumber` | No | 1-based forced target for legacy or explicit non-AI controls only. |
+| `slideIndex` | No | 0-based forced target. Do not send both `slideIndex` and `slideNumber`. |
 | `imageLimit` | No | Optional image-generation cap. |
 | `generateImages` | No | Deprecated for FE. Do not send unless intentionally disabling image generation. |
 
 Target precedence:
 
-- A structured `slideNumber`/`slideIndex` from FE takes precedence over slide numbers inferred from text.
-- For one selected slide, send `revisionScope="slide"` and `slideNumber`.
-- For edits mentioning multiple slides, current Java BE has no multi-target array field. Send the slide numbers in `revisionPrompt` with `revisionScope="auto"`.
-- For a full-deck rewrite, send `revisionScope="deck"` and omit slide target fields.
+- The natural-language editor sends the original prompt, `revisionScope="auto"`, and optional `contextSlideNumber`.
+- The AI planner owns semantic scope and can choose a target different from the selected slide.
+- `slideNumber`/`slideIndex` are hard targets and should only be used by explicit programmatic controls.
+- Rule-based target parsing is a fallback only when the AI planner is unavailable.
 
 Response when submitted:
 
@@ -596,7 +607,7 @@ Delete body:
 - FE should reload `/pages` after every successful revise.
 - FE should not expose controls for slide count, image count, table/chart/image mode unless product requires it later.
 - User-facing revise UI can be a single text box plus an optional selected slide context.
-- For a selected slide, FE should send `revisionScope="slide"` and `slideNumber`; AI Service can infer scope only when no structured target is available.
+- Send the selected slide as `contextSlideNumber` with `revisionScope="auto"`; do not convert user language into scope rules in FE.
 - Do not merge a revise delta in FE. After completion, replace local slide state with the latest `/pages` response.
 - Use the same project for subsequent revisions; BE tracks the newest completed AI task internally.
 - FE should handle `table`, `chart`, and `imageUrl` as optional nullable fields.

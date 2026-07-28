@@ -227,16 +227,8 @@ class SlideNormalizerMixin:
             cleaned_chars.append(ch)
         t = "".join(cleaned_chars)
         t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
-        t = re.sub(r"^\s*\*+", "", t)
-        t = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", t)
-        t = re.sub(r"__([^_\n]+)__", r"\1", t)
-        t = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", t)
-        t = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", t)
-        t = re.sub(r"\*{2,}", "", t)
-        t = re.sub(r"_{2,}", "", t)
-        t = re.sub(r"\*+\s*:", ":", t)
-        t = re.sub(r":\s*\*+\s*", ": ", t)
-        t = re.sub(r"\s+\*+\s+", " ", t)
+        # Preserve internal `*`, `**`, `_`, and identifiers such as
+        # `__init__`; these are programming syntax, not necessarily Markdown.
         t = re.sub(r"\s{2,}", " ", t)
         return t.strip()
 
@@ -438,17 +430,26 @@ class SlideNormalizerMixin:
                 for visual_key in ("table", "chart", "image_url"):
                     if slide.get(visual_key):
                         out_slide[visual_key] = slide.get(visual_key)
+                for metadata_key in ("pedagogical_role", "source_pages"):
+                    if slide.get(metadata_key) is not None:
+                        out_slide[metadata_key] = slide.get(metadata_key)
                 explicit_slides.append(out_slide)
             return {
                 "title": self._sanitize_title(str(title).strip()),
                 "slides": explicit_slides,
                 "_explicit_slide_mode": True,
+                **({
+                    "presentation_mode": structured_content.get("presentation_mode"),
+                    "learning_objectives": structured_content.get("learning_objectives") or [],
+                } if structured_content.get("presentation_mode") else {}),
             }
 
         def _clean_bullet(text: str, _max_words: int) -> str:
             """Loại bỏ các ký tự thừa, sửa các câu bị cụt, cắt cứng tại _max_words để giữ bullet súc tích."""
             t = (text or "").strip()
             _max_words = 0  # Let the LLM quality pass shorten content semantically.
+            # Provenance markers are pipeline metadata, never user-visible slide text.
+            t = re.sub(r"\[\[SOURCE_PAGE:\s*\d+\s*\]\]", " ", t, flags=re.IGNORECASE)
             # Loại bỏ các ký tự markdown/tiêu đề vô tình xuất hiện trong bullet
             t = re.sub(r"^\s*#{1,6}\s*", "", t)
             t = re.sub(r"^\s*[-*•]\s*", "", t)
@@ -633,6 +634,9 @@ class SlideNormalizerMixin:
             for visual_key in ("table", "chart", "image_url"):
                 if slide.get(visual_key):
                     out_slide[visual_key] = slide.get(visual_key)
+            for metadata_key in ("pedagogical_role", "source_pages"):
+                if slide.get(metadata_key) is not None:
+                    out_slide[metadata_key] = slide.get(metadata_key)
             slides_out.append(out_slide)
 
         slides_out = self._balance_deck(slides_out)
@@ -686,6 +690,14 @@ class SlideNormalizerMixin:
             key = re.sub(r"\W+", " ", current_title.lower()).strip()
             final_seen_titles.add(key)
         normalized = {"title": self._sanitize_title(title.strip()), "slides": slides_out}
+        if structured_content.get("presentation_mode"):
+            normalized["presentation_mode"] = structured_content.get("presentation_mode")
+        if isinstance(structured_content.get("learning_objectives"), list):
+            normalized["learning_objectives"] = [
+                str(item).strip()
+                for item in structured_content.get("learning_objectives")
+                if str(item).strip()
+            ][:5]
         if structured_content.get("_explicit_slide_mode"):
             normalized["_explicit_slide_mode"] = True
         return normalized

@@ -30,6 +30,6 @@ spring:
     encoding: UTF-8
 app:
   mail:
-    from-name: ${MAIL_FROM_NAME:PSlideAI}
+    from-name: ${MAIL_FROM_NAME:LecGen}
   rabbitmq:
     queue: ${RABBIT_QUEUE:notification_queue}

@@ -14,7 +14,7 @@ Trong moi truong deploy, thay bang domain/IP cua AI Service.
 
 Luong chinh:
 
-1. BE/FE gui prompt hoac file den `POST /api/generate-slide-spec`.
+1. BE/FE gui prompt va file tuy chon den `POST /api/generate-slide-spec`.
 2. AI Service tra ngay `task_id`.
 3. BE/FE poll `GET /api/status/{task_id}`.
 4. Khi `status = completed`, doc deck JSON tai `result.deck`.
@@ -38,16 +38,18 @@ Content-Type: multipart/form-data
 
 ### Request Fields
 
-Truyen it nhat mot trong hai field: `text`, `file`.
+Luon truyen `text`; `file` la tai lieu nguon tuy chon.
 
 | Field | Type | Required | Description |
 |---|---:|---:|---|
-| `text` | string | No | Prompt hoac noi dung dau vao. Neu gui kem `file`, field nay duoc xem la yeu cau/huong dan them cho file. |
+| `text` | string | Yes | Prompt hoac noi dung dau vao. Neu gui kem `file`, phai neu ro muc dich va pham vi can khai thac. |
 | `file` | file | No | File nguon. Ho tro `.docx`, `.pdf`, `.txt`. |
 | `plan` | string | No | Goi gioi han tai nguyen: `free`, `pro`, `ultra`. Mac dinh `pro`. |
 | `slide_count` | integer | No | So slide mong muon. Neu khong truyen, AI Service tu uoc luong theo noi dung/prompt. |
 | `generate_images` | string | No | `"true"` hoac `"false"`. Neu prompt co yeu cau anh, service co the tu bat sinh anh. |
 | `image_limit` | integer | No | So anh toi da muon sinh. Neu khong truyen, service tu tinh theo plan/so slide. |
+
+Yeu cau file chung chung nhu `Tao slide tu file` hoac prompt qua ngan se bi tu choi bang HTTP 400 truoc khi tao task.
 
 ### Request Example
 
@@ -97,6 +99,7 @@ Content-Type: multipart/form-data
 | `revision_scope` | string | No | `auto`, `slide`, `deck`. Mac dinh nen de `auto`. |
 | `slide_index` | integer | No | Slide can sua, 0-based. Thuong khong can truyen neu prompt da noi ro. |
 | `slide_number` | integer | No | Slide can sua, 1-based. Thuong khong can truyen neu prompt da noi ro. |
+| `context_slide_number` | integer | No | Slide dang mo, 1-based. Chi la context yeu; AI van tu quyet dinh target theo prompt. |
 | `target_slide_indices` | string | No | Danh sach index 0-based, co the la JSON array hoac chuoi cach nhau boi dau phay. |
 | `target_slide_numbers` | string | No | Danh sach so slide 1-based, co the la JSON array hoac chuoi cach nhau boi dau phay. |
 | `image_limit` | integer | No | So anh toi da khi yeu cau sua/sinh anh. |
@@ -109,11 +112,13 @@ revision_prompt
 plan=pro
 generate_images=true
 revision_scope=auto
+context_slide_number=2
 ```
 
-AI Service se tu hieu sua slide nao hay sua full deck dua tren prompt. Neu BE/FE da
-biet slide dich, nen gui them `revision_scope=slide` va field target. Target co
-cau truc trong request luon duoc uu tien hon suy doan tu prompt.
+AI Service se tu hieu sua mot slide, nhieu slide hay full deck dua tren prompt.
+`context_slide_number` chi cho planner biet slide dang mo va khong khoa target.
+Chi gui `revision_scope=slide` cung `slide_number`/`slide_index` khi mot control
+chuong trinh can bat buoc target, khong dung cach nay cho o prompt tu nhien.
 
 Contract revise:
 
@@ -225,9 +230,9 @@ Khi `status = completed`, deck JSON nam tai `result.deck`.
     "color_theme": "modern",
     "title_slide": {
       "title": "He thong bai do xe thong minh",
-      "subtitle": "Tao boi AI Slide Generator"
+      "subtitle": "Tao boi LecGen"
     },
-    "content_slide_footer": "AI Slide Generator",
+    "content_slide_footer": "LecGen",
     "deck": {
       "title": "He thong bai do xe thong minh",
       "slides": []
@@ -289,6 +294,8 @@ FE nen render dua vao `result.deck.slides`.
 ```json
 {
   "title": "He thong bai do xe thong minh",
+  "presentation_mode": "presentation",
+  "learning_objectives": [],
   "slides": []
 }
 ```
@@ -303,6 +310,8 @@ FE nen render dua vao `result.deck.slides`.
     "Toc do xu ly nhanh hon nho cam bien va xu ly tu dong."
   ],
   "notes": "Ghi chu thuyet trinh cho slide.",
+  "pedagogical_role": null,
+  "source_pages": [],
   "chart": null,
   "table": null,
   "image": null,
@@ -318,6 +327,8 @@ FE nen render dua vao `result.deck.slides`.
 | `title` | string | Tieu de slide. |
 | `bullets` | string[] | Noi dung chinh. |
 | `notes` | string | Ghi chu/loi thuyet trinh. |
+| `pedagogical_role` | string/null | Vai tro su pham khi `presentation_mode=lecture`: `learning_objectives`, `concept`, `worked_example`, `demonstration`, `practice`, `knowledge_check`, hoac `summary`. |
+| `source_pages` | integer[] | Cac trang PDF ho tro noi dung slide; rong khi input khong co thong tin trang. |
 | `chart` | object/null | Du lieu chart neu slide co chart. |
 | `table` | object/null | Du lieu bang neu slide co table. |
 | `image` | object/null | Thong tin anh neu slide co anh. |
@@ -331,6 +342,7 @@ Quan trong:
 - `layout = "text_chart"` chi khi `chart` co data that.
 - `layout = "text_image"` chi khi `image.url` hoac `image.path` ton tai.
 - FE khong can tu doan bang/chart tu text.
+- `presentation_mode` va cac truong lecture la metadata tuy chon; FE cu co the bo qua ma khong anh huong render.
 
 ## 5. Table Object
 

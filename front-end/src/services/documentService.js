@@ -21,10 +21,10 @@ const normalizeApiResponse = (response) => {
 // ─────────────────────────────────────────────
 export const projectService = {
   // Tạo project mới
-  async create(title, templateId = 'clean-white', prompt = '', fileUrl = null, fileName = null, fileSize = null) {
+  async create(title, templateId = 'soft-blue', prompt = '', fileUrl = null, fileName = null, fileSize = null) {
     const response = await apiClient.post('/document/projects', {
       prompt: prompt || title,
-      templateId: null,  // Tạm thời null vì template ID từ FE là string, backend cần UUID
+      templateId,
       fileUrl,
       fileName,
       fileSize

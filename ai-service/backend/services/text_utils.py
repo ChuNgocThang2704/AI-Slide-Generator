@@ -35,15 +35,7 @@ def plain_slide_text(value: Any) -> str:
         cleaned_chars.append(ch)
     t = "".join(cleaned_chars)
     t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
-    t = re.sub(r"^\s*\*+", "", t)
-    t = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", t)
-    t = re.sub(r"__([^_\n]+)__", r"\1", t)
-    t = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", t)
-    t = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", t)
-    t = re.sub(r"\*{2,}", "", t)
-    t = re.sub(r"_{2,}", "", t)
-    t = re.sub(r"\*+\s*:", ":", t)
-    t = re.sub(r":\s*\*+\s*", ": ", t)
-    t = re.sub(r"\s+\*+\s+", " ", t)
+    # Strip only a leading list marker. Internal stars and underscores are
+    # valid programming syntax and must survive API payload serialization.
     t = re.sub(r"\s{2,}", " ", t)
     return t.strip()

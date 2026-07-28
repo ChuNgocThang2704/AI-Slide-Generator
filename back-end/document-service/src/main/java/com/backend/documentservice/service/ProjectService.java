@@ -213,6 +213,7 @@ public class ProjectService {
     @CacheEvict(allEntries = true)
     public ProjectResponse createProject(ProjectCreateRequest request, String userRole) {
         log.info("[document-service] tạo project mới cho user: {}, role: {}", request.getOwnerId(), userRole);
+        validateGenerationPrompt(request);
 
         // 1. Kiểm tra hạn mức (Quota) của user trước khi tạo project
         ApiResponse<QuotaCheckResponse> quotaCheckResponse = subscriptionClient.checkQuota(request.getOwnerId(), "MAX_SLIDES_PER_DAY");
@@ -262,11 +263,46 @@ public class ProjectService {
         return projectMapper.toDto(project);
     }
 
+    private void validateGenerationPrompt(ProjectCreateRequest request) {
+        String prompt = request.getPrompt() == null ? "" : request.getPrompt().trim();
+        long meaningfulWords = java.util.Arrays.stream(prompt.split("\\s+"))
+                .map(word -> word.replaceAll("[^\\p{L}\\p{N}]", ""))
+                .filter(word -> word.length() >= 2)
+                .count();
+        boolean hasDocument = (request.getFileUrl() != null && !request.getFileUrl().isBlank())
+                || request.getSourceDocId() != null;
+
+        if (prompt.length() < 10 || meaningfulWords < 3) {
+            throw new AppException(
+                    ErrorCode.INVALID_GENERATION_PROMPT,
+                    hasDocument
+                            ? "Vui lòng mô tả mục đích và phạm vi nội dung cần tạo từ tài liệu."
+                            : "Vui lòng mô tả rõ chủ đề hoặc mục tiêu của bài trình chiếu."
+            );
+        }
+
+        String folded = java.text.Normalizer.normalize(prompt, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (hasDocument && folded.matches(
+                "^(?:hay )?(?:tao|lam|create|make)\\s+(?:slide|slides|presentation)"
+                        + "(?:\\s+(?:tu|from)\\s+(?:file|tep|tai lieu).*)?$"
+        )) {
+            throw new AppException(
+                    ErrorCode.INVALID_GENERATION_PROMPT,
+                    "Yêu cầu còn quá chung chung. Hãy nêu mục đích và phạm vi như toàn bộ tài liệu hoặc chương cụ thể."
+            );
+        }
+    }
+
     @Async
     public void generateSlidesAsync(UUID projectId, String userRole) {
         try {
             Project project = projectRepository.findById(projectId)
                     .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
+            String effectiveUserRole = resolveUserRole(project.getOwnerId(), userRole);
 
             String documentUrl = "";
             String fileName = "";
@@ -294,7 +330,7 @@ public class ProjectService {
                     project.getInitialPrompt(), 
                     finalDocumentUrl, 
                     finalFileName, 
-                    userRole,
+                    effectiveUserRole,
                     taskId -> {
                         Project proj = projectRepository.findById(projectId).orElse(project);
                         proj.setAiTaskId(taskId);
@@ -310,6 +346,7 @@ public class ProjectService {
                 if (!deckTitle.isEmpty()) {
                     proj.setName(deckTitle);
                 }
+                applyDeckMetadata(proj, parsedResponse.path("deck"));
 
                 // Cập nhật cả 2 task log sang SUCCESS khi hoàn thành
                 updateAiTaskLogsFromProgress(proj.getId(), "completed", null);
@@ -329,6 +366,7 @@ public class ProjectService {
                     String layout = slideNode.path("layout").asText("text_only");
                     String primaryVisual = slideNode.path("primary_visual").asText("");
                     boolean likelyMulti = slideNode.path("likely_multi_pptx_slides").asBoolean(false);
+                    String pedagogicalRole = slideNode.path("pedagogical_role").asText("");
 
                     String imageUrl = "";
                     JsonNode imageNode = slideNode.path("image");
@@ -345,6 +383,8 @@ public class ProjectService {
                             ? mapper.writeValueAsString(slideNode.path("chart")) : null;
                     String tableJson = slideNode.hasNonNull("table") && !slideNode.path("table").isNull() 
                             ? mapper.writeValueAsString(slideNode.path("table")) : null;
+                    String sourcePagesJson = slideNode.hasNonNull("source_pages")
+                            ? mapper.writeValueAsString(slideNode.path("source_pages")) : null;
 
                     SlidePage slidePage = SlidePage.builder()
                             .projectId(proj.getId())
@@ -358,6 +398,8 @@ public class ProjectService {
                             .layout(layout)
                             .primaryVisual(primaryVisual)
                             .likelyMultiPptxSlides(likelyMulti)
+                            .pedagogicalRole(pedagogicalRole)
+                            .sourcePages(sourcePagesJson)
                             .build();
                     slidePagesToSave.add(slidePage);
                 }
@@ -378,19 +420,39 @@ public class ProjectService {
                 }
             } catch (AppException e) {
                 log.error("[document-service] Lỗi ứng dụng khi sinh slide từ AI cho project ID: {}", projectId, e);
-                updateAiTaskLogsFromProgress(projectId, "failed", null);
+                updateAiTaskLogsFromProgress(
+                        projectId,
+                        "failed",
+                        objectMapper.createObjectNode().put("error", e.getMessage()));
                 Project proj = projectRepository.findById(projectId).orElse(project);
                 proj.setStatus(Constants.PROJECT_STATUS.FAILED);
                 projectRepository.save(proj);
             } catch (Exception e) {
                 log.error("[document-service] Thất bại khi sinh slide từ AI cho project ID: {}", projectId, e);
-                updateAiTaskLogsFromProgress(projectId, "failed", null);
+                String errorMessage = e.getMessage() == null || e.getMessage().isBlank()
+                        ? "Unknown error while generating slides"
+                        : e.getMessage();
+                updateAiTaskLogsFromProgress(
+                        projectId,
+                        "failed",
+                        objectMapper.createObjectNode().put("error", errorMessage));
                 Project proj = projectRepository.findById(projectId).orElse(project);
                 proj.setStatus(Constants.PROJECT_STATUS.FAILED);
                 projectRepository.save(proj);
             }
         } catch (Exception e) {
             log.error("[document-service] Lỗi nghiêm trọng trong luồng xử lý bất đồng bộ project ID: {}", projectId, e);
+            String errorMessage = e.getMessage() == null || e.getMessage().isBlank()
+                    ? "Unexpected error while preparing slide generation"
+                    : e.getMessage();
+            updateAiTaskLogsFromProgress(
+                    projectId,
+                    "failed",
+                    objectMapper.createObjectNode().put("error", errorMessage));
+            projectRepository.findById(projectId).ifPresent(project -> {
+                project.setStatus(Constants.PROJECT_STATUS.FAILED);
+                projectRepository.save(project);
+            });
         }
     }
 
@@ -454,15 +516,17 @@ public class ProjectService {
         try {
             Project project = projectRepository.findById(projectId)
                     .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
+            String effectiveUserRole = resolveUserRole(project.getOwnerId(), userRole);
 
             JsonNode aiResponse = aiService.reviseSlides(
                     sourceTaskId,
                     request.getRevisionPrompt(),
-                    userRole,
+                    effectiveUserRole,
                     request.getGenerateImages(),
                     request.getRevisionScope(),
                     request.getSlideIndex(),
                     request.getSlideNumber(),
+                    request.getContextSlideNumber(),
                     request.getImageLimit(),
                     taskId -> {
                         submittedRevisionTaskId.set(taskId);
@@ -518,7 +582,8 @@ public class ProjectService {
         }
 
         project.setAiTaskId(sourceTaskId);
-        project.setStatus(Constants.PROJECT_STATUS.FAILED);
+        // A failed revision must not invalidate the last successfully generated deck.
+        project.setStatus(Constants.PROJECT_STATUS.DONE);
         projectRepository.save(project);
         log.info(
                 "[document-service] Restored last successful AI task {} after revision task {} failed for project {}",
@@ -551,6 +616,17 @@ public class ProjectService {
         }
 
         if (project.getStatus() == Constants.PROJECT_STATUS.DONE) {
+            AITaskLog latestTask = findLatestProjectTask(projectId);
+            if (latestTask != null && latestTask.getStatus() == Constants.TASK_STATUS.FAILED) {
+                return ProjectProgressResponse.builder()
+                        .projectId(projectId)
+                        .aiTaskId(project.getAiTaskId())
+                        .projectStatus(project.getStatus())
+                        .aiStatus("failed")
+                        .progress(0)
+                        .errorMessage(latestTask.getErrorMessage())
+                        .build();
+            }
             return ProjectProgressResponse.builder()
                     .projectId(projectId)
                     .aiTaskId(project.getAiTaskId())
@@ -567,6 +643,7 @@ public class ProjectService {
                     .projectStatus(project.getStatus())
                     .aiStatus("failed")
                     .progress(0)
+                    .errorMessage(findProjectFailureMessage(projectId))
                     .build();
         }
 
@@ -630,9 +707,47 @@ public class ProjectService {
         }
     }
 
+    private String findProjectFailureMessage(UUID projectId) {
+        return aiTaskLogRepository.findByProjectIdOrderByStartedAtDesc(projectId).stream()
+                .filter(taskLog -> taskLog.getErrorMessage() != null
+                        && !taskLog.getErrorMessage().isBlank())
+                .findFirst()
+                .map(AITaskLog::getErrorMessage)
+                .orElse("Lỗi từ AI Engine");
+    }
+
+    private AITaskLog findLatestProjectTask(UUID projectId) {
+        return aiTaskLogRepository.findByProjectIdOrderByStartedAtDesc(projectId).stream()
+                .findFirst()
+                .orElse(null);
+    }
+
+    private String resolveUserRole(UUID userId, String fallbackRole) {
+        try {
+            ApiResponse<com.backend.documentservice.dto.response.InternalUserStatusResponse> response =
+                    subscriptionClient.getUserStatus(userId);
+            String roleName = response != null && response.getData() != null
+                    ? response.getData().getRoleName()
+                    : null;
+            if (roleName != null && !roleName.isBlank()) {
+                log.info("[document-service] Resolved active subscription role {} for user {}", roleName, userId);
+                return roleName;
+            }
+        } catch (Exception e) {
+            log.warn(
+                    "[document-service] Cannot resolve active subscription for user {}; using token role {}",
+                    userId,
+                    fallbackRole,
+                    e);
+        }
+        return fallbackRole == null || fallbackRole.isBlank()
+                ? Constants.USER_ROLES.USER_FREE
+                : fallbackRole;
+    }
+
     private void updateAiTaskLogsFromProgress(UUID projectId, String aiStatus, JsonNode resultNode) {
         try {
-            List<AITaskLog> taskLogs = aiTaskLogRepository.findByProjectId(projectId);
+            List<AITaskLog> taskLogs = aiTaskLogRepository.findByProjectIdOrderByStartedAtDesc(projectId);
             
             AITaskLog textLog = taskLogs.stream()
                     .filter(l -> l.getTaskType() != null && l.getTaskType() == Constants.TASK_TYPE.EXTRACT_TEXT)
@@ -725,10 +840,12 @@ public class ProjectService {
     }
 
     private void replaceSlidePagesFromDeck(Project project, JsonNode aiResponse) {
-        JsonNode generatedSlides = aiResponse.path("deck").path("slides");
+        JsonNode deckNode = aiResponse.path("deck");
+        JsonNode generatedSlides = deckNode.path("slides");
         if (!generatedSlides.isArray()) {
             throw new AppException(ErrorCode.AI_API_ERROR, "AI response khong co deck.slides hop le.");
         }
+        applyDeckMetadata(project, deckNode);
 
         List<SlidePage> currentPages = slidePageRepository.findByProjectIdOrderByPageIndexAsc(project.getId());
         if (!currentPages.isEmpty()) {
@@ -745,6 +862,7 @@ public class ProjectService {
             String layout = slideNode.path("layout").asText("text_only");
             String primaryVisual = slideNode.path("primary_visual").asText("");
             boolean likelyMulti = slideNode.path("likely_multi_pptx_slides").asBoolean(false);
+            String pedagogicalRole = slideNode.path("pedagogical_role").asText("");
 
             String imageUrl = "";
             JsonNode imageNode = slideNode.path("image");
@@ -762,6 +880,8 @@ public class ProjectService {
                         ? objectMapper.writeValueAsString(slideNode.path("chart")) : null;
                 String tableJson = slideNode.hasNonNull("table") && !slideNode.path("table").isNull()
                         ? objectMapper.writeValueAsString(slideNode.path("table")) : null;
+                String sourcePagesJson = slideNode.hasNonNull("source_pages")
+                        ? objectMapper.writeValueAsString(slideNode.path("source_pages")) : null;
 
                 SlidePage slidePage = SlidePage.builder()
                         .projectId(project.getId())
@@ -775,6 +895,8 @@ public class ProjectService {
                         .layout(layout)
                         .primaryVisual(primaryVisual)
                         .likelyMultiPptxSlides(likelyMulti)
+                        .pedagogicalRole(pedagogicalRole)
+                        .sourcePages(sourcePagesJson)
                         .build();
                 slidePagesToSave.add(slidePage);
             } catch (Exception e) {
@@ -783,6 +905,26 @@ public class ProjectService {
         }
 
         slidePageRepository.saveAll(slidePagesToSave);
+        projectRepository.save(project);
+    }
+
+    private void applyDeckMetadata(Project project, JsonNode deckNode) {
+        if (project == null || deckNode == null || !deckNode.isObject()) return;
+
+        String presentationMode = deckNode.path("presentation_mode").asText("").trim();
+        if (!presentationMode.isEmpty()) {
+            project.setPresentationMode(presentationMode);
+        }
+
+        JsonNode objectivesNode = deckNode.path("learning_objectives");
+        if (objectivesNode.isArray()) {
+            List<String> objectives = new java.util.ArrayList<>();
+            objectivesNode.forEach(item -> {
+                String objective = item.asText("").trim();
+                if (!objective.isEmpty()) objectives.add(objective);
+            });
+            project.setLearningObjectives(objectives);
+        }
     }
 
     private String normalizeBaseUrl(String baseUrl) {
@@ -866,6 +1008,7 @@ public class ProjectService {
         }
 
         if (request.getName() != null) project.setName(request.getName());
+        if (request.getTemplateId() != null) project.setTemplateId(request.getTemplateId());
         if (request.getStatus() != null) project.setStatus(request.getStatus());
         if (request.getSlideUrl() != null) project.setSlideUrl(request.getSlideUrl());
 
@@ -884,6 +1027,7 @@ public class ProjectService {
                     Object tableObj = null;
                     Object richTextObj = null;
                     Object elementsObj = null;
+                    Object sourcePagesObj = null;
                     
                     try {
                         if (page.getBullets() != null && !page.getBullets().isEmpty()) {
@@ -900,6 +1044,9 @@ public class ProjectService {
                         }
                         if (page.getElements() != null && !page.getElements().isEmpty()) {
                             elementsObj = objectMapper.readTree(page.getElements());
+                        }
+                        if (page.getSourcePages() != null && !page.getSourcePages().isEmpty()) {
+                            sourcePagesObj = objectMapper.readTree(page.getSourcePages());
                         }
                     } catch (Exception e) {
                         log.error("Lỗi khi parse các thuộc tính cho slide ID: {}", page.getId(), e);
@@ -920,6 +1067,8 @@ public class ProjectService {
                             .layout(page.getLayout())
                             .primaryVisual(page.getPrimaryVisual())
                             .likelyMultiPptxSlides(page.getLikelyMultiPptxSlides())
+                            .pedagogicalRole(page.getPedagogicalRole())
+                            .sourcePages(sourcePagesObj)
                             .createdAt(page.getCreatedAt())
                             .updatedAt(page.getUpdatedAt())
                             .build();
@@ -944,6 +1093,7 @@ public class ProjectService {
         if (request.getLayout() != null) page.setLayout(request.getLayout());
         if (request.getPrimaryVisual() != null) page.setPrimaryVisual(request.getPrimaryVisual());
         if (request.getLikelyMultiPptxSlides() != null) page.setLikelyMultiPptxSlides(request.getLikelyMultiPptxSlides());
+        if (request.getPedagogicalRole() != null) page.setPedagogicalRole(request.getPedagogicalRole());
         if (request.getImageUrl() != null) page.setImageUrl(request.getImageUrl());
 
         try {
@@ -962,6 +1112,9 @@ public class ProjectService {
             if (request.getElements() != null) {
                 page.setElements(objectMapper.writeValueAsString(request.getElements()));
             }
+            if (request.getSourcePages() != null) {
+                page.setSourcePages(objectMapper.writeValueAsString(request.getSourcePages()));
+            }
         } catch (Exception e) {
             log.error("Lỗi khi chuyển đổi các thuộc tính JSON sang chuỗi DB trong updateSlidePage", e);
             throw new AppException(ErrorCode.UNCATEGORIZED_EXCEPTION, "Không thể lưu dữ liệu chỉnh sửa slide");
@@ -974,6 +1127,7 @@ public class ProjectService {
         Object tableObj = null;
         Object richTextObj = null;
         Object elementsObj = null;
+        Object sourcePagesObj = null;
         try {
             if (page.getBullets() != null && !page.getBullets().isEmpty()) {
                 bulletsObj = objectMapper.readTree(page.getBullets());
@@ -989,6 +1143,9 @@ public class ProjectService {
             }
             if (page.getElements() != null && !page.getElements().isEmpty()) {
                 elementsObj = objectMapper.readTree(page.getElements());
+            }
+            if (page.getSourcePages() != null && !page.getSourcePages().isEmpty()) {
+                sourcePagesObj = objectMapper.readTree(page.getSourcePages());
             }
         } catch (Exception e) {
             log.error("Lỗi khi parse các thuộc tính JSON cho response", e);
@@ -1009,6 +1166,8 @@ public class ProjectService {
                 .layout(page.getLayout())
                 .primaryVisual(page.getPrimaryVisual())
                 .likelyMultiPptxSlides(page.getLikelyMultiPptxSlides())
+                .pedagogicalRole(page.getPedagogicalRole())
+                .sourcePages(sourcePagesObj)
                 .createdAt(page.getCreatedAt())
                 .updatedAt(page.getUpdatedAt())
                 .build();
@@ -1045,6 +1204,7 @@ public class ProjectService {
             String tableJson = null;
             String richTextJson = null;
             String elementsJson = null;
+            String sourcePagesJson = null;
             String imageUrl = null;
             
             try {
@@ -1062,6 +1222,9 @@ public class ProjectService {
                 }
                 if (req.getElements() != null) {
                     elementsJson = objectMapper.writeValueAsString(req.getElements());
+                }
+                if (req.getSourcePages() != null) {
+                    sourcePagesJson = objectMapper.writeValueAsString(req.getSourcePages());
                 }
                 if (req.getImageUrl() != null) {
                     imageUrl = req.getImageUrl();
@@ -1086,6 +1249,8 @@ public class ProjectService {
                 page.setLayout(req.getLayout());
                 page.setPrimaryVisual(req.getPrimaryVisual());
                 page.setLikelyMultiPptxSlides(req.getLikelyMultiPptxSlides());
+                page.setPedagogicalRole(req.getPedagogicalRole());
+                page.setSourcePages(sourcePagesJson);
                 page.setPageIndex(i);
             } else {
                 page = SlidePage.builder()
@@ -1101,6 +1266,8 @@ public class ProjectService {
                         .layout(req.getLayout())
                         .primaryVisual(req.getPrimaryVisual())
                         .likelyMultiPptxSlides(req.getLikelyMultiPptxSlides())
+                        .pedagogicalRole(req.getPedagogicalRole())
+                        .sourcePages(sourcePagesJson)
                         .pageIndex(i)
                         .build();
             }
@@ -1115,6 +1282,7 @@ public class ProjectService {
             Object tableObj = null;
             Object richTextObj = null;
             Object elementsObj = null;
+            Object sourcePagesObj = null;
             try {
                 if (page.getBullets() != null && !page.getBullets().isEmpty()) {
                     bulletsObj = objectMapper.readTree(page.getBullets());
@@ -1130,6 +1298,9 @@ public class ProjectService {
                 }
                 if (page.getElements() != null && !page.getElements().isEmpty()) {
                     elementsObj = objectMapper.readTree(page.getElements());
+                }
+                if (page.getSourcePages() != null && !page.getSourcePages().isEmpty()) {
+                    sourcePagesObj = objectMapper.readTree(page.getSourcePages());
                 }
             } catch (Exception e) {
                 log.error("Lỗi khi parse JSON content cho response đồng bộ", e);
@@ -1150,6 +1321,8 @@ public class ProjectService {
                     .layout(page.getLayout())
                     .primaryVisual(page.getPrimaryVisual())
                     .likelyMultiPptxSlides(page.getLikelyMultiPptxSlides())
+                    .pedagogicalRole(page.getPedagogicalRole())
+                    .sourcePages(sourcePagesObj)
                     .createdAt(page.getCreatedAt())
                     .updatedAt(page.getUpdatedAt())
                     .build();
@@ -1194,6 +1367,31 @@ public class ProjectService {
         for (Project project : projects) {
             if (!project.getOwnerId().equals(userId)) {
                 throw new AppException(ErrorCode.ACCESS_DENIED);
+            }
+        }
+
+        for (Project project : projects) {
+            if (
+                    project.getStatus() == Constants.PROJECT_STATUS.CREATE
+                    && project.getAiTaskId() != null
+                    && !project.getAiTaskId().isBlank()
+            ) {
+                try {
+                    aiService.cancelAiTask(project.getAiTaskId());
+                    log.info(
+                            "[document-service] hủy AI task {} trước khi xóa project {}",
+                            project.getAiTaskId(),
+                            project.getId()
+                    );
+                } catch (Exception e) {
+                    // Project deletion remains available even if the remote task already ended.
+                    log.warn(
+                            "[document-service] không thể hủy AI task {} trước khi xóa project {}: {}",
+                            project.getAiTaskId(),
+                            project.getId(),
+                            e.getMessage()
+                    );
+                }
             }
         }
 

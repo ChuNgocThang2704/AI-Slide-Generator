@@ -1,0 +1,369 @@
+import unittest
+
+from routes.api import _build_slide_spec_payload, _structured_content_from_spec_payload
+from services.content_extractor import ContentExtractor
+from services.lecture_quality import (
+    detect_lecture_mode,
+    enrich_lecture_deck,
+    lecture_prompt_block,
+    select_relevant_source_excerpt,
+)
+from services.slide_quality import _preserve_lecture_density, _preserve_slide_layouts
+from services.slide_text_quality import _sanitize_inline_markup
+from services.text_utils import plain_slide_text
+
+
+class LectureQualityTests(unittest.TestCase):
+    def test_detects_textbook_but_not_generic_business_prompt(self):
+        textbook = (
+            "[[SOURCE_PAGE:1]]\nChapter 3 Functions\n"
+            "3.1 Function calls\nExample 3.1 demonstrates a function call.\n"
+            "[[SOURCE_PAGE:2]]\n3.2 Math functions\nExercise 3.2 asks students to practice."
+        )
+        self.assertTrue(detect_lecture_mode(textbook))
+        self.assertFalse(
+            detect_lecture_mode(
+                "Create a sales presentation about quarterly revenue and market growth."
+            )
+        )
+
+    def test_explicit_lecture_request_enables_mode(self):
+        self.assertTrue(
+            detect_lecture_mode(
+                "Python functions",
+                "Create a lecture for beginner students with learning objectives.",
+            )
+        )
+
+    def test_enrichment_adds_roles_and_matches_source_pages(self):
+        source = (
+            "[[SOURCE_PAGE:10]]\n"
+            "A variable is a name that refers to a value. Assignment creates a variable.\n"
+            "[[SOURCE_PAGE:11]]\n"
+            "Python functions can take arguments and return values. Function calls use parentheses.\n"
+            "[[SOURCE_PAGE:12]]\n"
+            "Exercises ask students to define a function and inspect its return value.\n"
+        )
+        deck = {
+            "title": "Python Foundations",
+            "presentation_mode": "lecture",
+            "slides": [
+                {
+                    "title": "Learning Objectives",
+                    "bullets": ["Explain how Python function calls use arguments and return values."],
+                    "notes": "Introduce the expected learning outcome.",
+                },
+                {
+                    "title": "Function Calls",
+                    "bullets": ["Python function calls use parentheses and may return values."],
+                    "notes": "Explain the mechanics of a function call.",
+                },
+                {
+                    "title": "Practice Exercise",
+                    "bullets": ["Define a function and inspect the value it returns."],
+                    "notes": "Ask learners to complete the exercise.",
+                },
+            ],
+        }
+        result = enrich_lecture_deck(deck, source)
+        self.assertEqual(result["presentation_mode"], "lecture")
+        self.assertEqual(result["slides"][0]["pedagogical_role"], "learning_objectives")
+        self.assertIn(11, result["slides"][1]["source_pages"])
+        self.assertEqual(result["slides"][2]["pedagogical_role"], "practice")
+        self.assertTrue(result["learning_objectives"])
+
+    def test_enrichment_merges_or_removes_dangling_bullet_labels(self):
+        deck = {
+            "presentation_mode": "lecture",
+            "slides": [
+                {
+                    "title": "Assignment",
+                    "bullets": [
+                        "Key rule:",
+                        "Assignment binds a name to a value.",
+                        "Example:",
+                    ],
+                }
+            ],
+        }
+        result = enrich_lecture_deck(deck, "")
+        self.assertEqual(
+            result["slides"][0]["bullets"],
+            ["Key rule: Assignment binds a name to a value."],
+        )
+
+    def test_low_confidence_source_page_is_not_attached(self):
+        source = (
+            "[[SOURCE_PAGE:1]]\nCloud infrastructure and deployment regions.\n"
+            "[[SOURCE_PAGE:2]]\nFinancial accounting and annual statements.\n"
+        )
+        deck = {
+            "presentation_mode": "lecture",
+            "slides": [
+                {
+                    "title": "Python Comments",
+                    "bullets": ["Comments explain code intent."],
+                }
+            ],
+        }
+        result = enrich_lecture_deck(deck, source)
+        self.assertEqual(result["slides"][0]["source_pages"], [])
+
+    def test_late_learning_objectives_are_moved_after_intro(self):
+        deck = {
+            "title": "Python Functions",
+            "presentation_mode": "lecture",
+            "slides": [
+                {"title": "Introduction to Functions", "bullets": ["Why functions matter."]},
+                {"title": "Function Calls", "bullets": ["A call executes a function."]},
+                {"title": "Learning Objectives", "bullets": ["Explain parameters and return values."]},
+            ],
+        }
+        result = enrich_lecture_deck(deck, "")
+        self.assertEqual(result["slides"][0]["title"], "Introduction to Functions")
+        self.assertEqual(result["slides"][1]["title"], "Learning Objectives")
+
+    def test_normalizer_preserves_lecture_metadata(self):
+        extractor = ContentExtractor()
+        normalized = extractor._normalize_structured_content(
+            {
+                "title": "Python Functions",
+                "presentation_mode": "lecture",
+                "learning_objectives": ["Explain function calls and return values."],
+                "slides": [
+                    {
+                        "title": "Function Calls",
+                        "bullets": [
+                            "A Python function call executes reusable code with supplied arguments.",
+                            "Parentheses distinguish a function call from an ordinary variable reference.",
+                            "A return value lets the caller reuse the result in another expression.",
+                        ],
+                        "notes": "Explain the relationship between the caller, arguments, and returned result.",
+                        "pedagogical_role": "concept",
+                        "source_pages": [10, 11],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(normalized["presentation_mode"], "lecture")
+        self.assertEqual(normalized["slides"][0]["pedagogical_role"], "concept")
+        self.assertEqual(normalized["slides"][0]["source_pages"], [10, 11])
+
+    def test_spec_round_trip_preserves_lecture_fields(self):
+        structured = {
+            "title": "Python Functions",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Explain function calls."],
+            "slides": [
+                {
+                    "title": "Function Calls",
+                    "bullets": ["A function call executes a named block of reusable Python code."],
+                    "notes": "Explain the call and connect it to the following example.",
+                    "pedagogical_role": "concept",
+                    "source_pages": [4],
+                }
+            ],
+        }
+        payload = _build_slide_spec_payload(
+            task_id="lecture-test",
+            structured_content=structured,
+            chart_specs={},
+            table_specs={},
+            image_paths={},
+        )
+        slide = payload["deck"]["slides"][0]
+        self.assertEqual(payload["deck"]["presentation_mode"], "lecture")
+        self.assertEqual(slide["pedagogical_role"], "concept")
+        self.assertEqual(slide["source_pages"], [4])
+
+        restored = _structured_content_from_spec_payload(payload)
+        self.assertEqual(restored["presentation_mode"], "lecture")
+        self.assertEqual(restored["slides"][0]["source_pages"], [4])
+
+    def test_lecture_prompt_requires_pedagogy_without_inventing_sources(self):
+        prompt = lecture_prompt_block()
+        self.assertIn("learning objectives", prompt)
+        self.assertIn("worked examples", prompt)
+        self.assertIn("Never invent page numbers", prompt)
+
+    def test_source_excerpt_follows_requested_chapter(self):
+        source = "\n\n".join(
+            [
+                f"[[SOURCE_PAGE:{page}]]\nChapter 2 Variables\nAssignments and expressions. "
+                + ("general text " * 100)
+                for page in range(1, 5)
+            ]
+            + [
+                f"[[SOURCE_PAGE:{page}]]\nChapter 3 Functions\nFunction calls, arguments, and return values. "
+                + ("function example " * 100)
+                for page in range(5, 9)
+            ]
+        )
+        excerpt = select_relevant_source_excerpt(
+            source,
+            "Focus only on Chapter 3 Functions for beginner students.",
+            max_chars=3000,
+        )
+        self.assertIn("Chapter 3 Functions", excerpt)
+        self.assertNotIn("[[SOURCE_PAGE:1]]", excerpt)
+
+    def test_explicit_output_language_overrides_source_language_both_ways(self):
+        extractor = ContentExtractor()
+        english_source = "Functions accept arguments and may return values. " * 20
+        vietnamese_source = "Hàm nhận đối số và có thể trả về giá trị. " * 20
+        self.assertEqual(
+            extractor._resolve_output_language_hint(
+                english_source,
+                "Hãy tạo bài giảng hoàn toàn bằng tiếng Việt.",
+            ),
+            "vi",
+        )
+        self.assertEqual(
+            extractor._resolve_output_language_hint(
+                vietnamese_source,
+                "Create the entire lecture deck in English.",
+            ),
+            "en",
+        )
+
+    def test_grounding_review_cannot_make_lecture_slides_sparse(self):
+        original = {
+            "presentation_mode": "lecture",
+            "slides": [
+                {
+                    "title": "Function Calls",
+                    "pedagogical_role": "concept",
+                    "source_pages": [4],
+                    "bullets": ["One.", "Two.", "Three.", "Four."],
+                },
+                {
+                    "title": "Review",
+                    "pedagogical_role": "knowledge_check",
+                    "bullets": ["Question one.", "Question two.", "Question three."],
+                },
+            ],
+        }
+        reviewed = {
+            "slides": [
+                {"title": "Function Calls", "bullets": ["One.", "Two."]},
+                {"title": "Review", "bullets": ["Question one.", "Question two.", "Question three."]},
+            ],
+        }
+        result = _preserve_lecture_density(reviewed, original)
+        self.assertEqual(len(result["slides"][0]["bullets"]), 4)
+        self.assertEqual(result["slides"][0]["source_pages"], [4])
+        self.assertEqual(len(result["slides"][1]["bullets"]), 3)
+
+    def test_grounding_review_preserves_cover_and_closing_layouts(self):
+        original = {
+            "slides": [
+                {"title": "Python", "layout": "intro", "bullets": ["Lecture overview."]},
+                {"title": "Questions", "layout": "thankyou", "bullets": ["Thank you."]},
+            ]
+        }
+        reviewed = {
+            "slides": [
+                {"title": "Python", "bullets": ["Lecture overview."]},
+                {"title": "Questions", "bullets": ["Thank you."]},
+            ]
+        }
+        result = _preserve_slide_layouts(reviewed, original)
+        self.assertEqual(result["slides"][0]["layout"], "intro")
+        self.assertEqual(result["slides"][1]["layout"], "thankyou")
+
+    def test_unified_review_requires_cover_and_closing_inside_slide_count(self):
+        extractor = ContentExtractor()
+        messages = extractor._build_unified_post_process_messages(
+            {
+                "title": "Python",
+                "slides": [
+                    {"title": "Variables", "bullets": ["Variables hold values."]},
+                    {"title": "Review", "bullets": ["Review the lesson."]},
+                ],
+            }
+        )
+        contract = messages[0]["content"]
+        self.assertIn("layout='intro'", contract)
+        self.assertIn("layout='thankyou'", contract)
+        self.assertIn("exact slide count", contract)
+
+    def test_pipeline_guarantees_cover_and_closing_without_extra_slides(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "en"
+        deck = {
+            "title": "Python Foundations",
+            "slides": [
+                {
+                    "title": f"Topic {index}",
+                    "bullets": [f"Detailed concept {index}."],
+                    "layout": "normal",
+                }
+                for index in range(1, 12)
+            ],
+        }
+        result = extractor._ensure_deck_boundaries(deck, 12)
+        self.assertEqual(len(result["slides"]), 12)
+        self.assertEqual(result["slides"][0]["layout"], "intro")
+        self.assertEqual(result["slides"][-1]["layout"], "thankyou")
+        self.assertEqual(result["slides"][1]["title"], "Topic 1")
+
+    def test_technical_sanitizer_preserves_python_operators_and_identifiers(self):
+        text = "Use miles * 1.61, 2 ** 3, and obj.__init__() in this example."
+        self.assertEqual(_sanitize_inline_markup(text), text)
+
+    def test_slide_normalizer_preserves_python_operators_and_identifiers(self):
+        extractor = ContentExtractor()
+        text = "* Use '*' for repetition, 2 ** 3, and obj.__init__()."
+        cleaned = extractor._sanitize_inline_markup(text)
+        self.assertIn("'*'", cleaned)
+        self.assertIn("2 ** 3", cleaned)
+        self.assertIn("obj.__init__()", cleaned)
+
+    def test_api_plain_text_preserves_python_operators_and_identifiers(self):
+        text = "Use '*' for repetition, 2 ** 3, and obj.__init__()."
+        self.assertEqual(plain_slide_text(text), text)
+
+    def test_relevant_excerpt_excludes_unrequested_later_chapter(self):
+        source = (
+            "[[SOURCE_PAGE:1]]\nChapter 2 Variables Expressions Statements\n"
+            + "assignment expression operator " * 80
+            + "\n[[SOURCE_PAGE:2]]\nChapter 2 Variables Expressions Statements\n"
+            + "variable assignment value " * 80
+            + "\n[[SOURCE_PAGE:20]]\nChapter 3 Functions\n"
+            + "function definition return recursion " * 80
+        )
+        excerpt = select_relevant_source_excerpt(
+            source,
+            "Create a lecture about Variables, Expressions and Statements from Chapter 2",
+            max_chars=5000,
+        )
+        self.assertIn("Chapter 2", excerpt)
+        self.assertNotIn("Chapter 3 Functions", excerpt)
+
+    def test_boundary_pass_removes_fragmented_ascii_diagram_bullets(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "en"
+        deck = {
+            "title": "Variables",
+            "slides": [
+                {
+                    "title": "Assignment",
+                    "layout": "normal",
+                    "bullets": [
+                        "A variable refers to a stored value.",
+                        "State diagram:",
+                        "+-------+",
+                        "message",
+                        "+-------+",
+                    ],
+                },
+                {"title": "Summary", "layout": "normal", "bullets": ["Review variables."]},
+            ],
+        }
+        result = extractor._ensure_deck_boundaries(deck, 3)
+        body = result["slides"][1]["bullets"]
+        self.assertEqual(body, ["A variable refers to a stored value."])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -48,7 +48,7 @@ export default function Navbar() {
           <div className="logo-icon">
             <Sparkles size={18} />
           </div>
-          <span className="logo-text">PSlide<span className="logo-accent">AI</span></span>
+          <span className="logo-text">Lec<span className="logo-accent">Gen</span></span>
         </Link>
 
         {/* Desktop Nav Links */}

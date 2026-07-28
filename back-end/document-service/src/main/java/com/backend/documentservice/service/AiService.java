@@ -166,6 +166,7 @@ public class AiService {
             String revisionScope,
             Integer slideIndex,
             Integer slideNumber,
+            Integer contextSlideNumber,
             Integer imageLimit,
             Consumer<String> taskIdConsumer
     ) throws JsonProcessingException {
@@ -187,6 +188,9 @@ public class AiService {
             }
             if (slideNumber != null) {
                 body.add("slide_number", slideNumber);
+            }
+            if (contextSlideNumber != null) {
+                body.add("context_slide_number", contextSlideNumber);
             }
             if (imageLimit != null) {
                 body.add("image_limit", imageLimit);

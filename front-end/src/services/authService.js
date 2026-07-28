@@ -1,4 +1,5 @@
 import apiClient from './apiClient';
+import { useAuthStore } from '../store';
 
 const normalizeApiResponse = (response) => {
   if (!response) {
@@ -92,8 +93,16 @@ export const authService = {
     return normalizeApiResponse(response.data);
   },
 
+  async resendVerification(email) {
+    const response = await apiClient.post('/auth/resend-verification', { email });
+    return normalizeApiResponse(response.data);
+  },
+
   async logout() {
-    const response = await apiClient.post('/auth/logout');
+    const refreshToken = useAuthStore.getState().refreshToken;
+    const response = await apiClient.post('/auth/logout', {
+      token: refreshToken,
+    });
     return normalizeApiResponse(response.data);
   },
 

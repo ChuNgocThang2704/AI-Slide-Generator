@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore, useUIStore } from './store';
 import { authService } from './services/authService';
+import { subscriptionService } from './services/subscriptionService';
 
 import Navbar from './components/layout/Navbar';
 import ToastContainer from './components/common/Toast';
@@ -62,6 +63,32 @@ function ScrollToTop() {
       root.style.scrollBehavior = previousBehavior;
     };
   }, [pathname]);
+
+  return null;
+}
+
+function SubscriptionSync() {
+  const { isAuthenticated, user, updateUser } = useAuthStore();
+
+  React.useEffect(() => {
+    if (!isAuthenticated || !user?.id) return;
+
+    let cancelled = false;
+    subscriptionService.getMySubscription()
+      .then((subscription) => {
+        const packageCode = subscription?.packageCode?.toLowerCase();
+        if (!cancelled && packageCode && packageCode !== user.plan) {
+          updateUser({ plan: packageCode });
+        }
+      })
+      .catch((error) => {
+        console.warn('Cannot synchronize active subscription:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, user?.id, user?.plan, updateUser]);
 
   return null;
 }
@@ -148,6 +175,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <ScrollToTop />
+      <SubscriptionSync />
       <Routes>
         {/* Public */}
         <Route path="/" element={<Layout><LandingPage /></Layout>} />

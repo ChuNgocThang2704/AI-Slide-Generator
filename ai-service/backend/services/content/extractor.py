@@ -40,6 +40,7 @@ from services.content.input_processing import InputProcessingMixin
 from services.content.llm_client import LLMClientMixin
 from services.content.slide_normalizer import SlideNormalizerMixin
 from services.content.slide_pipeline import SlidePipelineMixin
+from services.lecture_quality import detect_lecture_mode, enrich_lecture_deck
 from services.content.image_extraction import ImageExtractionMixin
 
 
@@ -216,6 +217,8 @@ class ContentExtractor(
                 "Warning: VLLM_API_BASE_URL không set — extract slide chỉ dùng heuristic/fallback."
             )
         self._slide_lang_hint: str = "auto"
+        self._lecture_mode: bool = False
+        self._source_content: str = ""
         # Tiến độ extract (progress_cb): đếm mỗi lần vLLM trả JSON hợp lệ.
         self._extract_progress: Optional[Dict[str, Any]] = None
 
@@ -317,6 +320,13 @@ class ContentExtractor(
             return "vi"
         return "auto"
 
+    def _resolve_output_language_hint(self, source_text: str, user_instruction: str = "") -> str:
+        """Explicit output language always takes precedence over source language."""
+        requested = self._detect_requested_output_language(user_instruction)
+        if requested in {"vi", "en"}:
+            return requested
+        return self._detect_output_language_hint(source_text)
+
     @staticmethod
     def _fold_language_text(text: str) -> str:
         import unicodedata
@@ -330,15 +340,17 @@ class ContentExtractor(
         h = getattr(self, "_slide_lang_hint", "auto") or "auto"
         if h == "vi":
             return (
-                "OUTPUT LANGUAGE (MANDATORY): Source is Vietnamese. "
+                "OUTPUT LANGUAGE (MANDATORY): The requested output language is Vietnamese. "
                 "Write EVERY deck title, slide title, bullet, and note in Vietnamese. "
-                "Do not answer in English. Keep proper names as in the source.\n"
+                "Translate explanatory content when needed, but preserve code, formulas, identifiers, "
+                "proper names, and standard technical terms accurately.\n"
             )
         if h == "en":
             return (
-                "OUTPUT LANGUAGE (MANDATORY): Source is English. "
+                "OUTPUT LANGUAGE (MANDATORY): The requested output language is English. "
                 "Write EVERY deck title, slide title, bullet, and note in English. "
-                "Do not translate slide text to Vietnamese.\n"
+                "Translate explanatory content when needed, but preserve code, formulas, identifiers, "
+                "proper names, and standard technical terms accurately.\n"
             )
         return _DECK_LANG_RULE
 
@@ -471,7 +483,14 @@ class ContentExtractor(
         target_slides = int(target_slides_override or 10)
         self._user_instruction = user_instruction or ""
         self._doc_title_hint = doc_title_hint or ""
-        original_language_hint = self._detect_output_language_hint(raw_content or "")
+        self._source_content = raw_content or ""
+        self._lecture_mode = detect_lecture_mode(self._source_content, self._user_instruction)
+        if self._lecture_mode:
+            print("[pipeline] lecture mode enabled")
+        original_language_hint = self._resolve_output_language_hint(
+            raw_content or "",
+            self._user_instruction,
+        )
         if original_language_hint in ("vi", "en"):
             self._slide_lang_hint = original_language_hint
             print(f"Slide language hint: {self._slide_lang_hint} (requested/source)")
@@ -485,12 +504,26 @@ class ContentExtractor(
                 structured = await self._force_slide_count_exact(structured, target_slides_override)
             if progress_cb:
                 await progress_cb(1, 1)
-            return structured
+            return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
 
         # Nếu đầu vào là câu lệnh ngắn/dàn ý, tự động sinh nội dung chi tiết trước
         self._is_document_mode = not self._is_prompt_input(raw_content)
         if self._is_document_mode:
             print("[pipeline] document mode: expand will be skipped to preserve technical detail")
+            if self._user_instruction:
+                from services.lecture_quality import select_relevant_source_excerpt
+
+                focused_content = select_relevant_source_excerpt(
+                    raw_content,
+                    self._user_instruction,
+                    max_chars=30000,
+                )
+                if focused_content and len(focused_content) < len(raw_content):
+                    print(
+                        "[pipeline] focused document scope: "
+                        f"{len(raw_content)} -> {len(focused_content)} chars"
+                    )
+                    raw_content = focused_content
 
         if (self.vllm_available or self.gemini_available) and not self._is_document_mode:
             print(f"Detected prompt/outline input. Pre-generating detailed content for {target_slides} slides...")
@@ -524,7 +557,7 @@ class ContentExtractor(
             )
             if progress_cb:
                 await progress_cb(1, 1)
-            return structured
+            return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
 
         if progress_cb:
             self._progress_track_begin(progress_cb)
@@ -554,7 +587,7 @@ class ContentExtractor(
                     raw_content=raw_content,
                     hint=self._doc_title_hint,
                 )
-                return structured
+                return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
 
             if should_stop and await should_stop():
                 raise TaskCancelledError("Task cancelled by user")
@@ -593,7 +626,7 @@ class ContentExtractor(
                 raw_content=raw_content,
                 hint=self._doc_title_hint,
             )
-            return structured
+            return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
         finally:
             if progress_cb:
                 await self._progress_track_finalize()
@@ -1059,12 +1092,16 @@ class ContentExtractor(
         system_msg = self._llm_system_prefix() + (
             "You build presentation slides from expanded source text.\n\n"
             + self._presentation_style_block(target_slides)
+            + self._user_instruction_block()
             + self._output_language_instruction()
             + "HARD RULES:\n"
             "1. Return ONLY valid JSON—no text before or after the JSON object.\n"
             "2. No markdown code fences.\n"
             "3. Schema:\n"
-            "{\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"70-120 word presenter narration\"}]}\n\n"
+            "{\"title\":\"...\",\"presentation_mode\":\"presentation|lecture\",\"learning_objectives\":[\"...\"],"
+            "\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\"],\"notes\":\"70-120 word presenter narration\","
+            "\"pedagogical_role\":\"concept\",\"source_pages\":[1]}]}\n\n"
+            "- Omit lecture-only fields or use presentation_mode='presentation' unless LECTURE MODE is active.\n\n"
             "DECK TITLE (top-level \"title\" field):\n"
             "- Must be a comprehensive title that describes the WHOLE presentation (e.g. \"Phân mảnh Dữ liệu trong CSDL Phân tán\", \"AI Applications in Healthcare\").\n"
             "- NEVER use a chapter heading (\"Mở đầu\", \"Giới thiệu\", \"Introduction\", \"Chapter 1\") as the deck title.\n"
@@ -1081,6 +1118,9 @@ class ContentExtractor(
             "- Never end with ... or …\n"
             f"- Each slide: 3–5 bullets. Slide title: 3–8 words.\n"
             f"- You MUST return EXACTLY {target_slides} slides. If running out of tokens: close JSON cleanly—do not leave half sentences.\n"
+            "- Slide 1 must be a cover with layout='intro', the deck topic as title, and no more than two short subtitle bullets.\n"
+            "- The final slide must use layout='thankyou' and contain a concise closing or Q&A invitation with no more than two bullets.\n"
+            "- Both cover and closing are included in the exact requested slide count; do not append them as extra slides.\n"
             "- No duplicated content across slides.\n"
             "- If token budget is tight, finish the JSON structure; never truncate mid-sentence inside a bullet.\n"
             "- Each slide = one clear subtopic.\n"
@@ -1164,10 +1204,15 @@ class ContentExtractor(
 
         system_msg = self._llm_system_prefix() + (
             "You compose the final slide deck from intermediate summaries.\n\n"
+            + self._user_instruction_block()
             + self._output_language_instruction()
             + "HARD RULES:\n"
             "1. Return ONLY JSON—no text outside the JSON object.\n"
-            "2. Schema: {\"title\": \"...\", \"slides\": [{\"title\": \"...\", \"bullets\": [\"...\"], \"notes\": \"70-120 word presenter narration\"}]}\n"
+            "2. Schema: {\"title\":\"...\",\"presentation_mode\":\"presentation|lecture\","
+            "\"learning_objectives\":[\"...\"],\"slides\":[{\"title\":\"...\",\"bullets\":[\"...\"],"
+            "\"notes\":\"70-120 word presenter narration\",\"pedagogical_role\":\"concept\","
+            "\"source_pages\":[1]}]}\n"
+            "- Omit lecture-only fields or use presentation_mode='presentation' unless LECTURE MODE is active.\n"
             f"3. Each bullet: complete sentence, min ~10 words and ~45 chars, target ~10–18 words, hard max {MAX_WORDS_PER_BULLET} words, ends with a period; keep names, numbers, technical terms, function names exactly as in source; if an idea is long, use two bullets.\n"
             f"4. Each slide: 3–{MAX_BULLETS_PER_SLIDE} bullets (prefer 3–4 when tight on length); use {MAX_BULLETS_PER_SLIDE} only when every bullet stays short and complete.\n"
             f"5. The source has about {section_count} major sections.\n"

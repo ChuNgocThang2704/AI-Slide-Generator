@@ -60,16 +60,5 @@ export const adminService = {
   async deletePermission(permName) {
     const response = await apiClient.delete(`/permissions/${permName}`);
     return normalizeApiResponse(response.data);
-  },
-
-  // ── AI CONFIG MANAGEMENT ──
-  async getAIConfigs() {
-    const response = await apiClient.get('/document/admin/ai-configs');
-    return normalizeApiResponse(response.data);
-  },
-
-  async syncAIConfigs(configsArray) {
-    const response = await apiClient.post('/api/document/admin/ai-configs/sync', configsArray);
-    return normalizeApiResponse(response.data);
   }
 };

@@ -6,6 +6,7 @@ from services.plan_limits import (
     detect_requested_slide_count,
     enforce_plan_slide_limit,
     resolve_plan_image_limit,
+    validate_generation_instruction,
     validate_plan_limits,
 )
 
@@ -40,6 +41,25 @@ class PlanLimitsTest(unittest.TestCase):
             validate_plan_limits("free", None, "x" * 10001)
         self.assertEqual(raised.exception.status_code, 400)
 
+    def test_file_content_limit_is_not_bypassed_by_short_instruction(self):
+        with self.assertRaises(HTTPException) as raised:
+            validate_plan_limits(
+                "free",
+                None,
+                raw_content="x" * 10001,
+                count_detection_content="Tao 10 slide tu file",
+            )
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_slide_count_is_detected_from_instruction_not_file_body(self):
+        target, resolved = validate_plan_limits(
+            "pro",
+            None,
+            raw_content="Noi dung tai lieu khong ghi so slide.",
+            count_detection_content="Tao dung 12 slide tu file",
+        )
+        self.assertEqual((target, resolved), (12, 12))
+
     def test_image_limit_respects_plan_and_deck_ratio(self):
         self.assertEqual(resolve_plan_image_limit("free", 10), 4)
         self.assertEqual(resolve_plan_image_limit("pro", 30), 15)
@@ -50,6 +70,28 @@ class PlanLimitsTest(unittest.TestCase):
         long = {"slides": [{"title": str(i)} for i in range(12)]}
         self.assertEqual(len(enforce_plan_slide_limit(short, "free")["slides"]), 4)
         self.assertEqual(len(enforce_plan_slide_limit(long, "free")["slides"]), 10)
+
+    def test_file_generation_requires_a_meaningful_instruction(self):
+        with self.assertRaises(HTTPException) as raised:
+            validate_generation_instruction("", has_file=True)
+        self.assertEqual(raised.exception.status_code, 400)
+
+        with self.assertRaises(HTTPException):
+            validate_generation_instruction("Tao slide tu file", has_file=True)
+
+    def test_file_generation_accepts_purpose_and_scope(self):
+        prompt = "Tao bai giang tong quan toan bo tai lieu bang tieng Viet"
+        self.assertEqual(
+            validate_generation_instruction(prompt, has_file=True),
+            prompt,
+        )
+
+    def test_topic_only_generation_remains_flexible(self):
+        prompt = "Tri tue nhan tao tai Viet Nam"
+        self.assertEqual(
+            validate_generation_instruction(prompt, has_file=False),
+            prompt,
+        )
 
 
 if __name__ == "__main__":

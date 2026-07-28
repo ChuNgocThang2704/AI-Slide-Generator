@@ -24,4 +24,6 @@ public class SlidePageUpdateRequest {
     private String layout;
     private String primaryVisual;
     private Boolean likelyMultiPptxSlides;
+    private String pedagogicalRole;
+    private Object sourcePages;
 }

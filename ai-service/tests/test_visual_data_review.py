@@ -31,6 +31,33 @@ class FakeExtractor:
 
 
 class VisualDataReviewTest(unittest.IsolatedAsyncioTestCase):
+    async def test_drops_later_identical_visual_spec(self):
+        extractor = FakeExtractor(None, review_pass=True)
+        spec = {
+            "headers": ["Term", "Meaning"],
+            "rows": [["Variable", "A name that refers to a value"]],
+        }
+        structured = {
+            "slides": [
+                {"title": "Variables", "bullets": ["A variable refers to a value."]},
+                {"title": "Comments", "bullets": ["Comments explain code intent."]},
+            ]
+        }
+        specs = {0: dict(spec), 1: dict(spec)}
+        records = [
+            {"slide_index": 0, "status": "created", "source": "llm", "spec": specs[0]},
+            {"slide_index": 1, "status": "created", "source": "llm", "spec": specs[1]},
+        ]
+
+        reviewed, debug = await review_visual_data_specs(
+            extractor, structured, specs, records, kind="table", raw_content=""
+        )
+
+        self.assertIn(0, reviewed)
+        self.assertNotIn(1, reviewed)
+        self.assertEqual(debug[1]["status"], "duplicate_rejected")
+        self.assertEqual(debug[1]["duplicate_of_slide_index"], 0)
+
     async def test_enforces_explicit_schema_even_when_reviewer_passes(self):
         extractor = FakeExtractor({
             "headers": ["Criterion", "Manual", "Smart", "Comment"],

@@ -1,6 +1,6 @@
-# Tài Liệu Tích Hợp API — AI Slide Generator
+# Tài Liệu Tích Hợp API - LecGen
 
-Tài liệu này mô tả chi tiết các API của hệ thống AI Slide Generator để lập trình viên Frontend (FE) dễ dàng tích hợp.
+Tài liệu này mô tả chi tiết các API của hệ thống LecGen để lập trình viên Frontend (FE) dễ dàng tích hợp.
 
 * **Base URL:** `http://20.196.129.89:8000`
 * **Kiểu truyền dữ liệu đầu vào (Request):** Hỗ trợ `multipart/form-data` hoặc `application/x-www-form-urlencoded`.
@@ -19,7 +19,7 @@ API này dùng để lấy về cấu trúc slide chi tiết định dạng JSON
 
 | Tham số | Kiểu dữ liệu | Bắt buộc | Mô tả |
 | :--- | :--- | :--- | :--- |
-| `text` | String | Không * | Nội dung bài viết thô cần tạo slide. |
+| `text` | String | Có | Yêu cầu tạo slide bằng ngôn ngữ tự nhiên. Khi có file, phải nêu mục đích và phạm vi cần khai thác. |
 | `file` | File | Không * | File tài liệu nguồn tải lên (hỗ trợ `.docx`, `.pdf`, `.txt`). |
 | `content` | String (JSON) | Không * | Chuỗi JSON chứa cấu trúc slide đã có sẵn nếu muốn Backend chỉ định dạng lại. |
 | `plan` | String | Không | Gói dịch vụ: `free` (giới hạn 10 slide), `pro` (tối đa 30 slide - mặc định), `ultra` (tối đa 50 slide). |
@@ -29,7 +29,7 @@ API này dùng để lấy về cấu trúc slide chi tiết định dạng JSON
 | `image_limit` | Integer | Không | Giới hạn số lượng ảnh sinh ra. |
 | `include_image_base64` | String | Không | Trả về dữ liệu ảnh trực tiếp dạng base64 trong JSON: `"true"` hoặc `"false"` (mặc định). |
 
-*\* Lưu ý: Bắt buộc phải truyền ít nhất 1 trong 3 trường `text`, `file` hoặc `content`.*
+*Lưu ý: `text` luôn bắt buộc. Nếu có file, các yêu cầu chung chung như `Tạo slide từ file` sẽ bị từ chối bằng HTTP 400 trước khi tạo task.*
 
 ### Ví dụ Request (CURL)
 ```bash
@@ -48,16 +48,20 @@ curl -X POST "http://20.196.129.89:8000/api/generate-slide-spec" \
   "task_id": "0d9c4456-5be5-4d7a-be92-e427cf664188",
   "status": "completed",
   "mode": "json_spec",
-  "spec_version": "1.2",
+  "spec_version": "1.3",
   "slide_preset": "modern",
   "color_theme": "indigo",
   "title_slide": {
     "title": "Lịch Sử Phát Triển Trí Tuệ Nhân Tạo",
-    "subtitle": "Tạo bởi AI Slide Generator"
+    "subtitle": "Tạo bởi LecGen"
   },
-  "content_slide_footer": "AI Slide Generator",
+  "content_slide_footer": "LecGen",
   "deck": {
     "title": "Lịch Sử Phát Triển Trí Tuệ Nhân Tạo",
+    "presentation_mode": "lecture",
+    "learning_objectives": [
+      "Giải thích các cột mốc chính trong lịch sử phát triển AI."
+    ],
     "slides": [
       {
         "index": 0,
@@ -68,6 +72,8 @@ curl -X POST "http://20.196.129.89:8000/api/generate-slide-spec" \
           "Những kỳ vọng ban đầu rất lớn nhưng bị giới hạn bởi năng lực tính toán của máy tính."
         ],
         "notes": "Nhấn mạnh vai trò của Alan Turing và John McCarthy trong giai đoạn khai sơn phá thạch này.",
+        "pedagogical_role": "concept",
+        "source_pages": [3, 4],
         "layout": "text_image",
         "primary_visual": "image",
         "likely_multi_pptx_slides": false,

@@ -31,6 +31,7 @@ from services.plan_limits import (
     enforce_plan_slide_limit as _enforce_plan_slide_limit,
     form_wants_slide_images as _form_wants_slide_images,
     resolve_plan_image_limit as _resolve_plan_image_limit,
+    validate_generation_instruction as _validate_generation_instruction,
     validate_plan_limits as _validate_plan_limits,
 )
 from services.text_utils import plain_slide_text as _plain_slide_text
@@ -103,12 +104,12 @@ def _image_url_from_path(path_str: str) -> Optional[str]:
 
 
 # Khớp phụ đề / footer trong `slide_generator` (PPTX).
-_TITLE_SLIDE_SUBTITLE = "Tạo bởi AI Slide Generator"
-_CONTENT_SLIDE_FOOTER = "AI Slide Generator"
+_TITLE_SLIDE_SUBTITLE = "Tạo bởi LecGen"
+_CONTENT_SLIDE_FOOTER = "LecGen"
 # `SlideGenerator.create_slide`: tách slide khi nhiều bullet (max 6 / slide vật lý).
 _MAX_BULLETS_BEFORE_PPTX_SPLIT = 6
 
-_SLIDE_SPEC_VERSION = "1.2"
+_SLIDE_SPEC_VERSION = "1.3"
 
 
 def _mime_from_image_path(path_str: str) -> Optional[str]:
@@ -128,7 +129,8 @@ def _resolve_visual_theme(structured_content: dict, slide_theme: Optional[str]) 
     resolved = SlideGenerator.normalize_slide_preset(preset_raw)
     if resolved:
         return resolved, resolved
-    return slide_generator._detect_theme(structured_content.get("title", "")), None
+    generator = slide_generator or SlideGenerator()
+    return generator._detect_theme(structured_content.get("title", "")), None
 
 
 def _infer_slide_layout(
@@ -142,10 +144,16 @@ def _infer_slide_layout(
     Nếu không có, fallback sang khớp dựa trên visual element (bảng full-width; ảnh/chart cột phải).
     """
     # 1. Ưu tiên layout do AI chỉ định
-    if False and slide_spec and isinstance(slide_spec, dict) and slide_spec.get("layout"):
+    if slide_spec and isinstance(slide_spec, dict) and slide_spec.get("layout"):
         ai_layout = str(slide_spec.get("layout")).strip().lower()
-        valid_layouts = {"text_only", "text_image", "text_table", "text_chart", "split_columns", "timeline", "big_quote", "hero_stat", "intro", "normal"}
-        if ai_layout in valid_layouts:
+        # Boundary layouts have dedicated FE renderers. Other AI layout hints
+        # still pass through the proven visual-data fallback below.
+        if ai_layout in {"intro", "title"}:
+            return "intro", None
+        if ai_layout in {"thankyou", "thank_you"}:
+            return "thankyou", None
+        valid_layouts = {"text_only", "text_image", "text_table", "text_chart", "split_columns", "timeline", "big_quote", "hero_stat", "normal"}
+        if ai_layout in valid_layouts and ai_layout not in {"text_only", "normal"}:
             primary = None
             if "image" in ai_layout or image:
                 primary = "image"
@@ -193,6 +201,12 @@ def _build_slide_spec_payload(
             "chart": None,
             "table": None,
             "image": None,
+            "pedagogical_role": _plain_slide_text(slide.get("pedagogical_role") or "") or None,
+            "source_pages": [
+                int(page)
+                for page in (slide.get("source_pages") or [])
+                if str(page).isdigit() and int(page) > 0
+            ],
         }
         if chart_specs and idx in chart_specs:
             c_spec = dict(chart_specs[idx])
@@ -243,6 +257,12 @@ def _build_slide_spec_payload(
         "content_slide_footer": _CONTENT_SLIDE_FOOTER,
         "deck": {
             "title": deck_title,
+            "presentation_mode": structured_content.get("presentation_mode") or "presentation",
+            "learning_objectives": [
+                _plain_slide_text(item)
+                for item in (structured_content.get("learning_objectives") or [])
+                if _plain_slide_text(item)
+            ],
             "slides": out_slides,
         },
     }
@@ -267,6 +287,14 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
             ],
             "notes": _plain_slide_text(slide.get("notes") or ""),
         }
+        if slide.get("pedagogical_role"):
+            row["pedagogical_role"] = _plain_slide_text(slide.get("pedagogical_role"))
+        if isinstance(slide.get("source_pages"), list):
+            row["source_pages"] = [
+                int(page)
+                for page in slide.get("source_pages")
+                if str(page).isdigit() and int(page) > 0
+            ]
         layout = str(slide.get("layout") or "").strip()
         if layout:
             row["layout"] = layout
@@ -283,10 +311,15 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
 
     if not slides_out:
         raise ValueError("Previous task deck has no slides")
-    return {
+    result = {
         "title": _plain_slide_text(deck.get("title") or "Bài thuyết trình"),
         "slides": slides_out,
     }
+    if deck.get("presentation_mode"):
+        result["presentation_mode"] = deck.get("presentation_mode")
+    if isinstance(deck.get("learning_objectives"), list):
+        result["learning_objectives"] = deck.get("learning_objectives")
+    return result
 
 
 def _review_revised_spec_payload(
@@ -463,6 +496,7 @@ async def _build_revised_slide_spec_payload(
     plan: str,
     should_stop,
     target_slide_indices: Optional[List[int]] = None,
+    context_slide_number: Optional[int] = None,
 ) -> Dict[str, Any]:
     old_slides = previous_structured_content.get("slides") or []
     explicit_add_count = _revision_prompt_add_slide_count(revision_prompt)
@@ -482,7 +516,9 @@ async def _build_revised_slide_spec_payload(
     revision_plan = await content_extractor.plan_slide_revision(
         previous_structured_content,
         revision_prompt,
+        context_slide_number=context_slide_number,
     )
+    planner_succeeded = bool(revision_plan.get("planner_succeeded"))
     plan_targets = [
         int(n) - 1
         for n in (revision_plan.get("target_slide_numbers") or [])
@@ -498,6 +534,11 @@ async def _build_revised_slide_spec_payload(
     # never erase a target that the planner identified explicitly.
     if not plan_targets and target_slide_indices:
         plan_targets = list(target_slide_indices)
+    if not plan_targets and not planner_succeeded:
+        plan_targets = _parse_revision_target_indices(
+            revision_prompt=revision_prompt,
+            slide_count=len(old_slides),
+        )
     if not plan_targets and explicit_title_overrides:
         plan_targets = sorted(explicit_title_overrides.keys())
 
@@ -510,7 +551,7 @@ async def _build_revised_slide_spec_payload(
         op_types.add("restructure_deck")
     if explicit_title_overrides:
         op_types.add("rewrite_text")
-    if _revision_prompt_mentions_image(revision_prompt):
+    if not planner_succeeded and _revision_prompt_mentions_image(revision_prompt):
         op_types.add("regenerate_image")
     text_ops = {"rewrite_text", "change_layout", "restructure_deck"}
     wants_text_revision = bool(op_types & text_ops)
@@ -567,6 +608,18 @@ async def _build_revised_slide_spec_payload(
                 if isinstance(generated, dict):
                     revised_slides.append(dict(generated))
         revised["slides"] = revised_slides
+
+    # A deck-level wording/layout revision must not silently add or remove slides.
+    # Slide count changes are allowed only when the request explicitly asks for them.
+    if old_slides and not explicit_add_count and not explicit_delete_targets:
+        revised_slides = [
+            slide for slide in (revised.get("slides") or []) if isinstance(slide, dict)
+        ]
+        if len(revised_slides) != len(old_slides):
+            revised = await content_extractor._force_slide_count_exact(
+                revised,
+                len(old_slides),
+            )
 
     if plan_targets and old_slides and not wants_deck_restructure:
         revised_slides = [
@@ -669,7 +722,11 @@ async def _build_revised_slide_spec_payload(
         if visual == "table":
             forced_table_targets.add(idx)
 
-    if _revision_prompt_mentions_table(revision_prompt) and not wants_image_revision:
+    if (
+        not planner_succeeded
+        and _revision_prompt_mentions_table(revision_prompt)
+        and not wants_image_revision
+    ):
         table_targets = plan_targets or list(target_slide_indices or [])
         if not table_targets and len(revised.get("slides") or []) == 1:
             table_targets = [0]
@@ -888,7 +945,7 @@ async def _build_revised_slide_spec_payload(
 
 @router.get("/")
 async def root():
-    return {"message": "AI Slide Generator API", "version": "1.0.0"}
+    return {"message": "LecGen AI API", "version": "1.0.0"}
 
 
 @router.get("/api/vllm-status")
@@ -1016,20 +1073,28 @@ async def generate_slide_spec(
                 f.write(await file.read())
             file_content = await file_processor.process_file(file_path)
 
+        validated_instruction = _validate_generation_instruction(
+            text,
+            has_file=bool(file_content),
+        )
+
         user_instruction: Optional[str] = None
-        if file_content and text:
+        if file_content:
             raw_content = file_content
-            user_instruction = text  # Text là lệnh điều hướng, inject vào system prompt LLM
-        elif file_content:
-            raw_content = file_content
-        elif text:
-            raw_content = text
+            user_instruction = validated_instruction
+        elif validated_instruction:
+            raw_content = validated_instruction
         else:
             raise HTTPException(status_code=400, detail="Provide at least one of: text, file")
 
         # Quét số slide từ prompt text của người dùng trước, nếu không có mới dùng content để tính
         text_for_detection = text or raw_content
-        target_slides_override, resolved_slide_count = _validate_plan_limits(plan_norm, slide_count, raw_content=text_for_detection)
+        target_slides_override, resolved_slide_count = _validate_plan_limits(
+            plan_norm,
+            slide_count,
+            raw_content=raw_content,
+            count_detection_content=text_for_detection,
+        )
         force_exact_slide_count = target_slides_override is not None
 
         # Tự động phát hiện yêu cầu sinh ảnh từ prompt text nếu tham số generate_images là false
@@ -1123,17 +1188,32 @@ async def generate_slide_spec(
                         raw_content_bg or "",
                         task_id=task_id_bg,
                     )
-                    if force_exact_slide_count and target_slides_override and isinstance(structured, dict):
-                        structured = await content_extractor._force_slide_count_exact(
-                            structured, int(target_slides_override)
-                        )
-
                 structured = _enforce_plan_slide_limit(structured, plan_norm)
                 from services.deck_coherence import improve_deck_coherence
                 structured = await improve_deck_coherence(
                     content_extractor,
                     structured,
                     task_id=task_id_bg,
+                )
+                from services.lecture_quality import enrich_lecture_deck
+                structured = enrich_lecture_deck(
+                    structured,
+                    raw_content_bg or "",
+                    user_instruction or "",
+                )
+                from services.slide_text_quality import improve_final_slide_quality
+                structured = await improve_final_slide_quality(
+                    content_extractor,
+                    structured,
+                    task_id=task_id_bg,
+                    source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+                )
+                boundary_target = int(target_slides_override) if target_slides_override else len(
+                    structured.get("slides") or []
+                )
+                structured = content_extractor._ensure_deck_boundaries(
+                    structured,
+                    boundary_target,
                 )
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 visual_plan_bg = await build_visual_plan(
@@ -1148,6 +1228,9 @@ async def generate_slide_spec(
                         len(structured.get("slides") or []),
                     )
                 )
+                if structured.get("slides"):
+                    visual_plan_bg[0] = "none"
+                    visual_plan_bg[len(structured["slides"]) - 1] = "none"
                 table_specs_bg = await build_table_specs_for_slides(
                     content_extractor,
                     structured,
@@ -1310,6 +1393,7 @@ async def revise_slide_spec(
     revision_scope: str = Form("auto"),
     slide_index: Optional[int] = Form(None),
     slide_number: Optional[int] = Form(None),
+    context_slide_number: Optional[int] = Form(None),
     target_slide_indices: Optional[str] = Form(None),
     target_slide_numbers: Optional[str] = Form(None),
 ):
@@ -1335,8 +1419,13 @@ async def revise_slide_spec(
         previous_structured = _structured_content_from_spec_payload(source_result)
         plan_norm = (plan or "pro").strip().lower()
         source_slide_count = len(previous_structured.get("slides") or [])
+        if context_slide_number is not None and not (1 <= context_slide_number <= source_slide_count):
+            raise HTTPException(
+                status_code=400,
+                detail=f"context_slide_number must be between 1 and {source_slide_count}",
+            )
         target_indices = _parse_revision_target_indices(
-            revision_prompt=prompt,
+            revision_prompt="",
             slide_count=source_slide_count,
             slide_index=slide_index,
             slide_number=slide_number,
@@ -1412,6 +1501,7 @@ async def revise_slide_spec(
                     plan=plan_norm,
                     should_stop=should_stop,
                     target_slide_indices=target_indices,
+                    context_slide_number=context_slide_number,
                 )
                 spec_payload["source_task_id"] = source_task_id
                 spec_payload["revision_prompt"] = revision_prompt_bg

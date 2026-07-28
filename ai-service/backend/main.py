@@ -22,7 +22,7 @@ async def lifespan(_app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="AI Slide Generator API", lifespan=lifespan)
+    app = FastAPI(title="LecGen AI API", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,

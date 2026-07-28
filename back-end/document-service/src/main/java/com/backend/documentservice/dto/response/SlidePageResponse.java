@@ -27,6 +27,8 @@ public class SlidePageResponse {
     private String layout;
     private String primaryVisual;
     private Boolean likelyMultiPptxSlides;
+    private String pedagogicalRole;
+    private Object sourcePages;
     private Instant createdAt;
     private Instant updatedAt;
 }

@@ -382,9 +382,20 @@ public class AuthenticationService {
     }
 
     public void logout(String token) {
-        log.info("[user-service] đăng xuất, vô hiệu hóa token");
+        blacklistToken(token, false);
+    }
+
+    public void logoutRefreshToken(String token) {
+        blacklistToken(token, true);
+    }
+
+    private void blacklistToken(String token, boolean refreshToken) {
+        if (token == null || token.isBlank()) {
+            return;
+        }
+        log.info("[user-service] vô hiệu hóa {} token", refreshToken ? "refresh" : "access");
         try {
-            SignedJWT signToken = verifyToken(token, false);
+            SignedJWT signToken = verifyToken(token, refreshToken);
 
             String jwtId = signToken.getJWTClaimsSet().getJWTID();
             String userId = signToken.getJWTClaimsSet().getSubject();
@@ -412,7 +423,7 @@ public class AuthenticationService {
         }
         String token = request.getToken();
         SignedJWT signedJWT = verifyToken(token, true);
-        logout(token);
+        logoutRefreshToken(token);
 
         String userIdStr = signedJWT.getJWTClaimsSet().getSubject();
         UserEntity user = userRepository.findById(UUID.fromString(userIdStr))
@@ -442,6 +453,16 @@ public class AuthenticationService {
         redisTemplate.delete(redisKey);
 
         log.info("Xác thực thành công cho User ID: {}", user.getId());
+    }
+
+    public void resendVerification(String requestedEmail) {
+        String email = requestedEmail.trim().toLowerCase();
+        UserEntity user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_EXISTED));
+
+        if (!user.isEmailVerified()) {
+            sendVerificationEmail(user);
+        }
     }
 
     private String generateUsernameFromEmail(String email) {
