@@ -98,6 +98,25 @@ export const authService = {
     return normalizeApiResponse(response.data);
   },
 
+  async forgotPassword(email) {
+    const response = await apiClient.post('/auth/forgot-password', { email });
+    return normalizeApiResponse(response.data);
+  },
+
+  async verifyResetCode(email, code) {
+    const response = await apiClient.post('/auth/verify-reset-code', { email, code });
+    return normalizeApiResponse(response.data);
+  },
+
+  async resetPassword(email, newPassword, confirmPassword) {
+    const response = await apiClient.post('/auth/reset-password', {
+      email,
+      newPassword,
+      confirmPassword,
+    });
+    return normalizeApiResponse(response.data);
+  },
+
   async logout() {
     const refreshToken = useAuthStore.getState().refreshToken;
     const response = await apiClient.post('/auth/logout', {
