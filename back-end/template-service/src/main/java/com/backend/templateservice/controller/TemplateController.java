@@ -1,9 +1,11 @@
 package com.backend.templateservice.controller;
 
 import com.backend.templateservice.dto.request.TemplateRequest;
+import com.backend.templateservice.dto.request.TemplateMatchRequest;
 import com.backend.templateservice.dto.response.ApiResponse;
 import com.backend.templateservice.dto.response.PageResponse;
 import com.backend.templateservice.dto.response.TemplateResponse;
+import com.backend.templateservice.dto.response.TemplateMatchResponse;
 import com.backend.templateservice.service.TemplateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -24,6 +26,26 @@ public class TemplateController {
     public ApiResponse<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
         return ApiResponse.<Map<String, Object>>builder()
                 .data(templateService.uploadFileOnly(file))
+                .build();
+    }
+
+    @PostMapping(value = "/custom", consumes = "multipart/form-data")
+    public ApiResponse<TemplateResponse> uploadCustomTemplate(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "name", required = false) String name
+    ) {
+        return ApiResponse.<TemplateResponse>builder()
+                .data(templateService.uploadCustomTemplate(file, name))
+                .build();
+    }
+
+    @PostMapping("/{id}/match")
+    public ApiResponse<TemplateMatchResponse> matchLayout(
+            @PathVariable UUID id,
+            @RequestBody TemplateMatchRequest request
+    ) {
+        return ApiResponse.<TemplateMatchResponse>builder()
+                .data(templateService.matchLayout(id, request))
                 .build();
     }
 

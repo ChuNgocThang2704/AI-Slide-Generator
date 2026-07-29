@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
 import ElementCanvas from '../../components/slides/ElementCanvas';
 import { projectService } from '../../services/documentService';
+import { isCustomTemplateId, templateService } from '../../services/templateService';
 import { exportSlidesToPptx } from '../../services/pptxExportService';
 import { formatSlidePage, toSlidePageUpdate } from '../../utils/slideMapping';
 import {
@@ -114,6 +115,20 @@ function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
   );
 }
 
+async function formatPagesWithTemplate(pages, templateId, force = false) {
+  return Promise.all(pages.map(async (page) => {
+    const formatted = page.type ? page : formatSlidePage(page);
+    if (!force && Array.isArray(formatted.elements) && formatted.elements.length) return formatted;
+    const match = await templateService.match(templateId, formatted);
+    return {
+      ...formatted,
+      type: match.layoutType || formatted.type,
+      templateLayoutId: match.layoutId,
+      elements: Array.isArray(match.elements) ? match.elements : formatted.elements,
+    };
+  }));
+}
+
 export default function EditorPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -133,6 +148,8 @@ export default function EditorPage() {
   const [presentationViewport, setPresentationViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [rightTab, setRightTab] = useState('ai');
   const [slides, setSlides] = useState([]);
+  const [customTemplates, setCustomTemplates] = useState([]);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
   const [revisionPrompt, setRevisionPrompt] = useState('');
   const [revising, setRevising] = useState(false);
   const [revisionProgress, setRevisionProgress] = useState(0);
@@ -179,7 +196,9 @@ export default function EditorPage() {
         setProjects([project, ...projects.filter((item) => item.id !== project.id)]);
         const pages = await projectService.getSlidePages(id);
         if (pages && pages.length > 0) {
-          const formattedSlides = pages.map(formatSlidePage);
+          const formattedSlides = isCustomTemplateId(project.templateId)
+            ? await formatPagesWithTemplate(pages, project.templateId)
+            : pages.map(formatSlidePage);
           slidesRef.current = formattedSlides;
           undoStackRef.current = [];
           redoStackRef.current = [];
@@ -209,6 +228,22 @@ export default function EditorPage() {
 
     fetchSlides();
   }, [id]);
+
+  useEffect(() => {
+    let active = true;
+    templateService.getAll()
+      .then((templates) => {
+        if (active) {
+          setCustomTemplates(templates.filter((template) => template.sourceType === 'CUSTOM_PPTX'));
+        }
+      })
+      .catch(() => {
+        // The editor can continue with built-in templates.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const center = centerRef.current;
@@ -609,14 +644,31 @@ export default function EditorPage() {
   }, [handleRedo, handleUndo]);
 
   const handleTemplateSwitch = async (tmplId) => {
-    const tmpl = TEMPLATES.find((t) => t.id === tmplId);
+    const customOptions = customTemplates.map((template) => ({
+      id: template.id,
+      name: template.name,
+      colors: { primary: template.primaryColor || '#4f46e5' },
+      preview: template.backgroundColor || '#ffffff',
+      isLight: true,
+      isCustom: true,
+    }));
+    const tmpl = [...TEMPLATES, ...customOptions].find((item) => item.id === tmplId);
     if (!tmpl) return;
+    setApplyingTemplate(true);
     try {
       await projectService.update(id, { templateId: tmplId });
       updateProject(id, { templateId: tmplId });
+      if (tmpl.isCustom) {
+        const matchedSlides = await formatPagesWithTemplate(slidesRef.current, tmplId, true);
+        handleDeckUpdate(matchedSlides, activeIdx);
+      } else if (isCustomTemplateId(projects.find((item) => item.id === id)?.templateId)) {
+        handleDeckUpdate(slidesRef.current.map((slide) => ({ ...slide, elements: [] })), activeIdx);
+      }
       addToast(`Template đổi sang "${tmpl.name}" ✓`, 'success');
     } catch (error) {
       addToast(error.message || 'Không thể lưu template', 'error');
+    } finally {
+      setApplyingTemplate(false);
     }
   };
 
@@ -989,6 +1041,18 @@ export default function EditorPage() {
   }
 
   const { name: title, templateId = 'soft-blue' } = project;
+  const availableTemplates = [
+    ...TEMPLATES,
+    ...customTemplates.map((template) => ({
+      id: template.id,
+      name: template.name,
+      colors: { primary: template.primaryColor || '#4f46e5' },
+      preview: template.backgroundColor || '#ffffff',
+      isLight: true,
+      isCustom: true,
+    })),
+  ];
+  const activeTemplate = availableTemplates.find((template) => template.id === templateId);
   const activeSlide = slides[activeIdx];
   const fitScale = getScale();
   const scale = fitScale * zoomPercent / 100;
@@ -1040,8 +1104,8 @@ export default function EditorPage() {
               </button>
             )}
             <span className="e2-badge">{slides.length} slides</span>
-            <span className="e2-template-chip" style={{ color: TEMPLATES.find(t=>t.id===templateId)?.colors?.primary || '#666' }}>
-              {TEMPLATES.find((t) => t.id === templateId)?.name || templateId}
+            <span className="e2-template-chip" style={{ color: activeTemplate?.colors?.primary || '#666' }}>
+              {activeTemplate?.name || templateId}
             </span>
           </div>
         </div>
@@ -1362,10 +1426,10 @@ export default function EditorPage() {
                   <div className="e2-template-panel">
                     <p className="e2-panel-hint">Chọn template để áp dụng ngay cho toàn bộ presentation</p>
                     <div className="e2-template-grid">
-                      {TEMPLATES.map((tmpl) => (
+                      {availableTemplates.map((tmpl) => (
                         <div
                           key={tmpl.id}
-                          className={`e2-tmpl-card ${templateId === tmpl.id ? 'selected' : ''}`}
+                          className={`e2-tmpl-card ${templateId === tmpl.id ? 'selected' : ''} ${applyingTemplate ? 'disabled' : ''}`}
                           onClick={() => handleTemplateSwitch(tmpl.id)}
                         >
                           {templateId === tmpl.id && <div className="e2-tmpl-check"><Check size={11}/></div>}
@@ -1376,6 +1440,7 @@ export default function EditorPage() {
                             <div className="e2-tmpl-th-bar" style={{ background: tmpl.colors.primary }} />
                           </div>
                           <div className="e2-tmpl-name">{tmpl.name}</div>
+                          {tmpl.isCustom && <div className="e2-tmpl-custom-tag">PowerPoint</div>}
                           {tmpl.isDefault && <div className="e2-tmpl-default-tag">Mặc định</div>}
                         </div>
                       ))}
@@ -1392,7 +1457,7 @@ export default function EditorPage() {
                         {SLIDE_LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
                       </select>
                     </label>
-                    <InfoRow label="Template" value={TEMPLATES.find(t => t.id === templateId)?.name || templateId} />
+                    <InfoRow label="Template" value={activeTemplate?.name || templateId} />
                     <InfoRow label="Tiêu đề" value={activeSlide?.title || '—'} />
                     {activeSlide?.pedagogicalRole && (
                       <InfoRow

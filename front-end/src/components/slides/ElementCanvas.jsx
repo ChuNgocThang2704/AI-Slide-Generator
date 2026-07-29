@@ -517,6 +517,15 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
                 objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
               }}
             />
+          ) : element.type === 'shape' ? (
+            <div
+              className="canvas-shape"
+              style={{
+                background: element.fill || 'transparent',
+                borderColor: element.borderColor || 'transparent',
+                borderRadius: element.radius || 0,
+              }}
+            />
           ) : element.type === 'table' ? (
             <TableVisual
               table={element.data || slide.table}

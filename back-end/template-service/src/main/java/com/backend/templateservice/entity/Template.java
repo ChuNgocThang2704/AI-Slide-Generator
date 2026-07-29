@@ -43,6 +43,21 @@ public class Template extends AbstractAuditingEntity {
     @Column(name = "is_premium")
     private Boolean isPremium;
 
+    @Column(name = "source_type", length = 32)
+    private String sourceType;
+
+    @Column(name = "parse_status", length = 32)
+    private String parseStatus;
+
+    @Column(name = "primary_color", length = 16)
+    private String primaryColor;
+
+    @Column(name = "background_color", length = 16)
+    private String backgroundColor;
+
+    @Column(name = "manifest_json", columnDefinition = "LONGTEXT")
+    private String manifestJson;
+
     @ManyToOne
     @JoinColumn(name = "category_id")
     private Category category;

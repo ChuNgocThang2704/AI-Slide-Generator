@@ -249,6 +249,23 @@ export async function exportEditablePptx({ slides, theme = 'clean-white', fileNa
         addEditableTable(pptxSlide, element, sourceSlide, activeTheme);
       } else if (element.type === 'chart') {
         addEditableChart(pptx, pptxSlide, element, sourceSlide, activeTheme);
+      } else if (element.type === 'shape') {
+        pptxSlide.addShape(pptx.ShapeType.rect, {
+          x: toInches(element.x),
+          y: toInches(element.y),
+          w: Math.max(0.01, toInches(element.width)),
+          h: Math.max(0.01, toInches(element.height)),
+          rotate: Number(element.rotation) || 0,
+          line: {
+            color: cleanColor(element.borderColor, cleanColor(element.fill, activeTheme.bg)),
+            transparency: element.borderColor === 'transparent' ? 100 : 0,
+            pt: 0.5,
+          },
+          fill: {
+            color: cleanColor(element.fill, activeTheme.bg),
+            transparency: element.fill === 'transparent' ? 100 : 0,
+          },
+        });
       }
     }
 

@@ -557,6 +557,7 @@ body.editor-panel-resizing * { cursor: col-resize !important; }
 }
 .e2-tmpl-card:hover   { border-color:rgba(108,99,255,0.35); transform:translateY(-2px); }
 .e2-tmpl-card.selected { border-color:#6c63ff; box-shadow:0 0 0 2px rgba(108,99,255,0.25); }
+.e2-tmpl-card.disabled { opacity:.55; pointer-events:none; }
 
 .e2-tmpl-check {
   position:absolute; top:6px; right:6px;
@@ -592,6 +593,13 @@ body.editor-panel-resizing * { cursor: col-resize !important; }
   font-size:7px; font-weight:700;
   padding:2px 6px; border-radius:999px;
   background:rgba(108,99,255,0.8); color:white; z-index:2;
+}
+
+.e2-tmpl-custom-tag {
+  position:absolute; top:5px; left:5px;
+  font-size:7px; font-weight:700;
+  padding:2px 6px; border-radius:4px;
+  background:rgba(15,23,42,.82); color:#fff; z-index:2;
 }
 
 /* Info panel */

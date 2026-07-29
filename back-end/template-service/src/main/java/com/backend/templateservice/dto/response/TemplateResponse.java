@@ -21,6 +21,10 @@ public class TemplateResponse {
     private String s3Url;
     private Integer numSlides;
     private Boolean isPremium;
+    private String sourceType;
+    private String parseStatus;
+    private String primaryColor;
+    private String backgroundColor;
     private CategoryResponse category;
     private Instant createdAt;
     private Instant updatedAt;

@@ -1,7 +1,10 @@
 package com.backend.templateservice.service;
 
+import com.backend.templateservice.dto.manifest.TemplateManifest;
+import com.backend.templateservice.dto.request.TemplateMatchRequest;
 import com.backend.templateservice.dto.request.TemplateRequest;
 import com.backend.templateservice.dto.response.PageResponse;
+import com.backend.templateservice.dto.response.TemplateMatchResponse;
 import com.backend.templateservice.dto.response.TemplateResponse;
 import com.backend.templateservice.entity.Category;
 import com.backend.templateservice.entity.Template;
@@ -10,6 +13,8 @@ import com.backend.templateservice.exception.ErrorCode;
 import com.backend.templateservice.mapper.TemplateMapper;
 import com.backend.templateservice.repository.CategoryRepository;
 import com.backend.templateservice.repository.TemplateRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -34,12 +39,15 @@ public class TemplateService {
     private final TemplateRepository templateRepository;
     private final CategoryRepository categoryRepository;
     private final S3Service s3Service;
+    private final PowerPointTemplateParser templateParser;
+    private final TemplateLayoutMatcher layoutMatcher;
+    private final ObjectMapper objectMapper;
 
     public Map<String, Object> uploadFileOnly(MultipartFile file) {
         log.info("[template-service] upload file lên S3: {}", file.getOriginalFilename());
         
         String originalFilename = file.getOriginalFilename();
-        if (originalFilename == null || !originalFilename.toLowerCase().endsWith(".pptx")) {
+        if (!isPowerPointTemplate(originalFilename)) {
             throw new CustomException(ErrorCode.INVALID_FILE_FORMAT);
         }
 
@@ -53,6 +61,51 @@ public class TemplateService {
         } catch (IOException e) {
             log.error("Failed to upload template file", e);
             throw new CustomException(ErrorCode.UNCATEGORIZED_EXCEPTION);
+        }
+    }
+
+    @Transactional
+    public TemplateResponse uploadCustomTemplate(MultipartFile file, String requestedName) {
+        String originalFilename = file.getOriginalFilename();
+        if (!isPowerPointTemplate(originalFilename)) {
+            throw new CustomException(ErrorCode.INVALID_FILE_FORMAT);
+        }
+
+        try {
+            TemplateManifest manifest = templateParser.parse(file.getBytes());
+            String url = s3Service.uploadFile(file, "templates/custom");
+            Template template = new Template();
+            template.setName(firstNonBlank(requestedName, stripExtension(originalFilename), "Custom template"));
+            template.setDescription("Uploaded PowerPoint template");
+            template.setS3Url(url);
+            template.setNumSlides(manifest.getLayouts().size());
+            template.setIsPremium(false);
+            template.setSourceType("CUSTOM_PPTX");
+            template.setParseStatus("READY");
+            template.setPrimaryColor(manifest.getTheme().getPrimaryColor());
+            template.setBackgroundColor(manifest.getTheme().getBackgroundColor());
+            template.setManifestJson(objectMapper.writeValueAsString(manifest));
+            return TemplateMapper.toResponse(templateRepository.save(template));
+        } catch (CustomException exception) {
+            throw exception;
+        } catch (IOException | RuntimeException exception) {
+            log.error("Failed to parse or upload custom template", exception);
+            throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
+        }
+    }
+
+    public TemplateMatchResponse matchLayout(UUID id, TemplateMatchRequest request) {
+        Template template = templateRepository.findById(id)
+                .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+        if (template.getManifestJson() == null || template.getManifestJson().isBlank()) {
+            throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
+        }
+        try {
+            TemplateManifest manifest = objectMapper.readValue(template.getManifestJson(), TemplateManifest.class);
+            return layoutMatcher.match(manifest, request);
+        } catch (JsonProcessingException exception) {
+            log.error("Cannot read template manifest {}", id, exception);
+            throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
         }
     }
 
@@ -129,5 +182,24 @@ public class TemplateService {
                         .map(TemplateMapper::toResponse)
                         .collect(Collectors.toList()))
                 .build();
+    }
+
+    private boolean isPowerPointTemplate(String filename) {
+        if (filename == null) return false;
+        String lower = filename.toLowerCase();
+        return lower.endsWith(".pptx") || lower.endsWith(".potx");
+    }
+
+    private String stripExtension(String filename) {
+        if (filename == null) return null;
+        int separator = filename.lastIndexOf('.');
+        return separator > 0 ? filename.substring(0, separator) : filename;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value.trim();
+        }
+        return null;
     }
 }
