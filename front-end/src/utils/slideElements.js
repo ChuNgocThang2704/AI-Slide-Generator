@@ -26,6 +26,29 @@ const isVietnameseSlide = (slide) => {
   return /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i.test(text)
     || /\b(bài giảng|tổng kết|mục tiêu|nội dung|cảm ơn)\b/i.test(text);
 };
+
+const contentTextMetrics = (slide) => {
+  const bullets = Array.isArray(slide?.bullets) ? slide.bullets.filter(Boolean) : [];
+  const totalChars = bullets.reduce((sum, item) => sum + String(item).trim().length, 0);
+  const estimatedLines = bullets.reduce(
+    (sum, item) => sum + Math.max(1, Math.ceil(String(item).trim().length / 72)),
+    0,
+  );
+  const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
+
+  if (hasVisual) return { fontSize: 16.5, lineHeight: 1.55, x: 64, width: slide?.imageUrl ? 430 : 832 };
+  if (estimatedLines <= 4 && totalChars <= 260) {
+    return { fontSize: 23, lineHeight: 1.65, x: 92, width: 776 };
+  }
+  if (estimatedLines <= 7 && totalChars <= 480) {
+    return { fontSize: 20.5, lineHeight: 1.6, x: 76, width: 808 };
+  }
+  if (estimatedLines <= 10 && totalChars <= 700) {
+    return { fontSize: 18.5, lineHeight: 1.55, x: 64, width: 832 };
+  }
+  return { fontSize: 16.5, lineHeight: 1.5, x: 64, width: 832 };
+};
+
 export function createElementsFromSlide(slide, theme = 'clean-white') {
   if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
@@ -105,16 +128,29 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     return elements;
   }
 
-  elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 58, {
-    fontFamily: colors.title, fontSize: 34, color: colors.text, fontWeight: 700, lineHeight: 1.2,
+  const contentMetrics = contentTextMetrics(slide);
+  const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
+  elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 66, {
+    fontFamily: colors.title, fontSize: hasVisual ? 34 : 37, color: colors.text, fontWeight: 700, lineHeight: 1.2,
   }));
 
   const body = Array.isArray(slide?.bullets) && slide.bullets.length
     ? `<ul>${slide.bullets.map((item) => `<li>${item}</li>`).join('')}</ul>`
     : slide?.text || slide?.subtitle || slide?.richText?.bullets || slide?.richText?.text || '';
-  if (body && !slide?.table && !slide?.chart) elements.push(textElement('body', body, 64, 112, slide?.imageUrl ? 430 : 832, 350, {
-    fontFamily: colors.body, fontSize: 16.5, color: colors.sub, lineHeight: 1.55,
-  }));
+  if (body && !slide?.table && !slide?.chart) elements.push(textElement(
+    'body',
+    body,
+    contentMetrics.x,
+    126,
+    contentMetrics.width,
+    344,
+    {
+      fontFamily: colors.body,
+      fontSize: contentMetrics.fontSize,
+      color: colors.sub,
+      lineHeight: contentMetrics.lineHeight,
+    },
+  ));
   if (slide?.imageUrl) {
     elements.push({ id: id(), type: 'image', role: 'image', x: 540, y: 135, width: 350, height: 300, rotation: 0, src: slide.imageUrl });
   }

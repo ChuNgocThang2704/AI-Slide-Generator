@@ -13,16 +13,27 @@ export function parseBullets(page) {
 }
 
 export function backendLayoutToFrontend(page) {
+  const layout = String(page?.layout || '').toLowerCase();
+  const role = String(page?.pedagogicalRole || '').toLowerCase();
+  const title = String(page?.title || '').toLocaleLowerCase('vi');
+
+  // Boundary slides keep their dedicated composition even when they contain
+  // an optional visual or stale persisted editor metadata.
+  if (layout === 'title' || layout === 'intro') return 'title';
+  if (['thankyou', 'thank_you'].includes(layout)) return 'thankyou';
+  if (Number(page?.pageIndex) === 0 && !['table', 'chart'].includes(layout)) return 'title';
+  if (
+    role === 'summary'
+    && /(tổng kết|kết luận|hỏi đáp|cảm ơn|summary|conclusion|thank|q&a)/i.test(title)
+  ) return 'thankyou';
+
   if (page?.table) return 'table';
   if (page?.chart) return 'chart';
   if (page?.imageUrl) return 'imageText';
 
-  const layout = String(page?.layout || '').toLowerCase();
-  if (layout === 'title' || layout === 'intro') return 'title';
   if (['text_image', 'image_text', 'imagetext'].includes(layout)) return 'imageText';
   if (['twocolumn', 'two_column', 'split_columns'].includes(layout)) return 'twoColumn';
   if (['quote', 'big_quote'].includes(layout)) return 'quote';
-  if (['thankyou', 'thank_you'].includes(layout)) return 'thankyou';
   // Never render an empty visual frame when the structured payload is absent.
   if (layout === 'text_table') return page?.table ? 'table' : 'content';
   if (layout === 'text_chart') return page?.chart ? 'chart' : 'content';
@@ -66,7 +77,8 @@ function currentElements(page, bullets) {
   const titleElement = elements.find((element) => element?.type === 'text' && element?.role === 'title');
   const bodyElement = elements.find((element) => element?.type === 'text' && element?.role === 'body');
   const backendLayout = String(page?.layout || '').toLowerCase();
-  const isBoundarySlide = ['title', 'intro', 'thankyou', 'thank_you'].includes(backendLayout);
+  const frontendType = backendLayoutToFrontend(page);
+  const isBoundarySlide = frontendType === 'title' || frontendType === 'thankyou';
   const genericCanvasLayout = titleElement
     && titleElement.x === 64
     && [44, 48].includes(Number(titleElement.y))
