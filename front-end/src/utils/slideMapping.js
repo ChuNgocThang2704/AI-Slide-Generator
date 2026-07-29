@@ -197,10 +197,19 @@ export function formatSlidePage(page) {
 
 function hasCustomBoundaryCanvas(slide) {
   const elements = Array.isArray(slide?.elements) ? slide.elements : [];
+  const systemLabels = new Set([
+    'bài giảng',
+    'lecture',
+    'kết thúc bài giảng',
+    'end of lecture',
+  ]);
   return elements.some((element) => (
     element?.type !== 'text'
     || !['title', 'body', 'custom'].includes(element?.role)
-    || element?.role === 'custom'
+    || (
+      element?.role === 'custom'
+      && !systemLabels.has(normalizeElementText(element?.content))
+    )
   ));
 }
 

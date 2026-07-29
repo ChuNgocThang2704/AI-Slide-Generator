@@ -102,7 +102,7 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
       width: 720, height: 112, min: 30, max: 50, lineHeight: 1.15,
     });
     const closingBodySize = fitTextToBox(closingItems.join('\n'), {
-      width: 580, height: 132, min: 13, max: 22, lineHeight: 1.5, itemCount: closingItems.length,
+      width: 660, height: 168, min: 16, max: 24, lineHeight: 1.45, itemCount: closingItems.length,
     });
     elements.push(textElement('custom', isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE', 130, 112, 700, 34, {
       fontFamily: colors.body,
@@ -124,15 +124,15 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
       elements.push(textElement(
         'body',
         `<ul>${closingItems.map((item) => `<li>${item}</li>`).join('')}</ul>`,
-        190,
-        302,
-        580,
-        132,
+        150,
+        286,
+        660,
+        168,
         {
           fontFamily: colors.body,
           fontSize: closingBodySize,
           color: colors.sub,
-          lineHeight: 1.5,
+          lineHeight: 1.45,
           textAlign: 'left',
         },
       ));
