@@ -171,6 +171,120 @@ class DeckCoherenceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, deck)
         self.assertEqual(extractor.calls, 1)
 
+    async def test_lecture_without_teaching_support_converts_middle_slide(self):
+        deck = {
+            "title": "Database Indexes",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Explain how an index changes lookup cost."],
+            "slides": [
+                {
+                    "title": "Database Indexes",
+                    "layout": "intro",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Explain how an index changes lookup cost."],
+                },
+                {
+                    "title": "Index lookup",
+                    "layout": "text_only",
+                    "pedagogical_role": "concept",
+                    "bullets": ["An index narrows the records scanned for a matching key."],
+                },
+                {
+                    "title": "Summary",
+                    "layout": "thankyou",
+                    "pedagogical_role": "summary",
+                    "bullets": ["Indexes trade write cost for faster lookup."],
+                },
+            ],
+        }
+        extractor = FakeExtractor([
+            {
+                "score": 7,
+                "issues": [{
+                    "index": 1,
+                    "type": "missing_example",
+                    "severity": "medium",
+                    "instruction": "Convert this concept into a source-grounded knowledge check.",
+                }],
+            },
+            {
+                "slides": [{
+                    "index": 1,
+                    "title": "Check an index lookup",
+                    "bullets": [
+                        "Compare which records are scanned with and without the stated index.",
+                        "Explain why narrowing the scanned records changes lookup cost.",
+                    ],
+                    "notes": "Ask learners to justify the comparison from the source.",
+                    "pedagogical_role": "knowledge_check",
+                }],
+            },
+            {"score": 9, "issues": []},
+        ])
+        extractor._source_content = (
+            "An index narrows records scanned for a matching key, improving lookup "
+            "while adding storage and write maintenance cost."
+        )
+
+        result = await improve_deck_coherence(extractor, deck)
+
+        self.assertEqual(result["slides"][1]["pedagogical_role"], "knowledge_check")
+        profile_payload = json.loads(extractor.messages[0][1]["content"])
+        self.assertEqual(profile_payload["deck_profile"]["teaching_support_count"], 0)
+        self.assertEqual(extractor.calls, 3)
+
+    async def test_presentation_repairs_weak_support_without_forcing_lecture_role(self):
+        deck = {
+            "title": "Cloud Migration",
+            "presentation_mode": "presentation",
+            "slides": [
+                {
+                    "title": "Migration proposal",
+                    "layout": "intro",
+                    "bullets": ["Move the service to managed infrastructure."],
+                },
+                {
+                    "title": "Recommended approach",
+                    "layout": "text_only",
+                    "bullets": ["The managed platform is the best option."],
+                },
+            ],
+        }
+        extractor = FakeExtractor([
+            {
+                "score": 6,
+                "issues": [{
+                    "index": 1,
+                    "type": "insufficient_evidence",
+                    "severity": "high",
+                    "instruction": "Support the recommendation with the source-backed operational rationale.",
+                }],
+            },
+            {
+                "slides": [{
+                    "index": 1,
+                    "title": "Managed platform recommendation",
+                    "bullets": [
+                        "Managed backups remove the manual recovery step required by the current deployment.",
+                        "The recommendation addresses the documented recovery-time constraint without changing application scope.",
+                    ],
+                    "notes": "Connect the recommendation to the recovery requirement.",
+                    "pedagogical_role": "practice",
+                }],
+            },
+            {"score": 9, "issues": []},
+        ])
+        extractor._source_content = (
+            "The current deployment requires manual backups. The target recovery-time "
+            "requirement is supported by managed backups on the proposed platform."
+        )
+
+        result = await improve_deck_coherence(extractor, deck)
+
+        self.assertNotIn("pedagogical_role", result["slides"][1])
+        self.assertIn("Managed backups", result["slides"][1]["bullets"][0])
+        self.assertEqual(extractor.calls, 3)
+
     async def test_model_failure_returns_original_deck(self):
         deck = sample_deck()
         extractor = FakeExtractor(error=RuntimeError("provider unavailable"))

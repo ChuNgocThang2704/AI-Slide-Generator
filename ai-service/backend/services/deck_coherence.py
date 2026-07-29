@@ -24,6 +24,20 @@ _ALLOWED_ISSUES = {
     "missing_example",
     "objective_mismatch",
     "unsupported_claim",
+    "incomplete_coverage",
+    "weak_support",
+}
+_TEACHING_SUPPORT_ROLES = {
+    "worked_example",
+    "demonstration",
+    "practice",
+    "knowledge_check",
+}
+_ALLOWED_LECTURE_ROLES = {
+    "learning_objectives",
+    "concept",
+    *_TEACHING_SUPPORT_ROLES,
+    "summary",
 }
 _ISSUE_ALIASES = {
     "duplicate": "duplicate_content",
@@ -45,6 +59,11 @@ _ISSUE_ALIASES = {
     "missing_worked_example": "missing_example",
     "learning_objective_mismatch": "objective_mismatch",
     "unsupported_absolute": "unsupported_claim",
+    "missing_component": "incomplete_coverage",
+    "incomplete_list": "incomplete_coverage",
+    "partial_framework": "incomplete_coverage",
+    "insufficient_evidence": "weak_support",
+    "weak_evidence": "weak_support",
 }
 
 
@@ -71,6 +90,34 @@ def _slide_summary(slide: Dict[str, Any], index: int) -> Dict[str, Any]:
         "has_chart": isinstance(slide.get("chart"), dict),
         "has_image": bool(slide.get("image") or slide.get("image_url")),
         "pedagogical_role": str(slide.get("pedagogical_role") or ""),
+    }
+
+
+def _deck_profile(structured: Dict[str, Any]) -> Dict[str, Any]:
+    slides = [slide for slide in (structured.get("slides") or []) if isinstance(slide, dict)]
+    roles = [str(slide.get("pedagogical_role") or "").strip().lower() for slide in slides]
+    support_indices = [
+        index
+        for index, slide in enumerate(slides)
+        if str(slide.get("pedagogical_role") or "").strip().lower() in _TEACHING_SUPPORT_ROLES
+    ]
+    evidence_indices = [
+        index
+        for index, slide in enumerate(slides)
+        if (
+            isinstance(slide.get("table"), dict)
+            or isinstance(slide.get("chart"), dict)
+            or str(slide.get("pedagogical_role") or "").strip().lower()
+            in {"worked_example", "demonstration"}
+        )
+    ]
+    return {
+        "slide_count": len(slides),
+        "role_counts": {role: roles.count(role) for role in sorted(set(roles)) if role},
+        "teaching_support_indices": support_indices,
+        "teaching_support_count": len(support_indices),
+        "evidence_indices": evidence_indices,
+        "evidence_count": len(evidence_indices),
     }
 
 
@@ -111,6 +158,7 @@ async def _judge(
         "learning_objectives": structured.get("learning_objectives") or [],
         "user_instruction": str(getattr(content_extractor, "_user_instruction", "") or ""),
         "source_evidence": str(getattr(content_extractor, "_source_content", "") or "")[:12000],
+        "deck_profile": _deck_profile(structured),
         "slides": [_slide_summary(slide, idx) for idx, slide in enumerate(slides) if isinstance(slide, dict)],
     }
     messages = [
@@ -127,6 +175,15 @@ async def _judge(
                 "source-grounded worked example, demonstration, exact code/input-output trace, formula, or check. "
                 "Do not require these teaching devices in ordinary presentation mode; there, prioritize a clear "
                 "claim-evidence-conclusion narrative appropriate to the user's purpose. "
+                "Use deck_profile as a deterministic coverage signal. In lecture mode, if teaching_support_count is "
+                "zero, you MUST report missing_example and target a redundant or lower-priority middle slide for "
+                "conversion into a source-grounded worked example, demonstration, practice, or knowledge check. "
+                "In ordinary presentation mode, do not require a teaching activity, but flag a major conclusion or "
+                "recommendation with no concrete example, comparison, data, or source-backed rationale as weak_support. "
+                "For every mode, compare headings and declared frameworks, classifications, stages, rule sets, or "
+                "named lists with source_evidence. If a slide promises the whole set but omits a material component, "
+                "report incomplete_coverage. Judge semantic completeness in any domain; never rely on a hard-coded "
+                "topic, acronym, language, or expected list. "
                 "Learning-objective and summary slides are protected roles: never target either one to repair a "
                 "different missing lecture component. If practice or a knowledge check is missing, target a "
                 "redundant or lower-priority middle concept/example slide and explicitly instruct replacing it "
@@ -135,6 +192,7 @@ async def _judge(
                 "The type must be exactly one of: duplicate_content, off_topic, weak_progression, "
                 "missing_transition, contradiction, visual_mismatch, missing_requirement, factual_accuracy, "
                 "missing_example, objective_mismatch, unsupported_claim. "
+                "The remaining allowed types are incomplete_coverage and weak_support. "
                 "For a missing requirement, target the most redundant or lowest-priority slide that should be "
                 "replaced or adapted to satisfy it. A score below 8 must include at least one "
                 "high or medium issue with a concrete repair instruction. "
@@ -201,10 +259,15 @@ async def _refine(
                 "the target teachable with exact terminology and a concise worked example, code/input-output trace, "
                 "formula, process step, or knowledge check when requested by the issue. In presentation mode, preserve "
                 "the user's communication purpose and strengthen claim-to-evidence flow. Do not invent claims or numbers. "
+                "When repairing incomplete_coverage, restore every material missing component supported by the source "
+                "without padding the slide with unrelated detail. "
                 "Do not change slide count, "
                 "layout, table, chart, or image. Return complete replacement title, bullets, and notes only for targets. "
+                "In lecture mode you may also return pedagogical_role when the target is genuinely converted into a "
+                "worked_example, demonstration, practice, or knowledge_check. In presentation mode omit that field. "
                 "Use plain text, zero-based indices, and strict JSON: "
-                "{\"slides\":[{\"index\":number,\"title\":string,\"bullets\":[string],\"notes\":string}]}"
+                "{\"slides\":[{\"index\":number,\"title\":string,\"bullets\":[string],\"notes\":string,"
+                "\"pedagogical_role\":\"optional\"}]}"
             ),
         },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -236,6 +299,7 @@ async def _refine(
         title = str(item.get("title") or "").strip()
         bullets = item.get("bullets") or []
         notes = str(item.get("notes") or "").strip()
+        new_role = str(item.get("pedagogical_role") or "").strip().lower()
         if not title or not isinstance(bullets, list):
             continue
         clean_bullets = [str(value or "").strip() for value in bullets if str(value or "").strip()]
@@ -246,6 +310,11 @@ async def _refine(
         improved_slides[index]["bullets"] = clean_bullets[:8]
         if notes:
             improved_slides[index]["notes"] = notes
+        if (
+            str(improved.get("presentation_mode") or "").strip().lower() == "lecture"
+            and new_role in _ALLOWED_LECTURE_ROLES
+        ):
+            improved_slides[index]["pedagogical_role"] = new_role
         changed.append(index)
     return improved, sorted(set(changed))
 
