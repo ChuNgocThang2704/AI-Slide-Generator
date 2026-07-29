@@ -79,6 +79,22 @@ function currentElements(page, bullets) {
   const backendLayout = String(page?.layout || '').toLowerCase();
   const frontendType = backendLayoutToFrontend(page);
   const isBoundarySlide = frontendType === 'title' || frontendType === 'thankyou';
+  const isLegacyBoundaryTextCanvas = isBoundarySlide
+    && elements.length > 0
+    && elements.every((element) => (
+      element?.type === 'text'
+      && ['title', 'body'].includes(element?.role)
+    ))
+    && Number(titleElement?.style?.fontSize || 0) <= 40
+    && String(titleElement?.style?.textAlign || 'left') === 'left'
+    && (
+      !bodyElement
+      || (
+        Number(bodyElement?.style?.fontSize || 0) <= 22
+        && String(bodyElement?.style?.textAlign || 'left') === 'left'
+      )
+    );
+  if (isLegacyBoundaryTextCanvas) return [];
   const genericCanvasLayout = titleElement
     && titleElement.x === 64
     && [44, 48].includes(Number(titleElement.y))
