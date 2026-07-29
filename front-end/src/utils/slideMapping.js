@@ -195,6 +195,51 @@ export function formatSlidePage(page) {
   };
 }
 
+function hasCustomBoundaryCanvas(slide) {
+  const elements = Array.isArray(slide?.elements) ? slide.elements : [];
+  return elements.some((element) => (
+    element?.type !== 'text'
+    || !['title', 'body', 'custom'].includes(element?.role)
+    || element?.role === 'custom'
+  ));
+}
+
+export function formatSlideDeck(pages) {
+  const source = Array.isArray(pages) ? pages : [];
+  const slides = source.map(formatSlidePage);
+  if (!slides.length) return slides;
+
+  const first = slides[0];
+  slides[0] = {
+    ...first,
+    type: 'title',
+    elements: hasCustomBoundaryCanvas(first) ? first.elements : [],
+  };
+
+  if (slides.length > 1) {
+    const lastIndex = slides.length - 1;
+    const rawLast = source[lastIndex] || {};
+    const last = slides[lastIndex];
+    const rawLayout = String(rawLast.layout || '').toLowerCase();
+    const rawRole = String(rawLast.pedagogicalRole || '').toLowerCase();
+    const closingTitle = String(rawLast.title || last.title || '').toLocaleLowerCase('vi');
+    const isClosing = ['thankyou', 'thank_you'].includes(rawLayout)
+      || (
+        rawRole === 'summary'
+        && /(tổng kết|kết luận|hỏi đáp|cảm ơn|summary|conclusion|thank|q&a)/i.test(closingTitle)
+      );
+    if (isClosing) {
+      slides[lastIndex] = {
+        ...last,
+        type: 'thankyou',
+        elements: hasCustomBoundaryCanvas(last) ? last.elements : [],
+      };
+    }
+  }
+
+  return slides;
+}
+
 export function toSlidePageUpdate(slide) {
   const elementTitle = slide.elements?.find((element) => element.role === 'title' && element.type === 'text');
   const elementBody = slide.elements?.find((element) => element.role === 'body' && element.type === 'text');

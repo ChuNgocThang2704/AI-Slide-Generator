@@ -4,7 +4,7 @@ import { useProjectStore, useUIStore } from '../../store';
 import ElementCanvas from '../../components/slides/ElementCanvas';
 import { projectService } from '../../services/documentService';
 import { exportSlidesToPptx } from '../../services/pptxExportService';
-import { formatSlidePage, toSlidePageUpdate } from '../../utils/slideMapping';
+import { formatSlideDeck, toSlidePageUpdate } from '../../utils/slideMapping';
 import {
   ChevronLeft, ChevronRight, Download, ArrowLeft,
   LayoutTemplate, Check, Loader2, Maximize2, Minimize2,
@@ -179,7 +179,7 @@ export default function EditorPage() {
         setProjects([project, ...projects.filter((item) => item.id !== project.id)]);
         const pages = await projectService.getSlidePages(id);
         if (pages && pages.length > 0) {
-          const formattedSlides = pages.map(formatSlidePage);
+          const formattedSlides = formatSlideDeck(pages);
           slidesRef.current = formattedSlides;
           undoStackRef.current = [];
           redoStackRef.current = [];
@@ -288,7 +288,7 @@ export default function EditorPage() {
         if (done) {
           const pages = await projectService.getSlidePages(id);
           if (disposed || !Array.isArray(pages) || !pages.length) return;
-          const formattedSlides = pages.map(formatSlidePage);
+          const formattedSlides = formatSlideDeck(pages);
           slidesRef.current = formattedSlides;
           setSlides(formattedSlides);
           setSelectedSlideIndexes(new Set([0]));
@@ -717,7 +717,7 @@ export default function EditorPage() {
             // Fetch pages again
             const pages = await projectService.getSlidePages(id);
             if (pages && pages.length > 0) {
-              const formattedSlides = pages.map(formatSlidePage);
+              const formattedSlides = formatSlideDeck(pages);
 
               slidesRef.current = formattedSlides;
               undoStackRef.current = [];

@@ -6,6 +6,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { TiptapInlineEditor } from './TiptapEditor';
+import { fitTextToBox } from '../../utils/textFit';
 
 const COLORS = ['#14b8a6', '#6366f1', '#f59e0b', '#ec4899', '#22c55e', '#38bdf8', '#f97316', '#a855f7'];
 
@@ -167,14 +168,17 @@ export function TableVisual({ table, theme, onChange, onInteract }) {
   const selectingRef = useRef(false);
   const visibleRows = rows.slice(0, 8);
   const density = Math.max(headers.length, rows.length);
-  const totalChars = [...headers, ...rows.flat()].reduce((sum, value) => sum + String(value ?? '').length, 0);
-  const tableFontSize = totalChars > 1100
-    ? 8
-    : totalChars > 760 || density >= 8 || headers.length >= 6
-      ? 9
-      : totalChars > 480 || density >= 6
-        ? 10.5
-        : 13;
+  const visibleCells = [...headers, ...visibleRows.flat()].map((value) => String(value ?? ''));
+  const cellWidth = Math.max(72, 810 / Math.max(1, headers.length));
+  const cellHeight = Math.max(30, 330 / Math.max(2, visibleRows.length + 1));
+  const tableFontSize = Math.min(15, ...visibleCells.map((value) => fitTextToBox(value, {
+    width: cellWidth,
+    height: cellHeight,
+    min: 7.5,
+    max: density <= 4 ? 15 : 13,
+    lineHeight: 1.3,
+    padding: 10,
+  })));
   const visibleRowWeights = rowHeights.length === rows.length + 1
     ? rowHeights.slice(0, visibleRows.length + 1).map((value) => Math.max(28, Number(value) || 28))
     : Array.from({ length: visibleRows.length + 1 }, () => 1);
@@ -594,8 +598,15 @@ export function ChartVisual({ chart, theme, onChange }) {
           : type;
   const allValues = series.flatMap((item) => item.values);
   const unit = chart?.unit ? ` ${chart.unit}` : '';
-  const labelChars = labels.reduce((sum, label) => sum + String(label).length, 0);
-  const chartFontSize = labels.length > 8 || labelChars > 130 ? 8 : labels.length > 6 || labelChars > 90 ? 9 : 11;
+  const labelWidth = Math.max(54, 720 / Math.max(1, labels.length));
+  const chartFontSize = Math.min(14, ...labels.map((label) => fitTextToBox(label, {
+    width: labelWidth,
+    height: 44,
+    min: 8,
+    max: labels.length <= 5 ? 14 : 12,
+    lineHeight: 1.15,
+    padding: 2,
+  })));
   const saveChart = (nextLabels, nextSeries) => {
     const nextChart = { ...chart, series: nextSeries };
     if (Array.isArray(chart?.categories) && !Array.isArray(chart?.labels)) {
