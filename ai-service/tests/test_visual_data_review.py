@@ -30,6 +30,10 @@ class FakeExtractor:
         return self.repaired
 
 
+class NoReviewerExtractor:
+    pass
+
+
 class VisualDataReviewTest(unittest.IsolatedAsyncioTestCase):
     async def test_drops_later_identical_visual_spec(self):
         extractor = FakeExtractor(None, review_pass=True)
@@ -128,6 +132,73 @@ class VisualDataReviewTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn(0, reviewed)
         self.assertEqual(debug[0]["status"], "gemini_rejected")
+
+    async def test_repairs_complete_table_attached_to_wrong_slide_subject(self):
+        extractor = FakeExtractor({
+            "title": "Programming errors",
+            "headers": ["Error type", "Description", "Example"],
+            "rows": [
+                ["Syntax error", "Invalid program grammar", "1 = x"],
+                ["Runtime error", "Fails while executing", "10 / 0"],
+                ["Semantic error", "Runs with the wrong result", "Wrong formula"],
+            ],
+        }, review_pass=True)
+        structured = {"slides": [{
+            "title": "Types of programming errors",
+            "bullets": [
+                "Syntax errors prevent parsing.",
+                "Runtime errors fail during execution.",
+                "Semantic errors produce an unintended result.",
+            ],
+        }]}
+        specs = {0: {
+            "title": "Operator precedence",
+            "headers": ["Operator", "Priority", "Example"],
+            "rows": [
+                ["Parentheses", "Highest", "(1 + 1) * 3"],
+                ["Exponentiation", "High", "2 ** 3"],
+            ],
+        }}
+        records = [{"slide_index": 0, "status": "created", "source": "inline_json", "spec": specs[0]}]
+
+        reviewed, debug = await review_visual_data_specs(
+            extractor,
+            structured,
+            specs,
+            records,
+            kind="table",
+            raw_content=(
+                "The lesson covers operator precedence first, then syntax errors, "
+                "runtime errors, and semantic errors."
+            ),
+        )
+
+        self.assertEqual(reviewed[0]["headers"][0], "Error type")
+        self.assertEqual(debug[0]["status"], "repaired_after_review")
+        self.assertEqual(extractor.repair_calls, 1)
+
+    async def test_drops_wrong_subject_table_when_reviewer_is_unavailable(self):
+        structured = {"slides": [{
+            "title": "Types of programming errors",
+            "bullets": ["Syntax, runtime, and semantic errors have different causes."],
+        }]}
+        specs = {0: {
+            "headers": ["Operator", "Priority"],
+            "rows": [["Parentheses", "Highest"], ["Exponentiation", "High"]],
+        }}
+        records = [{"slide_index": 0, "status": "created", "source": "inline_json", "spec": specs[0]}]
+
+        reviewed, debug = await review_visual_data_specs(
+            NoReviewerExtractor(),
+            structured,
+            specs,
+            records,
+            kind="table",
+            raw_content="",
+        )
+
+        self.assertNotIn(0, reviewed)
+        self.assertEqual(debug[0]["status"], "semantic_mismatch_rejected")
 
 
 if __name__ == "__main__":

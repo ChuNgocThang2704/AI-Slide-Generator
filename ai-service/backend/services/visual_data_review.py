@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.content.json_utils import parse_json_response
@@ -21,6 +22,13 @@ _EXPLICIT_TABLE_SCHEMA_RE = re.compile(
     r"(?:\b(?:columns?|headers?|rows?)\b|\b(?:c[oộ]t|h[aà]ng|ti[eê]u\s*ch[ií])\b)",
     re.IGNORECASE,
 )
+_GENERIC_SEMANTIC_TOKENS = {
+    "and", "the", "for", "with", "from", "into", "this", "that",
+    "va", "voi", "cho", "cua", "cac", "nhung", "trong", "mot",
+    "table", "bang", "data", "du", "lieu", "description", "mo", "ta",
+    "example", "examples", "vi", "du", "value", "values", "gia", "tri",
+    "criterion", "criteria", "tieu", "chi", "category", "categories",
+}
 
 
 def _clean_json_text(text: str) -> str:
@@ -39,6 +47,48 @@ def _slide_text(slide: Dict[str, Any], max_chars: int = 900) -> str:
     else:
         parts = [str(x) for x in bullets if str(x).strip()]
     return "\n".join([title] + parts)[:max_chars]
+
+
+def _semantic_tokens(value: Any) -> set[str]:
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        "".join(
+            ch
+            for ch in unicodedata.normalize("NFKD", str(value or "").lower())
+            if not unicodedata.combining(ch)
+        ).replace("đ", "d"),
+    )
+    return {
+        token
+        for token in normalized.split()
+        if len(token) >= 3 and token not in _GENERIC_SEMANTIC_TOKENS
+    }
+
+
+def _table_semantic_alignment(spec: Any, slide_text: str) -> Dict[str, Any]:
+    if not isinstance(spec, dict):
+        return {"overlap": [], "hard_mismatch": True}
+    anchors: List[str] = [
+        str(spec.get("title") or ""),
+        *[str(value or "") for value in (spec.get("headers") or [])],
+    ]
+    for row in (spec.get("rows") or [])[:10]:
+        if isinstance(row, (list, tuple)) and row:
+            anchors.append(str(row[0] or ""))
+    slide_tokens = _semantic_tokens(slide_text)
+    anchor_tokens = _semantic_tokens(" ".join(anchors))
+    overlap = sorted(slide_tokens & anchor_tokens)
+    return {
+        "slide_tokens": sorted(slide_tokens)[:40],
+        "anchor_tokens": sorted(anchor_tokens)[:40],
+        "overlap": overlap[:20],
+        "hard_mismatch": bool(
+            len(slide_tokens) >= 2
+            and len(anchor_tokens) >= 2
+            and not overlap
+        ),
+    }
 
 
 def _reviewable_records(
@@ -66,6 +116,10 @@ def _reviewable_records(
                 "slide_text": _slide_text(slide),
                 "spec": specs[idx_raw],
                 "match_score": rec.get("match_score"),
+                "semantic_alignment": _table_semantic_alignment(
+                    specs[idx_raw],
+                    _slide_text(slide),
+                ),
             }
         )
         if len(records) >= max(1, VISUAL_DATA_REVIEW_MAX_CANDIDATES):
@@ -143,6 +197,36 @@ def _remove_duplicate_specs(
     return filtered
 
 
+def _drop_hard_local_mismatches(
+    specs: Dict[int, Dict[str, Any]],
+    debug_records: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
+    *,
+    kind: str,
+) -> Dict[int, Dict[str, Any]]:
+    if kind != "table":
+        return specs
+    filtered = dict(specs)
+    mismatches = {
+        int(candidate["slide_index"]): candidate.get("semantic_alignment") or {}
+        for candidate in candidates
+        if (candidate.get("semantic_alignment") or {}).get("hard_mismatch")
+    }
+    if not mismatches:
+        return filtered
+    for index, alignment in mismatches.items():
+        filtered.pop(index, None)
+        for record in debug_records:
+            if record.get("slide_index") != index:
+                continue
+            record["status"] = "semantic_mismatch_rejected"
+            record["reject_reason"] = (
+                "Table subject does not match its slide; "
+                f"shared anchors={alignment.get('overlap') or []}"
+            )
+    return filtered
+
+
 async def _repair_rejected_table(
     content_extractor,
     candidate: Dict[str, Any],
@@ -158,7 +242,10 @@ async def _repair_rejected_table(
         },
         "context": (
             "Repair the table so it fully follows the user's requested schema and contains no empty cells. "
-            "Return the complete final table, not a delta. Preserve supported facts and do not invent numeric data.\n\n"
+            "Return the complete final table, not a delta. Preserve supported facts and do not invent numeric data. "
+            "The repaired table must explain the local slide title and bullets below; do not reuse a table merely "
+            "because its data appears elsewhere in the source or deck. Every domain-specific header and row category "
+            "must be semantically relevant to this slide.\n\n"
             f"User input:\n{str(raw_content or '')[:6500]}\n\n"
             f"Current table:\n{json.dumps(candidate.get('spec') or {}, ensure_ascii=False)}\n\n"
             f"QA rejection reason:\n{decision.get('reason') or 'Incomplete table'}"
@@ -169,7 +256,13 @@ async def _repair_rejected_table(
         from services.slide_tables import normalize_table_spec
 
         repaired = normalize_table_spec(repaired_raw)
-        return repaired if _is_complete_table(repaired) else None
+        if not _is_complete_table(repaired):
+            return None
+        alignment = _table_semantic_alignment(
+            repaired,
+            str(candidate.get("slide_text") or ""),
+        )
+        return None if alignment.get("hard_mismatch") else repaired
     except Exception as error:
         print(f"[visual_data_review] table repair failed: {error}")
         return None
@@ -190,14 +283,22 @@ async def review_visual_data_specs(
     specs = _remove_duplicate_specs(specs, debug_records)
     if not specs:
         return specs, debug_records
-    if not hasattr(content_extractor, "_llm_completion_plain_text"):
-        return specs, debug_records
 
     candidates = _reviewable_records(structured, specs, debug_records)
     if not candidates:
         return specs, debug_records
 
     kind_norm = "chart" if str(kind).lower() == "chart" else "table"
+    if not hasattr(content_extractor, "_llm_completion_plain_text"):
+        return (
+            _drop_hard_local_mismatches(
+                specs,
+                debug_records,
+                candidates,
+                kind=kind_norm,
+            ),
+            debug_records,
+        )
     if kind_norm == "chart":
         review_rule = (
             "PASS only if the chart spec is supported by explicit numeric data in the raw input or slide, "
@@ -209,7 +310,10 @@ async def review_visual_data_specs(
             "PASS only if the table spec is supported by an explicit markdown/grid table or repeated structured "
             "key-value/comparison data. An explicit user request for a table with named columns or rows counts as table intent; "
             "PASS when the returned schema follows that request and every cell is supported by the request or slide text. "
-            "Reject generic two-column prose conversions, empty cells, and history/theory paragraphs with no table intent."
+            "The table title, headers, and row categories must describe the SAME subject as that candidate's slide_text; "
+            "evidence elsewhere in the deck or raw input cannot justify attaching a different table to this slide. "
+            "Reject generic two-column prose conversions, empty cells, history/theory paragraphs with no table intent, "
+            "and any candidate whose semantic_alignment reports hard_mismatch=true."
         )
 
     payload = {
@@ -243,10 +347,26 @@ async def review_visual_data_specs(
         decisions = _decision_map(parse_json_response(raw, clean_result_text=_clean_json_text))
     except Exception as e:
         print(f"[visual_data_review] {kind_norm} review failed: {e}")
-        return specs, debug_records
+        return (
+            _drop_hard_local_mismatches(
+                specs,
+                debug_records,
+                candidates,
+                kind=kind_norm,
+            ),
+            debug_records,
+        )
 
     if not decisions:
-        return specs, debug_records
+        return (
+            _drop_hard_local_mismatches(
+                specs,
+                debug_records,
+                candidates,
+                kind=kind_norm,
+            ),
+            debug_records,
+        )
 
     filtered = dict(specs)
     candidates_by_index = {item["slide_index"]: item for item in candidates}
@@ -257,6 +377,17 @@ async def review_visual_data_specs(
             continue
         decision = decisions[idx]
         if kind_norm == "table":
+            candidate = candidates_by_index.get(idx) or {}
+            alignment = candidate.get("semantic_alignment") or {}
+            if alignment.get("hard_mismatch"):
+                decision = {
+                    "pass": False,
+                    "confidence": 1.0,
+                    "reason": (
+                        "Table headers and row categories do not match the local slide subject "
+                        f"(shared anchors: {alignment.get('overlap') or []})"
+                    ),
+                }
             if decision.get("pass") and explicit_table_schema:
                 repaired = await _repair_rejected_table(
                     content_extractor,
