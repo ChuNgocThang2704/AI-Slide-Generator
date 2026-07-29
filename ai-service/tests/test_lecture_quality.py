@@ -40,6 +40,12 @@ class LectureQualityTests(unittest.TestCase):
             )
         )
 
+    def test_lecture_contract_requires_grounded_technical_examples(self):
+        contract = lecture_prompt_block()
+        self.assertIn("concrete, source-grounded example", contract)
+        self.assertIn("valid code", contract)
+        self.assertIn("unsupported absolutes", contract)
+
     def test_vietnamese_lecture_request_in_source_enables_mode(self):
         self.assertTrue(
             detect_lecture_mode(

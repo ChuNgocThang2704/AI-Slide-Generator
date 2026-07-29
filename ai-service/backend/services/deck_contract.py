@@ -89,13 +89,16 @@ async def finalize_deck_for_visuals(
         task_id=task_id,
         source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
     )
+    # Coherence review needs the reliable mode, roles, objectives and source
+    # provenance supplied by lecture enrichment. Running it afterwards also
+    # lets the judge repair a weak concept/example sequence selectively.
+    deck = enrich_lecture_deck(deck, raw_content or "", user_instruction or "")
     deck = enforce_plan_slide_limit(deck, plan)
     deck = await improve_deck_coherence(
         content_extractor,
         deck,
         task_id=task_id,
     )
-    deck = enrich_lecture_deck(deck, raw_content or "", user_instruction or "")
 
     desired_count = int(target_slides) if target_slides else original_count
     desired_count = max(2, min(desired_count, len(deck.get("slides") or []) or desired_count))

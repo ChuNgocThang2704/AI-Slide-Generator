@@ -10,6 +10,7 @@ from services.content.json_utils import parse_json_response
 
 _ENABLED = os.getenv("DECK_COHERENCE_JUDGE_ENABLE", "true").lower() in ("1", "true", "yes")
 _MAX_REFINES = max(0, int(os.getenv("DECK_COHERENCE_MAX_REFINES", "3")))
+_VALIDATE_REFINES = os.getenv("DECK_COHERENCE_VALIDATE_REFINES", "true").lower() in ("1", "true", "yes")
 _DEBUG_DIR = Path("outputs") / "debug"
 _ALLOWED_ISSUES = {
     "duplicate_content",
@@ -19,6 +20,10 @@ _ALLOWED_ISSUES = {
     "contradiction",
     "visual_mismatch",
     "missing_requirement",
+    "factual_accuracy",
+    "missing_example",
+    "objective_mismatch",
+    "unsupported_claim",
 }
 _ISSUE_ALIASES = {
     "duplicate": "duplicate_content",
@@ -33,6 +38,13 @@ _ISSUE_ALIASES = {
     "visual_inconsistency": "visual_mismatch",
     "missing_user_requirement": "missing_requirement",
     "missing_requested_content": "missing_requirement",
+    "factual_error": "factual_accuracy",
+    "incorrect_fact": "factual_accuracy",
+    "inaccurate": "factual_accuracy",
+    "weak_example": "missing_example",
+    "missing_worked_example": "missing_example",
+    "learning_objective_mismatch": "objective_mismatch",
+    "unsupported_absolute": "unsupported_claim",
 }
 
 
@@ -96,7 +108,9 @@ async def _judge(
     payload = {
         "deck_title": str(structured.get("title") or ""),
         "presentation_mode": str(structured.get("presentation_mode") or "presentation"),
+        "learning_objectives": structured.get("learning_objectives") or [],
         "user_instruction": str(getattr(content_extractor, "_user_instruction", "") or ""),
+        "source_evidence": str(getattr(content_extractor, "_source_content", "") or "")[:12000],
         "slides": [_slide_summary(slide, idx) for idx, slide in enumerate(slides) if isinstance(slide, dict)],
     }
     messages = [
@@ -106,15 +120,21 @@ async def _judge(
                 "You are a presentation deck coherence judge. Evaluate the deck as one narrative. "
                 "Report only material issues: duplicated ideas, off-topic slides, contradictions, weak progression, "
                 "missing transitions, omitted explicit user requirements, or a table/chart/image layout that does "
-                "not support the slide claim. Treat the explicit user instruction as mandatory. In lecture mode, "
-                "verify requested objectives, examples, practice/knowledge checks, and summary are actually present. "
+                "not support the slide claim. Compare factual and technical claims against source_evidence when it "
+                "is available; flag incorrect statements, lost exceptions, unsupported absolutes, and invented facts. "
+                "Treat the explicit user instruction as mandatory. In lecture mode, verify that concepts follow "
+                "prerequisite order, learning objectives are fulfilled, and abstract or technical concepts have a "
+                "source-grounded worked example, demonstration, exact code/input-output trace, formula, or check. "
+                "Do not require these teaching devices in ordinary presentation mode; there, prioritize a clear "
+                "claim-evidence-conclusion narrative appropriate to the user's purpose. "
                 "Learning-objective and summary slides are protected roles: never target either one to repair a "
                 "different missing lecture component. If practice or a knowledge check is missing, target a "
                 "redundant or lower-priority middle concept/example slide and explicitly instruct replacing it "
                 "with a source-grounded activity. Do not propose adding a new slide when slide count is fixed. "
                 "Do not penalize style preferences and do not invent facts. Use zero-based slide indices. "
                 "The type must be exactly one of: duplicate_content, off_topic, weak_progression, "
-                "missing_transition, contradiction, visual_mismatch, missing_requirement. "
+                "missing_transition, contradiction, visual_mismatch, missing_requirement, factual_accuracy, "
+                "missing_example, objective_mismatch, unsupported_claim. "
                 "For a missing requirement, target the most redundant or lowest-priority slide that should be "
                 "replaced or adapted to satisfy it. A score below 8 must include at least one "
                 "high or medium issue with a concrete repair instruction. "
@@ -166,7 +186,9 @@ async def _refine(
             targets.append({**_slide_summary(slides[index], index), "instruction": issue["instruction"]})
     payload = {
         "deck_title": str(structured.get("title") or ""),
+        "presentation_mode": str(structured.get("presentation_mode") or "presentation"),
         "deck_outline": [{"index": idx, "title": str(slide.get("title") or "")} for idx, slide in enumerate(slides) if isinstance(slide, dict)],
+        "source_evidence": str(getattr(content_extractor, "_source_content", "") or "")[:12000],
         "targets": targets,
     }
     messages = [
@@ -174,7 +196,12 @@ async def _refine(
             "role": "system",
             "content": (
                 "You refine only the listed presentation slides to resolve the supplied coherence instruction. "
-                "Preserve all facts, language, and meaning. Do not add claims or numbers. Do not change slide count, "
+                "Use source_evidence as the authority: correct inaccurate claims, retain exceptions and scope, and "
+                "add a concrete example only when it is directly supported by that evidence. In lecture mode, make "
+                "the target teachable with exact terminology and a concise worked example, code/input-output trace, "
+                "formula, process step, or knowledge check when requested by the issue. In presentation mode, preserve "
+                "the user's communication purpose and strengthen claim-to-evidence flow. Do not invent claims or numbers. "
+                "Do not change slide count, "
                 "layout, table, chart, or image. Return complete replacement title, bullets, and notes only for targets. "
                 "Use plain text, zero-based indices, and strict JSON: "
                 "{\"slides\":[{\"index\":number,\"title\":string,\"bullets\":[string],\"notes\":string}]}"
@@ -253,9 +280,36 @@ async def improve_deck_coherence(
     try:
         score, issues = await _judge(content_extractor, structured, allowed)
         improved, changed = await _refine(content_extractor, structured, issues)
-        report = {"score": score, "issues": issues, "refined_slide_indices": changed}
+        report: Dict[str, Any] = {
+            "score": score,
+            "issues": issues,
+            "refined_slide_indices": changed,
+        }
+        if _VALIDATE_REFINES and changed:
+            try:
+                validation_score, remaining = await _judge(
+                    content_extractor,
+                    improved,
+                    set(changed),
+                )
+                report["validation_score"] = validation_score
+                report["remaining_issues"] = remaining
+                if remaining:
+                    improved, second_changed = await _refine(
+                        content_extractor,
+                        improved,
+                        remaining,
+                    )
+                    report["second_refined_slide_indices"] = second_changed
+            except Exception as validation_error:
+                # Keep the first verified improvement if the optional validation
+                # call is unavailable; provider failure must not roll it back.
+                report["validation_error"] = str(validation_error)
         _write_report(task_id, report)
-        print(f"[deck_coherence] score={score:.1f} issues={len(issues)} refined={changed}")
+        print(
+            f"[deck_coherence] score={score:.1f} issues={len(issues)} "
+            f"refined={changed} validation={report.get('validation_score')}"
+        )
         return improved
     except Exception as error:
         _write_report(task_id, {"error": str(error), "issues": [], "refined_slide_indices": []})
