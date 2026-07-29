@@ -763,7 +763,7 @@
 .editable-slide-root[data-theme="royal-purple"] .es-imgtext .es-section-title {
   position: static !important;
   width: auto !important;
-  font-size: 34px !important;
+  font-size: var(--image-title-font-size, 34px) !important;
   font-weight: 700;
   line-height: 1.2;
 }
@@ -773,7 +773,7 @@
   position: static !important;
   width: auto !important;
   height: auto !important;
-  font-size: 16.5px !important;
+  font-size: var(--image-body-font-size, 16.5px) !important;
   line-height: 1.65 !important;
 }
 
@@ -830,12 +830,12 @@
 }
 
 .editable-slide-root .es-imgtext.density-dense .es-section-title {
-  font-size: 27px !important;
+  font-size: var(--image-title-font-size, 27px) !important;
   line-height: 1.12 !important;
 }
 
 .editable-slide-root .es-imgtext.density-dense .es-body-text {
-  font-size: 14.5px !important;
+  font-size: var(--image-body-font-size, 14.5px) !important;
   line-height: 1.45 !important;
   max-height: 350px;
   overflow: hidden;
@@ -855,12 +855,12 @@
 }
 
 .editable-slide-root .es-imgtext.density-extreme .es-section-title {
-  font-size: 25px !important;
+  font-size: var(--image-title-font-size, 25px) !important;
   line-height: 1.08 !important;
 }
 
 .editable-slide-root .es-imgtext.density-extreme .es-body-text {
-  font-size: 13.5px !important;
+  font-size: var(--image-body-font-size, 13.5px) !important;
   line-height: 1.35 !important;
   max-height: 390px;
   overflow: hidden;

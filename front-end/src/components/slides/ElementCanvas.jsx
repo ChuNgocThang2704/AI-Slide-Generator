@@ -8,6 +8,7 @@ import { ChartVisual, TableVisual } from './StructuredVisual';
 import { documentService } from '../../services/documentService';
 import AssetImage from './AssetImage';
 import { BgDecorations } from './SlideRenderer';
+import { fitTextToBox } from '../../utils/textFit';
 import './ElementCanvas.css';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -32,6 +33,28 @@ const cloneElement = (element) => ({
   y: clamp((element.y || 0) + 20, 0, 510),
   style: element.style ? { ...element.style } : undefined,
 });
+
+const adaptiveCanvasFontSize = (element) => {
+  const savedSize = Number(element?.style?.fontSize);
+  const content = String(element?.content || '');
+  if (/font-size\s*:/i.test(content)) return savedSize || (element?.role === 'title' ? 34 : 16);
+
+  const isTitle = element?.role === 'title';
+  const itemCount = Math.max(
+    1,
+    (content.match(/<li\b/gi) || []).length
+      || content.split(/<br\s*\/?>|\n/gi).filter(Boolean).length,
+  );
+  return fitTextToBox(content, {
+    width: Number(element?.width) || (isTitle ? 832 : 430),
+    height: Number(element?.height) || (isTitle ? 66 : 344),
+    min: isTitle ? 20 : 10,
+    max: isTitle ? 38 : 24,
+    lineHeight: Number(element?.style?.lineHeight) || (isTitle ? 1.2 : 1.5),
+    itemCount,
+    padding: isTitle ? 0 : 10,
+  });
+};
 
 export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNotify, readonly = false, preserveTemplate = false }) {
   const imageInputRef = useRef(null);
@@ -548,7 +571,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
               className="canvas-text"
               value={element.content}
               autoFit
-              autoFitBaseFontSize={Number(element.style?.fontSize) || (element.role === 'title' ? 34 : 16)}
+              autoFitBaseFontSize={adaptiveCanvasFontSize(element)}
               minFontSize={element.role === 'title' ? 12 : 8}
               selected={!readonly && selectedId === element.id && !element.locked}
               editable={!readonly && editingId === element.id}

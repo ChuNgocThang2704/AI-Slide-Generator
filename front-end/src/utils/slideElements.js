@@ -1,3 +1,5 @@
+import { fitTextToBox } from './textFit';
+
 const id = () => `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const THEME_TEXT = {
@@ -29,24 +31,20 @@ const isVietnameseSlide = (slide) => {
 
 const contentTextMetrics = (slide) => {
   const bullets = Array.isArray(slide?.bullets) ? slide.bullets.filter(Boolean) : [];
-  const totalChars = bullets.reduce((sum, item) => sum + String(item).trim().length, 0);
-  const estimatedLines = bullets.reduce(
-    (sum, item) => sum + Math.max(1, Math.ceil(String(item).trim().length / 72)),
-    0,
-  );
   const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
-
-  if (hasVisual) return { fontSize: 16.5, lineHeight: 1.55, x: 64, width: slide?.imageUrl ? 430 : 832 };
-  if (estimatedLines <= 4 && totalChars <= 260) {
-    return { fontSize: 23, lineHeight: 1.65, x: 92, width: 776 };
-  }
-  if (estimatedLines <= 7 && totalChars <= 480) {
-    return { fontSize: 20.5, lineHeight: 1.6, x: 76, width: 808 };
-  }
-  if (estimatedLines <= 10 && totalChars <= 700) {
-    return { fontSize: 18.5, lineHeight: 1.55, x: 64, width: 832 };
-  }
-  return { fontSize: 16.5, lineHeight: 1.5, x: 64, width: 832 };
+  const width = slide?.imageUrl ? 430 : 832;
+  const x = slide?.imageUrl ? 64 : bullets.length <= 4 ? 84 : 64;
+  const adjustedWidth = slide?.imageUrl ? width : bullets.length <= 4 ? 792 : width;
+  const lineHeight = bullets.length <= 4 ? 1.6 : 1.5;
+  const fontSize = fitTextToBox(bullets.join('\n'), {
+    width: adjustedWidth,
+    height: 344,
+    min: hasVisual ? 12 : 13,
+    max: hasVisual ? 22 : 24,
+    lineHeight,
+    itemCount: bullets.length,
+  });
+  return { fontSize, lineHeight, x, width: adjustedWidth };
 };
 
 export function createElementsFromSlide(slide, theme = 'clean-white') {
@@ -130,8 +128,16 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
 
   const contentMetrics = contentTextMetrics(slide);
   const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
+  const titleFontSize = fitTextToBox(slide?.title || slide?.richText?.title, {
+    width: 832,
+    height: 66,
+    min: 24,
+    max: hasVisual ? 34 : 38,
+    lineHeight: 1.2,
+    padding: 0,
+  });
   elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 66, {
-    fontFamily: colors.title, fontSize: hasVisual ? 34 : 37, color: colors.text, fontWeight: 700, lineHeight: 1.2,
+    fontFamily: colors.title, fontSize: titleFontSize, color: colors.text, fontWeight: 700, lineHeight: 1.2,
   }));
 
   const body = Array.isArray(slide?.bullets) && slide.bullets.length
