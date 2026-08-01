@@ -64,7 +64,6 @@ public class UserSubscriptionService {
                             .userId(userId)
                             .action(Constants.SUBSCRIPTION_ACTION.REGISTER)
                             .newPackageCode(Constants.PACKAGE_CODE.FREE)
-                            .note("Auto-provisioned on query fallback")
                             .build();
                     historyRepository.save(history);
 

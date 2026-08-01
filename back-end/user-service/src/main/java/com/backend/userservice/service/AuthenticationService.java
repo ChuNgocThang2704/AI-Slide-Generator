@@ -169,19 +169,11 @@ public class AuthenticationService {
 
         String jwtId = signedJWT.getJWTClaimsSet().getJWTID();
         String userId = signedJWT.getJWTClaimsSet().getSubject();
-        if (Boolean.TRUE.equals(redisTemplate.hasKey(TOKEN_BLACKLIST_PREFIX + userId + "_" + jwtId))) {
+        if (redisTemplate.hasKey(TOKEN_BLACKLIST_PREFIX + userId + "_" + jwtId)) {
             throw new AppException(ErrorCode.UNAUTHENTICATED);
         }
 
         return signedJWT;
-    }
-
-    public SignedJWT verifyAccessToken(String token) {
-        try {
-            return verifyToken(token, false);
-        } catch (JOSEException | ParseException e) {
-            throw new AppException(ErrorCode.UNAUTHENTICATED);
-        }
     }
 
     private String buildScope(UserEntity user) {
@@ -329,7 +321,7 @@ public class AuthenticationService {
 
             user = UserEntity.builder()
                     .email(googleUserInfo.getEmail())
-                    .username(generateUsername(googleUserInfo.getEmail(), googleUserInfo.getSub()))
+                    .username(generateUsernameFromEmail(googleUserInfo.getEmail()))
                     .password(passwordEncoder.encode(UUID.randomUUID().toString()))
                     .googleId(googleUserInfo.getSub())
                     .status(Status.USER_STATUS.VERIFIED)
@@ -363,22 +355,6 @@ public class AuthenticationService {
         }
 
         return user;
-    }
-
-    private String generateUsername(String email, String googleId) {
-        String base = email != null && email.contains("@")
-                ? email.substring(0, email.indexOf('@'))
-                : "google_user";
-        String normalizedBase = base.replaceAll("[^a-zA-Z0-9_]", "_");
-        String candidate = normalizedBase;
-        int suffix = 1;
-
-        while (userRepository.findByUsername(candidate).isPresent()) {
-            candidate = normalizedBase + "_" + googleId.substring(Math.max(0, googleId.length() - 6)) + "_" + suffix;
-            suffix++;
-        }
-
-        return candidate;
     }
 
     public void logout(String token) {

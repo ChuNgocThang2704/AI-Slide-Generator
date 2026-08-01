@@ -108,19 +108,14 @@ public class StripePaymentStrategy implements PaymentStrategy {
         Long paymentCode = null;
         String eventType = "unknown";
 
-        if (isValidStripeSignature(sigHeader)) {
-            try {
-                Event event = Webhook.constructEvent(payload, sigHeader, webhookSecret);
-                eventType = event.getType();
-                log.info("[stripe-strategy] Xác thực chữ ký Stripe thành công. Event Type: {}", eventType);
-                paymentCode = extractPaymentCodeFromEvent(event);
-            } catch (Exception e) {
-                log.warn("[stripe-strategy] Không thể xác thực chữ ký Stripe SDK: {}. Chuyển sang chế độ Parse Fallback.", e.getMessage());
-            }
-        }
-
-        if (paymentCode == null) {
-            paymentCode = extractPaymentCodeFromRawJson(payload);
+        try {
+            Event event = Webhook.constructEvent(payload, sigHeader, webhookSecret);
+            eventType = event.getType();
+            log.info("[stripe-strategy] Xác thực chữ ký Stripe thành công. Event Type: {}", eventType);
+            paymentCode = extractPaymentCodeFromEvent(event);
+        } catch (Exception e) {
+            log.error("[stripe-strategy] Xác thực chữ ký Stripe thất bại: {}", e.getMessage());
+            throw new AppException(ErrorCode.INVALID_WEBHOOK_SIGNATURE, "Chữ ký webhook Stripe không hợp lệ!");
         }
 
         if (paymentCode != null) {
@@ -130,7 +125,7 @@ public class StripePaymentStrategy implements PaymentStrategy {
                 log.error("[stripe-strategy] Lỗi khi gọi subscription-service kích hoạt gói cho orderCode {}: ", paymentCode, e);
             }
         } else {
-            log.warn("[stripe-strategy] Không tìm thấy mã đơn hàng (orderCode/paymentCode) trong Webhook payload.");
+            log.info("[stripe-strategy] Bỏ qua hoặc không tìm thấy mã đơn hàng cho sự kiện loại: {}", eventType);
         }
 
         Map<String, Object> result = new HashMap<>();
@@ -214,9 +209,6 @@ public class StripePaymentStrategy implements PaymentStrategy {
         return null;
     }
 
-    private boolean isValidStripeSignature(String sigHeader) {
-        return sigHeader != null && !sigHeader.isBlank() && webhookSecret != null && !webhookSecret.contains("mock");
-    }
 
     private Long extractPaymentCodeFromEvent(Event event) {
         if (event == null) return null;
