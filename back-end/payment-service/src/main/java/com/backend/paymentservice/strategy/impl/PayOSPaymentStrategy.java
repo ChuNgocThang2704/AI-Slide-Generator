@@ -93,9 +93,8 @@ public class PayOSPaymentStrategy implements PaymentStrategy {
                 success = "00".equals(webhookData.getCode()) || "SUCCESS".equalsIgnoreCase(webhookData.getDesc());
             }
         } catch (Exception e) {
-            log.warn("[payos-strategy] Không thể verify chữ ký PayOS SDK: {}. Chuyển sang Parse Fallback.", e.getMessage());
-            paymentCode = extractOrderCodeFromRawJson(payload);
-            success = true;
+            log.error("[payos-strategy] Xác thực chữ ký PayOS thất bại: {}", e.getMessage());
+            throw new AppException(ErrorCode.INVALID_WEBHOOK_SIGNATURE, "Chữ ký webhook PayOS không hợp lệ!");
         }
 
         if (paymentCode != null && success) {
@@ -121,7 +120,7 @@ public class PayOSPaymentStrategy implements PaymentStrategy {
             info.put("id", data.getId());
             info.put("orderCode", data.getOrderCode());
             info.put("amount", data.getAmount());
-            info.put("status", data.getStatus() != null ? data.getStatus().name() : "UNKNOWN");
+            info.put("status", data.getStatus().name());
             return info;
         } catch (Exception e) {
             log.error("[payos-strategy] Lỗi truy vấn PayOS cho orderCode {}: ", paymentCode, e);
@@ -144,21 +143,5 @@ public class PayOSPaymentStrategy implements PaymentStrategy {
             log.error("[payos-strategy] Lỗi hủy phiên PayOS cho orderCode {}: ", paymentCode, e);
             throw new AppException(ErrorCode.PAYMENT_CANCELLATION_FAILED, e.getMessage());
         }
-    }
-
-    private Long extractOrderCodeFromRawJson(String payload) {
-        try {
-            JsonNode root = objectMapper.readTree(payload);
-            JsonNode dataNode = root.path("data");
-            if (dataNode.hasNonNull("orderCode")) {
-                return dataNode.path("orderCode").asLong();
-            }
-            if (root.hasNonNull("orderCode")) {
-                return root.path("orderCode").asLong();
-            }
-        } catch (Exception e) {
-            log.warn("[payos-strategy] Lỗi parse JSON payload: {}", e.getMessage());
-        }
-        return null;
     }
 }
