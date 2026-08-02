@@ -20,6 +20,20 @@ class PlanLimitsTest(unittest.TestCase):
         )
         self.assertEqual(detect_requested_slide_count(prompt), 7)
 
+    def test_slide_count_supports_natural_language_modifiers(self):
+        self.assertEqual(
+            detect_requested_slide_count(
+                "Create 10 English lecture slides about variables and debugging."
+            ),
+            10,
+        )
+        self.assertEqual(
+            detect_requested_slide_count(
+                "Hãy tạo 12 slide bài giảng bằng tiếng Việt từ tài liệu."
+            ),
+            12,
+        )
+
     def test_free_without_count_uses_automatic_length(self):
         target, resolved = validate_plan_limits("free", None, "short input")
         self.assertEqual((target, resolved), (None, None))

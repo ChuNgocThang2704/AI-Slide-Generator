@@ -159,7 +159,7 @@ function serializeBullets(slide) {
   return Array.isArray(slide.bullets) ? slide.bullets : [];
 }
 
-export function formatSlidePage(page) {
+export function formatSlidePage(page, presentationMode = 'presentation') {
   const bullets = parseBullets(page);
   const type = backendLayoutToFrontend(page);
   const joinedText = bullets.join('\n');
@@ -192,6 +192,7 @@ export function formatSlidePage(page) {
     likelyMultiPptxSlides: page.likelyMultiPptxSlides || false,
     pedagogicalRole: page.pedagogicalRole || '',
     sourcePages: Array.isArray(page.sourcePages) ? page.sourcePages : [],
+    presentationMode: String(page.presentationMode || presentationMode || 'presentation').toLowerCase(),
   };
 }
 
@@ -213,9 +214,9 @@ function hasCustomBoundaryCanvas(slide) {
   ));
 }
 
-export function formatSlideDeck(pages) {
+export function formatSlideDeck(pages, presentationMode = 'presentation') {
   const source = Array.isArray(pages) ? pages : [];
-  const slides = source.map(formatSlidePage);
+  const slides = source.map((page) => formatSlidePage(page, presentationMode));
   if (!slides.length) return slides;
 
   const first = slides[0];

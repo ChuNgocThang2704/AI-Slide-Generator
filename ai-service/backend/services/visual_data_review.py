@@ -28,6 +28,9 @@ _GENERIC_SEMANTIC_TOKENS = {
     "table", "bang", "data", "du", "lieu", "description", "mo", "ta",
     "example", "examples", "vi", "du", "value", "values", "gia", "tri",
     "criterion", "criteria", "tieu", "chi", "category", "categories",
+    "python", "programming", "program", "code", "coding",
+    "system", "topic", "overview", "introduction",
+    "error", "errors", "rule", "rules", "understanding",
 }
 
 
@@ -77,16 +80,39 @@ def _table_semantic_alignment(spec: Any, slide_text: str) -> Dict[str, Any]:
         if isinstance(row, (list, tuple)) and row:
             anchors.append(str(row[0] or ""))
     slide_tokens = _semantic_tokens(slide_text)
+    slide_title = str(slide_text or "").splitlines()[0] if slide_text else ""
+    title_tokens = _semantic_tokens(slide_title)
     anchor_tokens = _semantic_tokens(" ".join(anchors))
     overlap = sorted(slide_tokens & anchor_tokens)
+    title_overlap = sorted(title_tokens & anchor_tokens)
+    anchor_coverage = (
+        len(overlap) / min(len(slide_tokens), len(anchor_tokens))
+        if slide_tokens and anchor_tokens
+        else 0.0
+    )
+    # A single broad domain word is not enough to attach a table to a slide.
+    # Repaired specs are especially prone to borrowing a valid table from a
+    # nearby slide, so require two discriminating anchors for richer subjects.
+    required_overlap = 2 if min(len(slide_tokens), len(anchor_tokens)) >= 4 else 1
     return {
         "slide_tokens": sorted(slide_tokens)[:40],
         "anchor_tokens": sorted(anchor_tokens)[:40],
         "overlap": overlap[:20],
+        "title_overlap": title_overlap[:20],
+        "anchor_coverage": round(anchor_coverage, 3),
         "hard_mismatch": bool(
             len(slide_tokens) >= 2
             and len(anchor_tokens) >= 2
-            and not overlap
+            and (
+                (
+                    len(title_tokens) >= 2
+                    and len(anchor_tokens) >= 3
+                    and not title_overlap
+                )
+                or
+                len(overlap) < required_overlap
+                or anchor_coverage < 0.18
+            )
         ),
     }
 

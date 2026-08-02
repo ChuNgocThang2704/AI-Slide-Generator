@@ -1,7 +1,61 @@
 import json
 import unittest
 
-from services.visual_data_review import review_visual_data_specs
+from services.visual_data_review import _table_semantic_alignment, review_visual_data_specs
+
+
+def test_table_alignment_rejects_neighbor_table_with_only_domain_overlap():
+    spec = {
+        "title": "Python Variable Naming Rules",
+        "headers": ["Rule", "Description", "Example"],
+        "rows": [["Keywords", "Cannot use reserved words", "class"]],
+    }
+
+    alignment = _table_semantic_alignment(
+        spec,
+        "Debugging: Understanding Error Types\nSyntax errors stop parsing.\n"
+        "Runtime errors occur during execution.\nSemantic errors produce wrong results.",
+    )
+
+    assert alignment["hard_mismatch"] is True
+
+
+def test_table_alignment_rejects_wrong_subject_even_when_body_shares_result_word():
+    spec = {
+        "title": "Python Operator Precedence (PEMDAS)",
+        "headers": ["Operator Type", "Precedence", "Example", "Result"],
+        "rows": [["Exponentiation", "High", "3 ** 2", "9"]],
+    }
+
+    alignment = _table_semantic_alignment(
+        spec,
+        "Types of Program Errors: Syntax, Runtime, and Semantic\n"
+        "Semantic errors produce an unintended result.",
+    )
+
+    assert alignment["overlap"] == ["result"]
+    assert alignment["title_overlap"] == []
+    assert alignment["hard_mismatch"] is True
+
+
+def test_table_alignment_rejects_variable_names_for_generic_syntax_error_title():
+    spec = {
+        "title": "Variable Naming Rules and Errors",
+        "headers": ["Category", "Example", "Explanation"],
+        "rows": [
+            ["Legal Name", "message", "Meaningful variable name"],
+            ["Illegal Name", "76trombones", "Cannot begin with a number"],
+        ],
+    }
+
+    alignment = _table_semantic_alignment(
+        spec,
+        "Understanding Syntax Errors\n"
+        "Syntax errors violate grammar before a program can execute.",
+    )
+
+    assert alignment["title_overlap"] == []
+    assert alignment["hard_mismatch"] is True
 
 
 class FakeExtractor:

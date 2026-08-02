@@ -3,7 +3,10 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
 import { projectService, documentService } from '../../services/documentService';
 import { evaluatePromptQuality } from '../../utils/promptQuality';
-import { Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X, LayoutDashboard, AlertCircle, CheckCircle2 } from 'lucide-react';
+import {
+  Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X,
+  LayoutDashboard, AlertCircle, CheckCircle2, Library, Search,
+} from 'lucide-react';
 import './GeneratePage.css';
 
 const PROMPT_SUGGESTIONS = [
@@ -37,6 +40,10 @@ export default function GeneratePage() {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadedFileData, setUploadedFileData] = useState(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryDocuments, setLibraryDocuments] = useState([]);
+  const [librarySearch, setLibrarySearch] = useState('');
   const [form, setForm] = useState({
     prompt: '',
     slideCount: 8,
@@ -62,9 +69,9 @@ export default function GeneratePage() {
 
   React.useEffect(() => {
     if (location.state?.preSelectedFile) {
-      const { fileName, fileSize, fileUrl } = location.state.preSelectedFile;
+      const { id, fileName, fileSize, fileUrl } = location.state.preSelectedFile;
       setFile({ name: fileName, size: fileSize });
-      setUploadedFileData({ fileName, fileSize, fileUrl });
+      setUploadedFileData({ sourceDocId: id, fileName, fileSize, fileUrl });
       addToast(`Đã chọn tài liệu: ${fileName}`, 'success');
       // Xóa state trong history để tránh lặp lại khi refresh trang
       window.history.replaceState({}, document.title);
@@ -97,6 +104,7 @@ export default function GeneratePage() {
       const data = await documentService.upload(selectedFile);
       if (data) {
         setUploadedFileData({
+          sourceDocId: data.id || null,
           fileUrl: data.url || data.s3Url || data.fileUrl,
           fileName: data.fileName || selectedFile.name,
           fileSize: data.fileSize || selectedFile.size
@@ -116,6 +124,46 @@ export default function GeneratePage() {
     setFile(null);
     setUploadedFileData(null);
   };
+
+  const handleOpenLibrary = async () => {
+    setLibraryOpen(true);
+    setLibraryLoading(true);
+    try {
+      const data = await documentService.getAll(0, 100, '');
+      setLibraryDocuments(
+        Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])
+      );
+    } catch (err) {
+      addToast(err.message || 'Không thể tải thư viện tài liệu', 'error');
+      setLibraryOpen(false);
+    } finally {
+      setLibraryLoading(false);
+    }
+  };
+
+  const handleSelectLibraryDocument = (doc) => {
+    const selected = {
+      sourceDocId: doc.id,
+      fileUrl: doc.s3Url || doc.url || doc.fileUrl,
+      fileName: doc.fileName,
+      fileSize: doc.fileSize || 0,
+    };
+    setFile({ name: selected.fileName, size: selected.fileSize });
+    setUploadedFileData(selected);
+    setLibraryOpen(false);
+    setLibrarySearch('');
+    addToast(`Đã chọn tài liệu: ${selected.fileName}`, 'success');
+  };
+
+  const formatFileSize = (bytes) => {
+    const value = Number(bytes || 0);
+    if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+    return `${Math.max(0, Math.round(value / 1024))} KB`;
+  };
+
+  const visibleLibraryDocuments = libraryDocuments.filter((doc) =>
+    String(doc.fileName || '').toLowerCase().includes(librarySearch.trim().toLowerCase())
+  );
 
   // Lấy câu thông báo tương ứng với % tiến độ
   const getProgressMessage = (pct, aiStatus) => {
@@ -181,7 +229,8 @@ export default function GeneratePage() {
         promptText,
         uploadedFileData?.fileUrl || null,
         uploadedFileData?.fileName || null,
-        uploadedFileData?.fileSize || null
+        uploadedFileData?.fileSize || null,
+        uploadedFileData?.sourceDocId || null
       );
       
       addProject(project);
@@ -286,7 +335,18 @@ export default function GeneratePage() {
 
           {/* File Upload Zone */}
           <div className="gen2-field">
-            <label className="gen2-label">📁 Hoặc tải lên tài liệu nguồn (PDF / DOCX)</label>
+            <div className="gen2-source-heading">
+              <label className="gen2-label">📁 Tài liệu nguồn (PDF / DOCX)</label>
+              <button
+                type="button"
+                className="gen2-library-trigger"
+                onClick={handleOpenLibrary}
+                disabled={loading || uploading}
+              >
+                <Library size={16} />
+                Chọn tài liệu đã tải lên
+              </button>
+            </div>
             {!file ? (
               <div className={`gen2-upload-zone ${uploading ? 'disabled' : ''}`}>
                 <input
@@ -309,7 +369,7 @@ export default function GeneratePage() {
                   <FileText size={20} className="gen2-file-icon" />
                   <div className="gen2-uf-details">
                     <span className="gen2-uf-name">{file.name}</span>
-                    <span className="gen2-uf-size">{(file.size / (1024 * 1024)).toFixed(2)} MB</span>
+                    <span className="gen2-uf-size">{formatFileSize(file.size)}</span>
                   </div>
                 </div>
                 {uploading ? (
@@ -383,6 +443,60 @@ export default function GeneratePage() {
               >
                 Hủy tác vụ
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {libraryOpen && (
+        <div
+          className="gen2-library-overlay"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setLibraryOpen(false);
+          }}
+        >
+          <div className="gen2-library-dialog" role="dialog" aria-modal="true" aria-labelledby="library-title">
+            <div className="gen2-library-header">
+              <div>
+                <h2 id="library-title">Tài liệu đã tải lên</h2>
+                <p>Chọn một tài liệu để sử dụng lại, không cần tải lên lần nữa.</p>
+              </div>
+              <button type="button" className="gen2-library-close" onClick={() => setLibraryOpen(false)} title="Đóng">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="gen2-library-search">
+              <Search size={17} />
+              <input
+                autoFocus
+                value={librarySearch}
+                onChange={(event) => setLibrarySearch(event.target.value)}
+                placeholder="Tìm theo tên tài liệu"
+              />
+            </div>
+            <div className="gen2-library-list">
+              {libraryLoading ? (
+                <div className="gen2-library-state"><Loader2 size={22} className="spin" /> Đang tải tài liệu...</div>
+              ) : visibleLibraryDocuments.length === 0 ? (
+                <div className="gen2-library-state">Không tìm thấy tài liệu phù hợp.</div>
+              ) : (
+                visibleLibraryDocuments.map((doc) => (
+                  <button
+                    type="button"
+                    className="gen2-library-item"
+                    key={doc.id}
+                    onClick={() => handleSelectLibraryDocument(doc)}
+                  >
+                    <span className="gen2-library-file-icon"><FileText size={19} /></span>
+                    <span className="gen2-library-file-info">
+                      <strong title={doc.fileName}>{doc.fileName}</strong>
+                      <small>{formatFileSize(doc.fileSize)}</small>
+                    </span>
+                    <ChevronRight size={17} />
+                  </button>
+                ))
+              )}
             </div>
           </div>
         </div>

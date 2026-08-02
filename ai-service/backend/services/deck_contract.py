@@ -99,10 +99,17 @@ async def finalize_deck_for_visuals(
         deck,
         task_id=task_id,
     )
+    # A review pass may accidentally remove a requested practice/activity role.
+    # Re-apply the pedagogical contract before locking the structure.
+    deck = enrich_lecture_deck(deck, raw_content or "", user_instruction or "")
 
     desired_count = int(target_slides) if target_slides else original_count
-    desired_count = max(2, min(desired_count, len(deck.get("slides") or []) or desired_count))
+    desired_count = max(2, desired_count)
+    if len(deck.get("slides") or []) != desired_count:
+        deck = await content_extractor._force_slide_count_exact(deck, desired_count)
     deck = content_extractor._ensure_deck_boundaries(deck, desired_count)
+    if len(deck.get("slides") or []) != desired_count:
+        deck = await content_extractor._force_slide_count_exact(deck, desired_count)
     deck = assign_stable_slide_ids(deck)
 
     signature = deck_structure_signature(deck)
@@ -110,6 +117,10 @@ async def finalize_deck_for_visuals(
         raise RuntimeError("Deck contains duplicate slide_id values")
     if not signature:
         raise RuntimeError("Cannot lock an empty deck")
+    if target_slides and len(signature) != int(target_slides):
+        raise RuntimeError(
+            f"Locked deck count mismatch: expected={int(target_slides)}, actual={len(signature)}"
+        )
 
     slides = deck.get("slides") or []
     first_layout = str((slides[0] or {}).get("layout") or "").strip().lower()

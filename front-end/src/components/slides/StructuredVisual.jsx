@@ -20,19 +20,11 @@ function DraggableActions({ children, className = '' }) {
       const drag = dragRef.current;
       const toolbar = toolbarRef.current;
       if (!drag || !toolbar) return;
-      const slide = toolbar.closest('.element-canvas, .editable-slide-root');
-      if (!slide) return;
-      const slideRect = slide.getBoundingClientRect();
-      const toolbarRect = toolbar.getBoundingClientRect();
-      const requestedX = drag.offset.x + event.clientX - drag.pointer.x;
-      const requestedY = drag.offset.y + event.clientY - drag.pointer.y;
-      const minX = drag.offset.x + slideRect.left + 8 - toolbarRect.left;
-      const maxX = drag.offset.x + slideRect.right - 8 - toolbarRect.right;
-      const minY = drag.offset.y + slideRect.top + 8 - toolbarRect.top;
-      const maxY = drag.offset.y + slideRect.bottom - 8 - toolbarRect.bottom;
+      const requestedX = drag.offset.x + (event.clientX - drag.pointer.x) / drag.scaleX;
+      const requestedY = drag.offset.y + (event.clientY - drag.pointer.y) / drag.scaleY;
       setOffset({
-        x: Math.min(maxX, Math.max(minX, requestedX)),
-        y: Math.min(maxY, Math.max(minY, requestedY)),
+        x: Math.min(drag.maxX, Math.max(drag.minX, requestedX)),
+        y: Math.min(drag.maxY, Math.max(drag.minY, requestedY)),
       });
     };
     const stop = () => {
@@ -52,9 +44,22 @@ function DraggableActions({ children, className = '' }) {
   const startDrag = (event) => {
     event.preventDefault();
     event.stopPropagation();
+    const toolbar = toolbarRef.current;
+    const slide = toolbar?.closest('.element-canvas, .editable-slide-root');
+    if (!toolbar || !slide) return;
+    const slideRect = slide.getBoundingClientRect();
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const scaleX = slideRect.width / (slide.offsetWidth || slideRect.width) || 1;
+    const scaleY = slideRect.height / (slide.offsetHeight || slideRect.height) || 1;
     dragRef.current = {
       pointer: { x: event.clientX, y: event.clientY },
       offset,
+      scaleX,
+      scaleY,
+      minX: offset.x + (slideRect.left + 8 * scaleX - toolbarRect.left) / scaleX,
+      maxX: offset.x + (slideRect.right - 8 * scaleX - toolbarRect.right) / scaleX,
+      minY: offset.y + (slideRect.top + 8 * scaleY - toolbarRect.top) / scaleY,
+      maxY: offset.y + (slideRect.bottom - 8 * scaleY - toolbarRect.bottom) / scaleY,
     };
     document.body.classList.add('sv-toolbar-dragging');
   };

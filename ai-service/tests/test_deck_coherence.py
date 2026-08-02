@@ -44,6 +44,142 @@ def sample_deck():
 
 
 class DeckCoherenceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_missing_topic_replaces_redundant_body_slide(self):
+        deck = {
+            "title": "Python Chapter 2",
+            "presentation_mode": "lecture",
+            "slides": [
+                {
+                    "title": "Python Chapter 2",
+                    "layout": "intro",
+                    "bullets": ["Variables, expressions, and errors."],
+                },
+                {
+                    "title": "Learning Objectives",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Distinguish syntax, runtime, and semantic errors."],
+                },
+                {
+                    "title": "Operator Precedence",
+                    "pedagogical_role": "concept",
+                    "bullets": ["Parentheses are evaluated first."],
+                },
+                {
+                    "title": "More PEMDAS Examples",
+                    "pedagogical_role": "worked_example",
+                    "bullets": ["Evaluate multiplication before addition."],
+                },
+                {
+                    "title": "Summary",
+                    "layout": "thankyou",
+                    "pedagogical_role": "summary",
+                    "bullets": ["Review errors and expressions."],
+                },
+            ],
+        }
+        extractor = FakeExtractor([
+            {
+                "requirements": [
+                    {
+                        "topic": "program error types",
+                        "required_components": [
+                            "syntax errors",
+                            "runtime errors",
+                            "semantic errors",
+                        ],
+                        "covered_components": ["syntax errors"],
+                        "missing_components": ["runtime errors", "semantic errors"],
+                        "covered_by": [3],
+                        "target_index": 3,
+                    },
+                ],
+                "issues": [],
+            },
+            {"score": 8.5, "issues": []},
+            {
+                "slides": [{
+                    "index": 3,
+                    "title": "Syntax, Runtime, and Semantic Errors",
+                    "bullets": [
+                        "Syntax errors violate Python grammar and stop parsing.",
+                        "Runtime errors occur while otherwise valid code executes.",
+                        "Semantic errors run but produce the wrong result.",
+                    ],
+                    "notes": "Contrast when and how each error is detected.",
+                    "pedagogical_role": "concept",
+                }],
+            },
+            {"score": 9.2, "issues": []},
+        ])
+        extractor._user_instruction = (
+            "Cover variables, expressions, operator precedence, and syntax, runtime, "
+            "and semantic errors."
+        )
+
+        result = await improve_deck_coherence(extractor, deck)
+
+        self.assertEqual(
+            result["slides"][3]["title"],
+            "Syntax, Runtime, and Semantic Errors",
+        )
+        self.assertEqual(len(result["slides"]), 5)
+        audit_prompt = extractor.messages[0][0]["content"]
+        self.assertIn("does NOT count as coverage", audit_prompt)
+        self.assertEqual(extractor.calls, 4)
+
+    async def test_missing_components_are_not_dropped_when_target_is_null(self):
+        deck = {
+            "title": "Python Chapter 2",
+            "presentation_mode": "lecture",
+            "slides": [
+                {"title": "Python Chapter 2", "layout": "intro", "bullets": ["Overview."]},
+                {
+                    "title": "Learning Objectives",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Distinguish program error types."],
+                },
+                {"title": "Variables", "bullets": ["Variables refer to values."]},
+                {"title": "Syntax Errors", "bullets": ["Syntax errors violate grammar rules."]},
+                {
+                    "title": "Summary",
+                    "layout": "thankyou",
+                    "pedagogical_role": "summary",
+                    "bullets": ["Review the chapter."],
+                },
+            ],
+        }
+        extractor = FakeExtractor([
+            {
+                "requirements": [{
+                    "topic": "program error types",
+                    "required_components": ["syntax errors", "runtime errors", "semantic errors"],
+                    "covered_components": ["syntax errors"],
+                    "missing_components": ["runtime errors", "semantic errors"],
+                    "covered_by": [3],
+                    "target_index": None,
+                }],
+                "issues": [],
+            },
+            {"score": 7.0, "issues": []},
+            {"slides": [{
+                "index": 3,
+                "title": "Syntax, Runtime, and Semantic Errors",
+                "bullets": [
+                    "Syntax errors violate grammar rules.",
+                    "Runtime errors occur during execution.",
+                    "Semantic errors produce unintended results.",
+                ],
+                "notes": "Compare when each category is detected.",
+            }]},
+            {"score": 9.0, "issues": []},
+        ])
+        extractor._user_instruction = "Cover syntax, runtime, and semantic errors."
+
+        result = await improve_deck_coherence(extractor, deck)
+
+        self.assertEqual(result["slides"][3]["title"], "Syntax, Runtime, and Semantic Errors")
+        self.assertEqual(extractor.calls, 4)
+
     async def test_refines_only_target_text_and_preserves_visual_data(self):
         deck = sample_deck()
         original = copy.deepcopy(deck)

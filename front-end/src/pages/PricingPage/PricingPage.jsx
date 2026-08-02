@@ -274,16 +274,33 @@ export default function PricingPage() {
                 <h3>Hạn mức sử dụng của bạn</h3>
                 <div className="quotas-list">
                   {quotas.map((q) => {
-                    const percentage = Math.min(100, (q.currentUsage / q.limitValue) * 100);
+                    const isPerPresentationLimit = q.featureKey === 'MAX_IMAGES_PER_SLIDE';
+                    const isUnlimited = Number(q.limitValue) >= 999999;
+                    const percentage = isPerPresentationLimit || isUnlimited
+                      ? 0
+                      : Math.min(100, (q.currentUsage / q.limitValue) * 100);
+                    const valueLabel = isPerPresentationLimit
+                      ? `Tối đa ${q.limitValue} ảnh / bài`
+                      : isUnlimited
+                        ? `${q.currentUsage} đã sử dụng / Không giới hạn`
+                        : `${q.currentUsage} / ${q.limitValue}`;
                     return (
                       <div key={q.featureKey} className="quota-progress-item">
                         <div className="qpi-label-wrap">
                           <span className="qpi-title">{q.displayName || q.featureKey}</span>
-                          <span className="qpi-value">{q.currentUsage} / {q.limitValue}</span>
+                          <span className="qpi-value">{valueLabel}</span>
                         </div>
-                        <div className="qpi-bar-bg">
-                          <div className="qpi-bar-fill" style={{ width: `${percentage}%`, background: percentage > 85 ? '#ef4444' : '#10b981' }} />
-                        </div>
+                        {!isPerPresentationLimit && !isUnlimited && (
+                          <div className="qpi-bar-bg">
+                            <div className="qpi-bar-fill" style={{ width: `${percentage}%`, background: percentage > 85 ? '#ef4444' : '#10b981' }} />
+                          </div>
+                        )}
+                        {isPerPresentationLimit && (
+                          <span className="qpi-caption">Áp dụng riêng cho từng bài, không cộng dồn</span>
+                        )}
+                        {!isPerPresentationLimit && isUnlimited && (
+                          <span className="qpi-caption">Gói hiện tại không giới hạn hạn mức này</span>
+                        )}
                       </div>
                     );
                   })}

@@ -179,7 +179,7 @@ export default function EditorPage() {
         setProjects([project, ...projects.filter((item) => item.id !== project.id)]);
         const pages = await projectService.getSlidePages(id);
         if (pages && pages.length > 0) {
-          const formattedSlides = formatSlideDeck(pages);
+          const formattedSlides = formatSlideDeck(pages, project.presentationMode);
           slidesRef.current = formattedSlides;
           undoStackRef.current = [];
           redoStackRef.current = [];
@@ -288,7 +288,7 @@ export default function EditorPage() {
         if (done) {
           const pages = await projectService.getSlidePages(id);
           if (disposed || !Array.isArray(pages) || !pages.length) return;
-          const formattedSlides = formatSlideDeck(pages);
+          const formattedSlides = formatSlideDeck(pages, project.presentationMode);
           slidesRef.current = formattedSlides;
           setSlides(formattedSlides);
           setSelectedSlideIndexes(new Set([0]));
@@ -665,6 +665,10 @@ export default function EditorPage() {
       return;
     }
 
+    // Treat one AI revision as one atomic history action. Keep an immutable
+    // snapshot because the request may finish after further async state work.
+    const beforeRevision = structuredClone(slidesRef.current);
+
     setRevising(true);
     setRevisionProgress(5);
     setRevisionStatus('Đang lưu slides hiện tại...');
@@ -717,11 +721,17 @@ export default function EditorPage() {
             // Fetch pages again
             const pages = await projectService.getSlidePages(id);
             if (pages && pages.length > 0) {
-              const formattedSlides = formatSlideDeck(pages);
+              const formattedSlides = formatSlideDeck(
+                pages,
+                projects.find((item) => item.id === id)?.presentationMode,
+              );
 
-              slidesRef.current = formattedSlides;
-              undoStackRef.current = [];
+              undoStackRef.current.push(beforeRevision);
+              if (undoStackRef.current.length > 50) undoStackRef.current.shift();
               redoStackRef.current = [];
+              lastHistoryAtRef.current = 0;
+              lastHistorySlideRef.current = -1;
+              slidesRef.current = formattedSlides;
               setHistoryVersion((version) => version + 1);
               hasUnsavedChangesRef.current = false;
               setSlides(formattedSlides);

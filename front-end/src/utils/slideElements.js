@@ -52,6 +52,7 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
   const isVietnamese = isVietnameseSlide(slide);
+  const isLecture = String(slide?.presentationMode || '').toLowerCase() === 'lecture';
 
   if (slide?.type === 'title') {
     const introTitle = slide?.title || slide?.richText?.title || '';
@@ -65,7 +66,10 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     const introSubtitleSize = fitTextToBox(introSubtitle, {
       width: 600, height: 90, min: 15, max: 24, lineHeight: 1.45,
     });
-    elements.push(textElement('custom', isVietnamese ? 'BÀI GIẢNG' : 'LECTURE', 110, 116, 740, 34, {
+    const introLabel = isLecture
+      ? (isVietnamese ? 'BÀI GIẢNG' : 'LECTURE')
+      : (isVietnamese ? 'BÀI THUYẾT TRÌNH' : 'PRESENTATION');
+    elements.push(textElement('custom', introLabel, 110, 116, 740, 34, {
       fontFamily: colors.body,
       fontSize: 14,
       color: colors.sub,
@@ -104,7 +108,10 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     const closingBodySize = fitTextToBox(closingItems.join('\n'), {
       width: 660, height: 168, min: 16, max: 24, lineHeight: 1.45, itemCount: closingItems.length,
     });
-    elements.push(textElement('custom', isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE', 130, 112, 700, 34, {
+    const closingLabel = isLecture
+      ? (isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE')
+      : (isVietnamese ? 'KẾT LUẬN' : 'CLOSING');
+    elements.push(textElement('custom', closingLabel, 130, 112, 700, 34, {
       fontFamily: colors.body,
       fontSize: 14,
       color: colors.sub,

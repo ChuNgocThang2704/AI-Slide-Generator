@@ -21,6 +21,11 @@ _LECTURE_REQUEST_TERMS = (
     "bai giang", "giao an", "bai hoc", "muc tieu hoc tap",
     "learning objective", "lecture", "lesson", "course", "curriculum", "tutorial",
 )
+_PRESENTATION_REQUEST_TERMS = (
+    "presentation", "slide deck", "pitch deck", "business presentation",
+    "gioi thieu", "thuyet trinh", "trinh bay", "tong quan",
+    "introduction", "introduce", "overview", "showcase", "pitch",
+)
 _EDUCATIONAL_SOURCE_PATTERNS = (
     r"\bchapter\s+\d+\b",
     r"\b(?:section|exercise|example)\s+\d+(?:\.\d+)*\b",
@@ -49,8 +54,13 @@ def detect_lecture_mode(source_text: str, user_instruction: str = "") -> bool:
     """Detect teaching-oriented requests and textbook-like source material."""
     instruction = _fold(user_instruction)
     source = _fold((source_text or "")[:30000])
+    # Explicit user intent outranks the shape of an uploaded textbook or the
+    # educational vocabulary produced while expanding a prompt. A source can
+    # provide presentation content without turning the deck into a lesson.
     if any(term in instruction for term in _LECTURE_REQUEST_TERMS):
         return True
+    if any(term in instruction for term in _PRESENTATION_REQUEST_TERMS):
+        return False
     if any(term in source[:3000] for term in _LECTURE_REQUEST_TERMS):
         return True
     pattern_hits = sum(bool(re.search(pattern, source, re.IGNORECASE)) for pattern in _EDUCATIONAL_SOURCE_PATTERNS)
@@ -276,15 +286,49 @@ def select_relevant_source_excerpt(
 ) -> str:
     """Choose source pages most relevant to the user's requested scope."""
     source = str(source_text or "")
+    pages = _split_source_pages(source)
+    folded_instruction = _fold(user_instruction)
+    requested_chapter = re.search(
+        r"\b(?:chapter|chuong)\s+(\d+)\b",
+        folded_instruction,
+    )
+    if requested_chapter and pages:
+        chapter_number = requested_chapter.group(1)
+        active_chapter: Optional[str] = None
+        chapter_pages: List[Tuple[int, str]] = []
+        for page_number, page_text in pages:
+            chapter_heading = re.search(
+                r"\b(?:chapter|chuong)\s+(\d+)\b",
+                _fold(page_text),
+            )
+            if chapter_heading:
+                active_chapter = chapter_heading.group(1)
+            if active_chapter == chapter_number:
+                chapter_pages.append((page_number, page_text))
+        if chapter_pages:
+            parts: List[str] = []
+            used = 0
+            for page_number, page_text in chapter_pages:
+                part = (
+                    f"{SOURCE_PAGE_MARKER.format(page=page_number)}\n"
+                    f"{page_text.strip()}"
+                )
+                if parts and used + len(part) > max_chars:
+                    break
+                if not parts and len(part) > max_chars:
+                    part = part[:max_chars]
+                parts.append(part)
+                used += len(part)
+            if parts:
+                return "\n\n".join(parts)
+
     if len(source) <= max_chars:
         return source
 
-    pages = _split_source_pages(source)
     query_tokens = _tokens(user_instruction)
     if not pages or not query_tokens:
         return source[:max_chars]
 
-    folded_instruction = _fold(user_instruction)
     scope_anchors = set(
         re.findall(
             r"\b(?:chapter|chuong|section|unit|module|lesson|bai)\s+\d+(?:\.\d+)*\b",
@@ -331,6 +375,68 @@ def select_relevant_source_excerpt(
         parts.append(part)
         used += len(part)
     return "\n\n".join(parts) or source[:max_chars]
+
+
+def has_explicit_structural_scope(user_instruction: str) -> bool:
+    """Return whether the request names a deterministic document boundary."""
+    folded = _fold(user_instruction)
+    return bool(
+        re.search(
+            r"\b(?:chapter|chuong|section|unit|module|lesson|bai|page|trang)"
+            r"\s+\d+(?:\.\d+)*\b",
+            folded,
+        )
+    )
+
+
+def build_source_page_index(source_text: str, *, max_chars: int = 22000) -> str:
+    """Build a compact, evenly sampled page index for semantic scope selection."""
+    pages = _split_source_pages(source_text)
+    if not pages:
+        return ""
+    preview_budget = max(140, min(520, max_chars // max(1, len(pages))))
+    entries: List[str] = []
+    used = 0
+    for page_number, page_text in pages:
+        compact = re.sub(r"\s+", " ", str(page_text or "")).strip()
+        entry = f"PAGE {page_number}: {compact[:preview_budget]}"
+        if entries and used + len(entry) + 1 > max_chars:
+            break
+        entries.append(entry)
+        used += len(entry) + 1
+    return "\n".join(entries)
+
+
+def excerpt_from_source_pages(
+    source_text: str,
+    selected_pages: Sequence[int],
+    *,
+    max_chars: int = 30000,
+    include_neighbors: bool = True,
+) -> str:
+    """Materialize an ordered source excerpt from an AI-selected page set."""
+    pages = _split_source_pages(source_text)
+    page_map = {page: text for page, text in pages}
+    wanted = {int(page) for page in selected_pages if int(page) in page_map}
+    if include_neighbors:
+        for page in list(wanted):
+            if page - 1 in page_map:
+                wanted.add(page - 1)
+            if page + 1 in page_map:
+                wanted.add(page + 1)
+    parts: List[str] = []
+    used = 0
+    ordered_pages = sorted(wanted)
+    for index, page in enumerate(ordered_pages):
+        part = f"{SOURCE_PAGE_MARKER.format(page=page)}\n{page_map[page].strip()}"
+        remaining_pages = len(ordered_pages) - index
+        remaining_budget = max(0, max_chars - used)
+        fair_budget = max(160, remaining_budget // max(1, remaining_pages))
+        if len(part) > fair_budget:
+            part = part[:fair_budget].rstrip()
+        parts.append(part)
+        used += len(part)
+    return "\n\n".join(parts)
 
 
 def _fold(text: str) -> str:
