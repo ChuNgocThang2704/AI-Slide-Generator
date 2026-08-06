@@ -930,7 +930,9 @@ export default function SlideRenderer({ slide, theme = 'clean-white', index = 0,
         {slide.elements.map((element, elementIndex) => (
           <div key={element.id} style={{ position:'absolute', left:element.x, top:element.y, width:element.width, height:element.height, zIndex:elementIndex + 1, transform:`rotate(${element.rotation || 0}deg)`, overflow:'hidden' }}>
             {element.type === 'image'
-              ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || 'cover', objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%` }}/>
+              ? (element.src || element.storageUrl || element.assetId
+                  ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || 'cover', objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%` }}/>
+                  : <div style={{ width:'100%', height:'100%', background:'rgba(148,163,184,.08)', border:'1px dashed #94a3b8' }}/>)
               : <div style={{ width:'100%', height:'100%', ...element.style }} dangerouslySetInnerHTML={{ __html: element.content || '' }}/>
             }
           </div>

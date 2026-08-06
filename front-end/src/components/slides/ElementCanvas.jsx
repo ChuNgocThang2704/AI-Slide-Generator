@@ -515,18 +515,24 @@ export default function ElementCanvas({
             </button>
           )}
           {element.type === 'image' ? (
-            <AssetImage
-              src={resolveAssetUrl(element.src)}
-              storageUrl={element.storageUrl}
-              assetId={element.assetId}
-              alt=""
-              draggable={false}
-              onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
-              style={{
-                objectFit: element.objectFit || 'cover',
-                objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
-              }}
-            />
+            element.src || element.storageUrl || element.assetId ? (
+              <AssetImage
+                src={resolveAssetUrl(element.src)}
+                storageUrl={element.storageUrl}
+                assetId={element.assetId}
+                alt=""
+                draggable={false}
+                onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
+                style={{
+                  objectFit: element.objectFit || 'cover',
+                  objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
+                }}
+              />
+            ) : (
+              <div className="canvas-image-placeholder" title="Khung ảnh">
+                <ImagePlus size={32}/>
+              </div>
+            )
           ) : element.type === 'shape' ? (
             <div
               className="canvas-shape"

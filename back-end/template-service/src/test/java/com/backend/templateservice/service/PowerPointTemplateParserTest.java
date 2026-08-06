@@ -49,32 +49,84 @@ class PowerPointTemplateParserTest {
     }
 
     @Test
-    void parsesImagesAndThemeColorsFromSampleSlides() throws Exception {
+    void parsesImageFrameAndThemeColorsWithoutEmbeddedMedia() throws Exception {
         TemplateManifest manifest = new PowerPointTemplateParser().parse(sampleSlidePptx());
 
-        assertThat(manifest.getAssets()).hasSize(2);
+        assertThat(manifest.getAssets()).isEmpty();
         assertThat(manifest.getLayouts()).hasSize(1);
         TemplateManifest.Layout layout = manifest.getLayouts().getFirst();
         assertThat(layout.getType()).isEqualTo("title");
-        assertThat(layout.getElements()).filteredOn(item -> "image".equals(item.getType())).hasSize(2);
+        assertThat(layout.getElements()).filteredOn(item -> "image".equals(item.getType())).hasSize(1);
+        TemplateManifest.Element imageFrame = layout.getElements().stream()
+                .filter(item -> "image".equals(item.getType()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(imageFrame.getRole()).isEqualTo("image");
+        assertThat(imageFrame.isPlaceholder()).isTrue();
+        assertThat(imageFrame.isLocked()).isFalse();
+        assertThat(imageFrame.getSrc()).isNull();
+        assertThat(imageFrame.getX()).isEqualTo(528d);
+        assertThat(imageFrame.getY()).isEqualTo(72d);
+        assertThat(imageFrame.getWidth()).isEqualTo(336d);
+        assertThat(imageFrame.getHeight()).isEqualTo(360d);
         assertThat(layout.getElements()).filteredOn(TemplateManifest.Element::isPlaceholder)
                 .extracting(TemplateManifest.Element::getRole)
-                .containsExactly("title");
+                .containsExactlyInAnyOrder("title", "image");
         assertThat(layout.getElements().stream()
-                .filter(TemplateManifest.Element::isPlaceholder)
+                .filter(item -> "title".equals(item.getRole()))
                 .findFirst()
                 .orElseThrow()
                 .getStyle()).containsEntry("color", "#FFFFFF");
 
         TemplateMatchResponse match = new TemplateLayoutMatcher().match(
                 manifest,
-                TemplateMatchRequest.builder().title("New title").pageIndex(0).build()
+                TemplateMatchRequest.builder()
+                        .title("New title")
+                        .imageUrl("https://example.test/generated.png")
+                        .pageIndex(0)
+                        .build()
         );
         assertThat(match.getElements()).filteredOn(item -> "image".equals(item.get("type")))
-                .allSatisfy(item -> assertThat(item.get("src")).asString().startsWith("data:image/png;base64,"));
+                .singleElement()
+                .satisfies(item -> assertThat(item.get("src")).isEqualTo("https://example.test/generated.png"));
         assertThat(match.getElements()).filteredOn(item -> "title".equals(item.get("role")))
                 .extracting(item -> item.get("content"))
                 .containsExactly("New title");
+
+        TemplateMatchResponse emptyFrameMatch = new TemplateLayoutMatcher().match(
+                manifest,
+                TemplateMatchRequest.builder().title("No generated image yet").pageIndex(0).build()
+        );
+        assertThat(emptyFrameMatch.getElements()).filteredOn(item -> "image".equals(item.get("type")))
+                .singleElement()
+                .satisfies(item -> assertThat(item).doesNotContainKey("src"));
+    }
+
+    @Test
+    void ignoresEmbeddedImagesFromLegacyManifests() {
+        TemplateManifest.Element legacyImage = TemplateManifest.Element.builder()
+                .id("legacy-background")
+                .type("image")
+                .role("background")
+                .x(0).y(0).width(960).height(540)
+                .src("data:image/png;base64,AQID")
+                .locked(true)
+                .build();
+        TemplateManifest manifest = TemplateManifest.builder()
+                .layouts(List.of(TemplateManifest.Layout.builder()
+                        .id("legacy-layout")
+                        .type("title")
+                        .backgroundColor("#FFFFFF")
+                        .elements(List.of(legacyImage))
+                        .build()))
+                .build();
+
+        TemplateMatchResponse match = new TemplateLayoutMatcher().match(
+                manifest,
+                TemplateMatchRequest.builder().title("New title").pageIndex(0).build()
+        );
+
+        assertThat(match.getElements()).noneMatch(item -> "image".equals(item.get("type")));
     }
 
     private byte[] minimalPptx() throws Exception {

@@ -26,10 +26,11 @@ public class TemplateLayoutMatcher {
         int bodyIndex = 0;
         for (TemplateManifest.Element source : layout.getElements()) {
             if (!source.isPlaceholder()) {
+                if ("image".equals(source.getType())) continue;
                 elements.add(toElement(
                         source,
                         source.getContent(),
-                        resolveAsset(source.getSrc(), manifest),
+                        null,
                         null,
                         true
                 ));
@@ -45,8 +46,8 @@ public class TemplateLayoutMatcher {
                 if (!assigned.isEmpty()) {
                     elements.add(toElement(source, bulletsHtml(assigned), null, null, false));
                 }
-            } else if ("image".equals(role) && notBlank(request.getImageUrl())) {
-                elements.add(toElement(source, null, request.getImageUrl(), null, false));
+            } else if ("image".equals(role)) {
+                elements.add(toElement(source, null, emptyToNull(request.getImageUrl()), null, false));
             } else if ("chart".equals(role) && request.getChart() != null) {
                 elements.add(toElement(source, null, null, request.getChart(), false));
             } else if ("table".equals(role) && request.getTable() != null) {
@@ -79,11 +80,6 @@ public class TemplateLayoutMatcher {
         if (candidates.isEmpty()) return layouts.getFirst();
         int rotation = pageIndex == null ? 0 : Math.max(0, pageIndex - ("title".equals(type) ? 0 : 1));
         return candidates.get(rotation % candidates.size());
-    }
-
-    private String resolveAsset(String source, TemplateManifest manifest) {
-        if (source == null || manifest.getAssets() == null) return source;
-        return manifest.getAssets().getOrDefault(source, source);
     }
 
     private String requestedType(TemplateMatchRequest request) {
@@ -260,5 +256,9 @@ public class TemplateLayoutMatcher {
 
     private boolean notBlank(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private String emptyToNull(String value) {
+        return notBlank(value) ? value : null;
     }
 }

@@ -32,6 +32,15 @@
 .canvas-element.selected { border-color:#6c63ff; box-shadow:0 0 0 1px rgba(108,99,255,.25); }
 .canvas-element.locked.selected { border-style:dashed; border-color:#94a3b8; box-shadow:none; }
 .canvas-element img { width:100%; height:100%; object-fit:cover; display:block; }
+.canvas-image-placeholder {
+  width:100%;
+  height:100%;
+  display:grid;
+  place-items:center;
+  color:#94a3b8;
+  background:rgba(148,163,184,.08);
+  border:1px dashed #94a3b8;
+}
 .canvas-shape { width:100%; height:100%; border:1px solid transparent; }
 .canvas-element.role-image { isolation:isolate; }
 .canvas-element.role-image > img { position:relative; z-index:1; }
