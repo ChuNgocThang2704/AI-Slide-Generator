@@ -931,7 +931,7 @@ export default function SlideRenderer({ slide, theme = 'clean-white', index = 0,
         {slide.elements.map((element, elementIndex) => (
           <div key={element.id} style={{ position:'absolute', left:element.x, top:element.y, width:element.width, height:element.height, zIndex:elementIndex + 1, transform:`rotate(${element.rotation || 0}deg)`, overflow:'hidden' }}>
             {element.type === 'image'
-              ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || inferImageFit(element.src), objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%` }}/>
+              ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || inferImageFit(element.src), objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`, transform:`scale(${element.imageScale || 1})`, transformOrigin:'center' }}/>
               : <div style={{ width:'100%', height:'100%', ...element.style }} dangerouslySetInnerHTML={{ __html: element.content || '' }}/>
             }
           </div>

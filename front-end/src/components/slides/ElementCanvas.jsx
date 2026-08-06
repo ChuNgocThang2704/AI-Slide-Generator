@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw, ZoomIn, ZoomOut } from 'lucide-react';
 import { createElementsFromSlide, createTextElement } from '../../utils/slideElements';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import EditableSlide, { THEMES } from './EditableSlide';
@@ -224,7 +224,10 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       const src = uploaded?.viewUrl || uploaded?.url;
       if (!src) throw new Error('Máy chủ không trả về URL ảnh');
       if (selectedElement?.type === 'image' && !selectedElement.locked) {
-        updateElement(selectedElement.id, { src, storageUrl: uploaded.url, assetId: uploaded.id });
+        updateElement(selectedElement.id, {
+          src, storageUrl: uploaded.url, assetId: uploaded.id,
+          imageScale: 1, objectPositionX: 50, objectPositionY: 50,
+        });
         onNotify?.('Đã thay ảnh', 'success');
       } else {
         const image = {
@@ -237,6 +240,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
           height: 300,
           rotation: 0,
           objectFit: 'cover',
+          imageScale: 1,
           src,
           storageUrl: uploaded.url,
           assetId: uploaded.id,
@@ -472,6 +476,26 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
         >
           <Crop size={15}/>
         </button>
+        <button
+          type="button"
+          onClick={() => updateElement(selectedElement.id, {
+            imageScale: clamp(Number(selectedElement.imageScale || 1) - 0.1, 0.5, 4),
+          })}
+          disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
+          title="Thu nhỏ ảnh bên trong khung"
+        >
+          <ZoomOut size={15}/>
+        </button>
+        <button
+          type="button"
+          onClick={() => updateElement(selectedElement.id, {
+            imageScale: clamp(Number(selectedElement.imageScale || 1) + 0.1, 0.5, 4),
+          })}
+          disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
+          title="Phóng to ảnh bên trong khung"
+        >
+          <ZoomIn size={15}/>
+        </button>
         <button type="button" onClick={copySelected} disabled={!selectedId} title="Sao chép (Ctrl+C)"><Copy size={15}/></button>
         <button type="button" onClick={pasteElement} disabled={!hasClipboard} title="Dán (Ctrl+V)"><ClipboardPaste size={15}/></button>
         <button type="button" onClick={duplicateSelected} disabled={!selectedId} title="Nhân bản (Ctrl+D)"><Copy size={15}/><Plus size={10}/></button>
@@ -533,18 +557,22 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
             </button>
           )}
           {element.type === 'image' ? (
-            <AssetImage
-              src={resolveAssetUrl(element.src)}
-              storageUrl={element.storageUrl}
-              assetId={element.assetId}
-              alt=""
-              draggable={false}
-              onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
-              style={{
-                objectFit: element.objectFit || inferImageFit(element.src),
-                objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
-              }}
-            />
+            <div className="canvas-image-viewport">
+              <AssetImage
+                src={resolveAssetUrl(element.src)}
+                storageUrl={element.storageUrl}
+                assetId={element.assetId}
+                alt=""
+                draggable={false}
+                onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
+                style={{
+                  objectFit: element.objectFit || inferImageFit(element.src),
+                  objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
+                  transform: `scale(${element.imageScale || 1})`,
+                  transformOrigin: 'center',
+                }}
+              />
+            </div>
           ) : element.type === 'table' ? (
             <TableVisual
               table={element.data || slide.table}
