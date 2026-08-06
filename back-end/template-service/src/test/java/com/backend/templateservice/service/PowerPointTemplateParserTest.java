@@ -69,6 +69,12 @@ class PowerPointTemplateParserTest {
         assertThat(imageFrame.getY()).isEqualTo(72d);
         assertThat(imageFrame.getWidth()).isEqualTo(336d);
         assertThat(imageFrame.getHeight()).isEqualTo(360d);
+        TemplateManifest.Element translucentPanel = layout.getElements().stream()
+                .filter(item -> "shape".equals(item.getType()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(translucentPanel.getFill()).isEqualTo("#FFFFFF");
+        assertThat(translucentPanel.getOpacity()).isEqualTo(0.23d);
         assertThat(layout.getElements()).filteredOn(TemplateManifest.Element::isPlaceholder)
                 .extracting(TemplateManifest.Element::getRole)
                 .containsExactlyInAnyOrder("title", "image");
@@ -89,6 +95,9 @@ class PowerPointTemplateParserTest {
         assertThat(match.getElements()).filteredOn(item -> "image".equals(item.get("type")))
                 .singleElement()
                 .satisfies(item -> assertThat(item.get("src")).isEqualTo("https://example.test/generated.png"));
+        assertThat(match.getElements()).filteredOn(item -> "decoration".equals(item.get("role")))
+                .singleElement()
+                .satisfies(item -> assertThat(item.get("opacity")).isEqualTo(0.23d));
         assertThat(match.getElements()).filteredOn(item -> "title".equals(item.get("role")))
                 .extracting(item -> item.get("content"))
                 .containsExactly("New title");
@@ -229,6 +238,13 @@ class PowerPointTemplateParserTest {
                         <p:spPr>
                           <a:xfrm><a:off x="6705600" y="914400"/><a:ext cx="4267200" cy="4572000"/></a:xfrm>
                           <a:blipFill><a:blip r:embed="rId2"/></a:blipFill>
+                        </p:spPr>
+                      </p:sp>
+                      <p:sp>
+                        <p:nvSpPr><p:cNvPr id="4" name="Translucent panel"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                        <p:spPr>
+                          <a:xfrm><a:off x="0" y="0"/><a:ext cx="5486400" cy="6858000"/></a:xfrm>
+                          <a:solidFill><a:schemeClr val="bg1"><a:alpha val="23000"/></a:schemeClr></a:solidFill>
                         </p:spPr>
                       </p:sp>
                       <p:sp>

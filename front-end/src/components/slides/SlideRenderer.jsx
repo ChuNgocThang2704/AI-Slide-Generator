@@ -933,6 +933,8 @@ export default function SlideRenderer({ slide, theme = 'clean-white', index = 0,
               ? (element.src || element.storageUrl || element.assetId
                   ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || 'cover', objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%` }}/>
                   : <div style={{ width:'100%', height:'100%', background:'rgba(148,163,184,.08)', border:'1px dashed #94a3b8' }}/>)
+              : element.type === 'shape'
+                ? <div style={{ width:'100%', height:'100%', background:element.fill || 'transparent', border:`1px solid ${element.borderColor || 'transparent'}`, opacity:element.opacity ?? 1 }}/>
               : <div style={{ width:'100%', height:'100%', ...element.style }} dangerouslySetInnerHTML={{ __html: element.content || '' }}/>
             }
           </div>

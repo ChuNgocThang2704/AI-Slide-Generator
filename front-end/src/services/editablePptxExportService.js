@@ -263,7 +263,9 @@ export async function exportEditablePptx({ slides, theme = 'clean-white', fileNa
           },
           fill: {
             color: cleanColor(element.fill, activeTheme.bg),
-            transparency: element.fill === 'transparent' ? 100 : 0,
+            transparency: element.fill === 'transparent'
+              ? 100
+              : Math.round((1 - Math.min(1, Math.max(0, Number(element.opacity ?? 1)))) * 100),
           },
         });
       }

@@ -540,6 +540,7 @@ export default function ElementCanvas({
                 background: element.fill || 'transparent',
                 borderColor: element.borderColor || 'transparent',
                 borderRadius: element.radius || 0,
+                opacity: element.opacity ?? 1,
               }}
             />
           ) : element.type === 'table' ? (

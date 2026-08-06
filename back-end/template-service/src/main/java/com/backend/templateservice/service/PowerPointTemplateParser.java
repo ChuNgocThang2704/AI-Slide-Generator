@@ -394,6 +394,7 @@ public class PowerPointTemplateParser {
                     .width(anchor[2])
                     .height(anchor[3])
                     .rotation(readRotation(shape))
+                    .opacity(readFillOpacity(shape))
                     .placeholder(placeholder.present)
                     .locked(!placeholder.present)
                     .content(content)
@@ -452,7 +453,18 @@ public class PowerPointTemplateParser {
     private String readShapeFill(Element shape, TemplateManifest.Theme theme) {
         Element shapeProperties = firstDescendant(shape, "spPr");
         if (shapeProperties == null) return null;
-        return colorFromNode(shapeProperties, theme.getColors());
+        Element solidFill = firstDescendant(shapeProperties, "solidFill");
+        return solidFill == null ? null : colorFromNode(solidFill, theme.getColors());
+    }
+
+    private Double readFillOpacity(Element shape) {
+        Element shapeProperties = firstDescendant(shape, "spPr");
+        if (shapeProperties == null) return null;
+        Element solidFill = firstDescendant(shapeProperties, "solidFill");
+        Element alpha = solidFill == null ? null : firstDescendant(solidFill, "alpha");
+        if (alpha == null) return null;
+        double opacity = longAttr(alpha, "val", 100_000) / 100_000d;
+        return Math.max(0, Math.min(1, opacity));
     }
 
     private String readLineColor(Element shape, TemplateManifest.Theme theme) {
@@ -549,6 +561,7 @@ public class PowerPointTemplateParser {
                 .x(source.getX()).y(source.getY())
                 .width(source.getWidth()).height(source.getHeight())
                 .rotation(source.getRotation())
+                .opacity(source.getOpacity())
                 .placeholder(source.isPlaceholder())
                 .locked(source.isLocked())
                 .content(source.getContent())

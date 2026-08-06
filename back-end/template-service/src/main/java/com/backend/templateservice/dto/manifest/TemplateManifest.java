@@ -64,6 +64,7 @@ public class TemplateManifest {
         private double width;
         private double height;
         private double rotation;
+        private Double opacity;
         private boolean placeholder;
         private boolean locked;
         private String content;

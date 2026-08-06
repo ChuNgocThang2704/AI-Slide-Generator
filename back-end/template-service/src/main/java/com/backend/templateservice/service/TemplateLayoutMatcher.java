@@ -128,6 +128,7 @@ public class TemplateLayoutMatcher {
         element.put("width", source.getWidth());
         element.put("height", source.getHeight());
         element.put("rotation", source.getRotation());
+        if (source.getOpacity() != null) element.put("opacity", source.getOpacity());
         element.put("locked", locked);
         if (content != null) element.put("content", content);
         if (src != null) element.put("src", src);
