@@ -17,6 +17,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.AuditorAware;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -28,6 +29,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -42,6 +44,7 @@ public class TemplateService {
     private final PowerPointTemplateParser templateParser;
     private final TemplateLayoutMatcher layoutMatcher;
     private final ObjectMapper objectMapper;
+    private final AuditorAware<String> auditorProvider;
 
     public Map<String, Object> uploadFileOnly(MultipartFile file) {
         log.info("[template-service] upload file lên S3: {}", file.getOriginalFilename());
@@ -95,8 +98,7 @@ public class TemplateService {
     }
 
     public TemplateMatchResponse matchLayout(UUID id, TemplateMatchRequest request) {
-        Template template = templateRepository.findById(id)
-                .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+        Template template = getAccessibleTemplate(id);
         if (template.getManifestJson() == null || template.getManifestJson().isBlank()) {
             throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
         }
@@ -114,8 +116,7 @@ public class TemplateService {
         Template template;
 
         if (request.getId() != null) {
-            template = templateRepository.findById(request.getId())
-                    .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+            template = getAccessibleTemplate(request.getId());
         } else {
             template = new Template();
             template.setNumSlides(0);
@@ -143,6 +144,7 @@ public class TemplateService {
         }
         List<Template> templates = templateRepository.findAllById(ids);
         if (!templates.isEmpty()) {
+            templates.forEach(this::verifyAccess);
             for (Template template : templates) {
                 if (template.getS3Url() != null) {
                     s3Service.deleteFile(template.getS3Url());
@@ -153,14 +155,12 @@ public class TemplateService {
     }
 
     public TemplateResponse getTemplate(UUID id) {
-        Template template = templateRepository.findById(id)
-                .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+        Template template = getAccessibleTemplate(id);
         return TemplateMapper.toResponse(template);
     }
 
     public String getPresignedViewUrl(UUID id) {
-        Template template = templateRepository.findById(id)
-                .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+        Template template = getAccessibleTemplate(id);
         if (template.getS3Url() == null) {
             throw new CustomException(ErrorCode.UNCATEGORIZED_EXCEPTION); // Could create FILE_NOT_FOUND
         }
@@ -168,11 +168,25 @@ public class TemplateService {
     }
 
     public PageResponse<TemplateResponse> getAllTemplates(String search, int page, int size) {
-        Page<Template> templatePage = templateRepository.searchTemplates(
+        Page<Template> templatePage = templateRepository.searchVisibleTemplates(
+                search,
+                currentAuditor(),
+                PageRequest.of(page, size, Sort.by("createdAt").descending())
+        );
+
+        return toPageResponse(templatePage);
+    }
+
+    public PageResponse<TemplateResponse> getPublicTemplates(String search, int page, int size) {
+        Page<Template> templatePage = templateRepository.searchPublicTemplates(
                 search,
                 PageRequest.of(page, size, Sort.by("createdAt").descending())
         );
 
+        return toPageResponse(templatePage);
+    }
+
+    private PageResponse<TemplateResponse> toPageResponse(Page<Template> templatePage) {
         return PageResponse.<TemplateResponse>builder()
                 .page(templatePage.getNumber())
                 .size(templatePage.getSize())
@@ -182,6 +196,24 @@ public class TemplateService {
                         .map(TemplateMapper::toResponse)
                         .collect(Collectors.toList()))
                 .build();
+    }
+
+    private Template getAccessibleTemplate(UUID id) {
+        Template template = templateRepository.findById(id)
+                .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+        verifyAccess(template);
+        return template;
+    }
+
+    private void verifyAccess(Template template) {
+        if ("CUSTOM_PPTX".equals(template.getSourceType())
+                && !Objects.equals(template.getCreatedBy(), currentAuditor())) {
+            throw new CustomException(ErrorCode.TEMPLATE_NOT_FOUND);
+        }
+    }
+
+    private String currentAuditor() {
+        return auditorProvider.getCurrentAuditor().orElse("SYSTEM");
     }
 
     private boolean isPowerPointTemplate(String filename) {

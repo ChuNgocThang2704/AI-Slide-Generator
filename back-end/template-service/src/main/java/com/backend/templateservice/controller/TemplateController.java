@@ -74,7 +74,7 @@ public class TemplateController {
             @RequestParam(defaultValue = "10") int size
     ) {
         return ApiResponse.<PageResponse<TemplateResponse>>builder()
-                .data(templateService.getAllTemplates(search, page, size))
+                .data(templateService.getPublicTemplates(search, page, size))
                 .build();
     }
 
