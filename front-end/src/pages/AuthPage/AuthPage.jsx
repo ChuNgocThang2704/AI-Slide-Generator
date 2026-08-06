@@ -187,7 +187,15 @@ export default function AuthPage({ mode = 'login' }) {
               <div className="form-group">
                 <div className="flex justify-between items-center">
                   <label className="form-label">Mật khẩu</label>
-                  {isLogin && <button type="button" className="forgot-link">Quên mật khẩu?</button>}
+                  {isLogin && (
+                    <button
+                      type="button"
+                      className="forgot-link"
+                      onClick={() => navigate('/forgot-password')}
+                    >
+                      Quên mật khẩu?
+                    </button>
+                  )}
                 </div>
                 <div className="input-wrap">
                   <Lock size={16} className="input-icon" />

@@ -168,6 +168,31 @@ services:
     networks:
       - ai-slide-net
 
+  statistic-service:
+    build:
+      context: ./back-end/statistic-service
+    container_name: ai-statistic-service
+    restart: unless-stopped
+    ports:
+      - "${STATISTIC_SERVICE_PORT:-8086}:8086"
+    env_file:
+      - .env
+    environment:
+      STATISTIC_SERVICE_PORT: 8086
+      JWT_SIGNER_KEY: ${JWT_SIGNER_KEY}
+      USER_SERVICE_URL: http://user-service:8081
+      SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084
+      DOCUMENT_SERVICE_URL: http://document-service:8082
+    depends_on:
+      user-service:
+        condition: service_started
+      subscription-service:
+        condition: service_started
+      document-service:
+        condition: service_started
+    networks:
+      - ai-slide-net
+
   document-service:
     build:
       context: ./back-end/document-service
@@ -259,6 +284,7 @@ services:
       TEMPLATE_SERVICE_URL: http://template-service:8083
       SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084
       PAYMENT_SERVICE_URL: http://payment-service:8085
+      STATISTIC_SERVICE_URL: http://statistic-service:8086
       REDIS_URL: redis://redis:6379
       REDIS_SSL_ENABLED: "false"
     depends_on:
@@ -273,6 +299,8 @@ services:
       subscription-service:
         condition: service_started
       payment-service:
+        condition: service_started
+      statistic-service:
         condition: service_started
     networks:
       - ai-slide-net

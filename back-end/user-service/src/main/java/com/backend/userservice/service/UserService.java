@@ -19,6 +19,8 @@ import com.backend.userservice.repository.RoleRepository;
 import com.backend.userservice.repository.UserProfileRepository;
 import com.backend.userservice.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -165,5 +167,27 @@ public class UserService {
                         .description(role.getDescription())
                         .build())
                 .collect(Collectors.toSet());
+    }
+
+    public long countTotalUsers() {
+        return userRepository.count();
+    }
+
+    public long countUsersBefore(Instant date) {
+        return userRepository.countUsersBefore(date);
+    }
+
+    public long countUsersBetween(Instant startDate, Instant endDate) {
+        return userRepository.countUsersBetween(startDate, endDate);
+    }
+
+    public Map<String, String> getUserEmailsMap(List<UUID> userIds) {
+        Map<String, String> map = new HashMap<>();
+        userRepository.findAllById(userIds).forEach(user -> map.put(user.getId().toString(), user.getEmail()));
+        return map;
+    }
+
+    public long countUnverifiedEmails() {
+        return userRepository.countByEmailVerifiedFalse();
     }
 }

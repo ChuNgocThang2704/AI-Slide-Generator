@@ -64,7 +64,6 @@ public class UserSubscriptionService {
                             .userId(userId)
                             .action(Constants.SUBSCRIPTION_ACTION.REGISTER)
                             .newPackageCode(Constants.PACKAGE_CODE.FREE)
-                            .note("Auto-provisioned on query fallback")
                             .build();
                     historyRepository.save(history);
 
@@ -408,5 +407,112 @@ public class UserSubscriptionService {
             return "Số lần sửa slide trong ngày";
         }
         return featureKey;
+    }
+
+    public java.util.Map<String, Object> getSubscriptionStats() {
+        log.info("[subscription-service] Đang tính toán dữ liệu thống kê subscription...");
+        long activeCount = subscriptionRepository.countActiveSubscriptions();
+        java.math.BigDecimal revVnd = subscriptionRepository.sumTotalRevenueVnd();
+        java.math.BigDecimal revUsd = subscriptionRepository.sumTotalRevenueUsd();
+
+        java.util.Map<String, Object> stats = new java.util.HashMap<>();
+        stats.put("activeSubscriptionsCount", activeCount);
+        stats.put("totalRevenueVnd", revVnd != null ? revVnd.doubleValue() : 0.0);
+        stats.put("totalRevenueUsd", revUsd != null ? revUsd.doubleValue() : 0.0);
+        return stats;
+    }
+
+    public java.util.Map<String, Object> getSubscriptionStatsInRange(java.time.Instant start, java.time.Instant end) {
+        log.info("[subscription-service] Đang tính toán dữ liệu thống kê subscription theo khoảng thời gian...");
+        long activeCountTotal = subscriptionRepository.countActiveSubscriptions();
+        long activeCountPrev = subscriptionRepository.countActiveSubscriptionsBefore(start);
+        long activeCountBetween = subscriptionRepository.countActiveSubscriptionsBetween(start, end);
+
+        java.math.BigDecimal revVndTotal = subscriptionRepository.sumTotalRevenueVnd();
+        java.math.BigDecimal revVndPrev = subscriptionRepository.sumRevenueVndBefore(start);
+        java.math.BigDecimal revVndBetween = subscriptionRepository.sumRevenueVndBetween(start, end);
+
+        java.math.BigDecimal revUsdTotal = subscriptionRepository.sumTotalRevenueUsd();
+        java.math.BigDecimal revUsdPrev = subscriptionRepository.sumRevenueUsdBefore(start);
+        java.math.BigDecimal revUsdBetween = subscriptionRepository.sumRevenueUsdBetween(start, end);
+
+        java.util.Map<String, Object> stats = new java.util.HashMap<>();
+        
+        java.util.Map<String, Object> activeSubMap = new java.util.HashMap<>();
+        activeSubMap.put("previous_value", activeCountPrev);
+        activeSubMap.put("current_value", activeCountBetween);
+        activeSubMap.put("total_value", activeCountTotal);
+        stats.put("active_subscriptions", activeSubMap);
+
+        java.util.Map<String, Object> revVndMap = new java.util.HashMap<>();
+        revVndMap.put("previous_value", revVndPrev != null ? revVndPrev.doubleValue() : 0.0);
+        revVndMap.put("current_value", revVndBetween != null ? revVndBetween.doubleValue() : 0.0);
+        revVndMap.put("total_value", revVndTotal != null ? revVndTotal.doubleValue() : 0.0);
+        stats.put("revenue_vnd", revVndMap);
+
+        java.util.Map<String, Object> revUsdMap = new java.util.HashMap<>();
+        revUsdMap.put("previous_value", revUsdPrev != null ? revUsdPrev.doubleValue() : 0.0);
+        revUsdMap.put("current_value", revUsdBetween != null ? revUsdBetween.doubleValue() : 0.0);
+        revUsdMap.put("total_value", revUsdTotal != null ? revUsdTotal.doubleValue() : 0.0);
+        stats.put("revenue_usd", revUsdMap);
+
+        // Phân bổ gói cước thực tế từ DB
+        java.util.List<Object[]> pkgDist = subscriptionRepository.getPackageDistributionInRange(start, end);
+        java.util.List<java.util.Map<String, Object>> packageDistributionList = new java.util.ArrayList<>();
+        double totalPackages = 0;
+        for (Object[] row : pkgDist) {
+            totalPackages += ((Number) row[1]).doubleValue();
+        }
+        for (Object[] row : pkgDist) {
+            java.util.Map<String, Object> map = new java.util.HashMap<>();
+            String pkgName = (String) row[0];
+            long count = ((Number) row[1]).longValue();
+            map.put("package_name", pkgName);
+            map.put("count", count);
+            map.put("percent", totalPackages > 0 ? Math.round((count / totalPackages) * 1000.0) / 10.0 : 0.0);
+            packageDistributionList.add(map);
+        }
+        stats.put("package_distribution", packageDistributionList);
+
+        // Phân bổ trạng thái giao dịch thực tế từ DB
+        java.util.List<Object[]> statusDist = subscriptionRepository.getTransactionStatusDistributionInRange(start, end);
+        java.util.List<java.util.Map<String, Object>> statusDistributionList = new java.util.ArrayList<>();
+        double totalStatuses = 0;
+        for (Object[] row : statusDist) {
+            totalStatuses += ((Number) row[1]).doubleValue();
+        }
+        for (Object[] row : statusDist) {
+            java.util.Map<String, Object> map = new java.util.HashMap<>();
+            int statusVal = ((Number) row[0]).intValue();
+            long count = ((Number) row[1]).longValue();
+            String statusName = "Khác";
+            if (statusVal == 0) statusName = "Đang xử lý (PENDING)";
+            else if (statusVal == 1) statusName = "Thành công (SUCCESS)";
+            else if (statusVal == 3) statusName = "Bị hủy (CANCELLED)";
+            
+            map.put("package_name", statusName);
+            map.put("count", count);
+            map.put("percent", totalStatuses > 0 ? Math.round((count / totalStatuses) * 1000.0) / 10.0 : 0.0);
+            statusDistributionList.add(map);
+        }
+        stats.put("transaction_status_distribution", statusDistributionList);
+
+        long expiringCount = subscriptionRepository.countExpiringSubscriptions(
+            java.time.LocalDateTime.now(), 
+            java.time.LocalDateTime.now().plusDays(3)
+        );
+        stats.put("expiring_subscriptions_count", expiringCount);
+
+        return stats;
+    }
+
+    public java.util.Map<String, String> getActivePackageCodesByUserIds(java.util.List<UUID> userIds) {
+        java.util.Map<String, String> map = new java.util.HashMap<>();
+        if (userIds == null || userIds.isEmpty()) return map;
+        java.util.List<Object[]> results = subscriptionRepository.findActivePackageCodesByUserIds(userIds);
+        for (Object[] row : results) {
+            map.put(row[0].toString(), (String) row[1]);
+        }
+        return map;
     }
 }

@@ -4,13 +4,19 @@ import com.backend.subscriptionservice.dto.request.InternalQuotaRequest;
 import com.backend.subscriptionservice.dto.response.*;
 import com.backend.subscriptionservice.service.UserSubscriptionService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
+import java.util.List;
 
 @RestController
 @RequestMapping("/internal")
 @RequiredArgsConstructor
+@Slf4j
 public class InternalSubscriptionController {
 
     private final UserSubscriptionService subscriptionService;
@@ -48,6 +54,28 @@ public class InternalSubscriptionController {
         subscriptionService.processPaymentCallback(orderCode);
         return ApiResponse.<Void>builder()
                 .message("Payment callback processed successfully")
+                .build();
+    }
+
+    @PostMapping("/subscriptions/dashboard-stats")
+    public ApiResponse<Map<String, Object>> getSubscriptionDashboardStats(
+            @RequestParam("startDate") String startDateStr,
+            @RequestParam("endDate") String endDateStr,
+            @RequestBody(required = false) List<UUID> userIds) {
+        log.info("[subscription-service] Nhận yêu cầu nội bộ tính toán subscription stats tổng hợp...");
+        Instant start = Instant.parse(startDateStr);
+        Instant end = Instant.parse(endDateStr);
+
+        Map<String, Object> stats = subscriptionService.getSubscriptionStatsInRange(start, end);
+        
+        Map<String, String> packageCodes = new HashMap<>();
+        if (userIds != null && !userIds.isEmpty()) {
+            packageCodes = subscriptionService.getActivePackageCodesByUserIds(userIds);
+        }
+        stats.put("package_codes", packageCodes);
+
+        return ApiResponse.<Map<String, Object>>builder()
+                .data(stats)
                 .build();
     }
 }

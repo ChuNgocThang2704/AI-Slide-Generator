@@ -9,6 +9,7 @@ import ToastContainer from './components/common/Toast';
 
 import LandingPage from './pages/LandingPage/LandingPage';
 import AuthPage from './pages/AuthPage/AuthPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage/ForgotPasswordPage';
 import VerifyCodePage from './pages/VerifyCodePage/VerifyCodePage';
 import DashboardPage from './pages/DashboardPage/DashboardPage';
 import GeneratePage from './pages/GeneratePage/GeneratePage';
@@ -192,6 +193,11 @@ export default function App() {
         <Route path="/register" element={
           <PublicOnlyRoute>
             <Layout hideNav><AuthPage mode="register" /></Layout>
+          </PublicOnlyRoute>
+        } />
+        <Route path="/forgot-password" element={
+          <PublicOnlyRoute>
+            <Layout hideNav><ForgotPasswordPage /></Layout>
           </PublicOnlyRoute>
         } />
         <Route path="/verify-code" element={

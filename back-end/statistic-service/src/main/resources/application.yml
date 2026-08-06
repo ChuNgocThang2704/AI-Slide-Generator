@@ -1,0 +1,22 @@
+server:
+  port: ${STATISTIC_SERVICE_PORT:8086}
+  servlet:
+    context-path: /api/statistic
+
+spring:
+  application:
+    name: statistic-service
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+
+jwt:
+  signerKey: ${JWT_SIGNER_KEY:mock_signer_key_here}
+
+app:
+  user-service:
+    url: ${USER_SERVICE_URL:http://localhost:8081}
+  subscription-service:
+    url: ${SUBSCRIPTION_SERVICE_URL:http://localhost:8084}
+  document-service:
+    url: ${DOCUMENT_SERVICE_URL:http://localhost:8082}
