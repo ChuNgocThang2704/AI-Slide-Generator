@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import re
 import unicodedata
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
 import httpx
@@ -51,6 +52,11 @@ from .validation import (
 from .providers import (
     _try_secondary_ai_image_fallback,
     _try_stock_photo_fallback,
+)
+from services.source_visuals import (
+    extract_pdf_visual_candidates,
+    match_source_visuals_to_slides,
+    match_source_visuals_with_ai,
 )
 
 
@@ -951,6 +957,52 @@ async def _process_single_slide(
     return image_path, debug_record
 
 
+async def _validate_source_visual_candidate(
+    client: httpx.AsyncClient,
+    content_extractor,
+    slide: Dict[str, Any],
+    candidate: Dict[str, Any],
+) -> Tuple[bool, Dict[str, Any]]:
+    path = Path(str(candidate.get("path") or ""))
+    record: Dict[str, Any] = {
+        "slide_index": candidate.get("slide_index"),
+        "title": str(slide.get("title") or ""),
+        "status": "source_visual_rejected",
+        "source_visual": candidate,
+    }
+    try:
+        raw = path.read_bytes()
+    except Exception as error:
+        record["error"] = f"source_visual_read_failed: {error}"
+        return False, record
+
+    basic = _validate_output_image(
+        raw,
+        prompt_text=str(candidate.get("caption") or slide.get("title") or ""),
+        strict=False,
+    )
+    record["source_output_validation"] = basic
+    if not basic.get("ok"):
+        return False, record
+
+    semantic = await _get_image_semantic(content_extractor, slide)
+    judge = await _vlm_judge_image(
+        client,
+        image_bytes=raw,
+        prompt=str(candidate.get("caption") or slide.get("title") or ""),
+        slide=slide,
+        semantic=semantic,
+        min_relevance=0.55,
+        is_stock_photo=True,
+    )
+    record["source_vlm_judge"] = judge
+    if judge is not None and not judge.get("pass"):
+        return False, record
+    record["status"] = "saved_source_visual"
+    record["image_path"] = str(path.resolve())
+    return True, record
+
+
 def _score_slide_for_image(
     slide: Dict[str, Any],
     idx: int,
@@ -1056,6 +1108,7 @@ async def build_image_paths_for_slides(
     force_target_indices: Optional[List[int]] = None,
     force_instructions: Optional[Dict[int, str]] = None,
     visual_plan: Optional[Dict[int, str]] = None,
+    source_file_path: Optional[str] = None,
 ) -> Dict[int, str]:
     import asyncio
     plan_tier = (plan or "pro").strip().lower()
@@ -1171,6 +1224,72 @@ async def build_image_paths_for_slides(
     progress_lock = asyncio.Lock()
 
     async with httpx.AsyncClient(timeout=timeout) as client:
+        source_matches: Dict[int, Dict[str, Any]] = {}
+        if source_file_path and str(source_file_path).lower().endswith(".pdf"):
+            try:
+                candidates = await asyncio.to_thread(
+                    extract_pdf_visual_candidates,
+                    source_file_path,
+                    task_id,
+                )
+                # A relevant source figure is stronger visual evidence than a
+                # planner's generic image/no-image choice. Consider every body
+                # slide, while preserving editable tables/charts and explicit
+                # revise requests.
+                source_eligible = [
+                    idx
+                    for idx, slide in enumerate(slides)
+                    if idx not in forced_targets
+                    and idx not in (table_specs or {})
+                    and idx not in (chart_specs or {})
+                    and str(slide.get("layout") or "").lower()
+                    not in {"intro", "title", "thankyou", "thank_you"}
+                ]
+                source_matches = match_source_visuals_to_slides(
+                    candidates,
+                    slides,
+                    eligible_indices=source_eligible,
+                    max_matches=configured_limit,
+                )
+                source_matches = await match_source_visuals_with_ai(
+                    content_extractor,
+                    candidates,
+                    slides,
+                    eligible_indices=source_eligible,
+                    existing_matches=source_matches,
+                    max_matches=configured_limit,
+                )
+                print(
+                    f"[slide_images] source PDF candidates={len(candidates)} "
+                    f"matched={sorted(source_matches)}"
+                )
+            except Exception as error:
+                print(f"[slide_images] source PDF extraction failed: {error!r}")
+
+        for idx in sorted(source_matches):
+            candidate = {**source_matches[idx], "slide_index": idx}
+            accepted, record = await _validate_source_visual_candidate(
+                client,
+                content_extractor,
+                _normalize_slide_content(slides[idx]),
+                candidate,
+            )
+            debug_records.append(record)
+            if accepted:
+                out[idx] = str(candidate["path"])
+                done_count += 1
+                if progress_cb is not None:
+                    try:
+                        await progress_cb(done_count, n)
+                    except Exception:
+                        pass
+
+        remaining_slots = max(0, configured_limit - len(out))
+        generated_target_indices = [
+            idx for idx in target_indices if idx not in out
+        ][:remaining_slots]
+        n = len(out) + len(generated_target_indices)
+
         async def worker(idx: int):
             if should_stop is not None and await should_stop():
                 return idx, None, None
@@ -1210,7 +1329,7 @@ async def build_image_paths_for_slides(
                     print(f"[slide_images] Task exception for slide {idx}: {e}")
                     return idx, None, None
 
-        tasks = [worker(idx) for idx in target_indices]
+        tasks = [worker(idx) for idx in generated_target_indices]
         results = await asyncio.gather(*tasks)
 
     # Sort results to maintain slide index order in debug records and output

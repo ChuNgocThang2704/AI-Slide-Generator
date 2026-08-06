@@ -604,6 +604,7 @@ class RedisQueue:
                             if str(visual or "").strip().lower() == "image"
                         },
                         visual_plan=visual_plan,
+                        source_file_path=task_data.get("source_file_path"),
                     )
                 except Exception as image_error:
                     print(
@@ -1005,6 +1006,7 @@ class RedisQueue:
                             if str(visual or "").strip().lower() == "image"
                         },
                         visual_plan=visual_plan,
+                        source_file_path=task_data.get("source_file_path"),
                     )
                 except Exception as image_error:
                     print(

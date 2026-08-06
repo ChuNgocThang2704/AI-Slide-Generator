@@ -1419,6 +1419,7 @@ async def generate_slide_spec(
 
         raw_content = None
         structured_content = None
+        source_file_path: Optional[str] = None
 
         file_content = ""
         if file:
@@ -1429,6 +1430,8 @@ async def generate_slide_spec(
             with open(file_path, "wb") as f:
                 f.write(await file.read())
             file_content = await file_processor.process_file(file_path)
+            if file_ext == ".pdf":
+                source_file_path = str(file_path)
 
         validated_instruction = _validate_generation_instruction(
             text,
@@ -1470,6 +1473,7 @@ async def generate_slide_spec(
             slide_theme_bg: str,
             want_images_bg: bool,
             image_limit_bg: int,
+            source_file_path_bg: Optional[str],
         ):
             try:
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
@@ -1651,6 +1655,7 @@ async def generate_slide_spec(
                                 if str(visual or "").strip().lower() == "image"
                             },
                             visual_plan=visual_plan_bg,
+                            source_file_path=source_file_path_bg,
                         )
                     except Exception as image_error:
                         print(
@@ -1708,6 +1713,7 @@ async def generate_slide_spec(
                 "slide_theme": slide_preset,
                 "generate_images": "true" if want_images_flag else "false",
                 "image_limit": resolved_image_limit,
+                "source_file_path": source_file_path,
             }
             await redis_queue.add_task(task_id, task_data)
             return {
@@ -1726,6 +1732,7 @@ async def generate_slide_spec(
             slide_preset,
             want_images_flag,
             resolved_image_limit,
+            source_file_path,
         )
         return {
             "task_id": task_id,

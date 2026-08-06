@@ -278,6 +278,29 @@ def enrich_lecture_deck(
     return deck
 
 
+def attach_source_page_provenance(
+    structured_content: Dict[str, Any],
+    source_text: str,
+) -> Dict[str, Any]:
+    """Attach source pages to any document-backed deck without changing content."""
+    if not isinstance(structured_content, dict):
+        return structured_content
+    pages = _split_source_pages(source_text or "")
+    if not pages:
+        return structured_content
+    deck = copy.deepcopy(structured_content)
+    slides = deck.get("slides")
+    if not isinstance(slides, list):
+        return deck
+    valid_pages = {page for page, _text in pages}
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        explicit = _normalize_page_numbers(slide.get("source_pages"), valid_pages=valid_pages)
+        slide["source_pages"] = explicit or _match_source_pages(slide, pages)
+    return deck
+
+
 def select_relevant_source_excerpt(
     source_text: str,
     user_instruction: str = "",

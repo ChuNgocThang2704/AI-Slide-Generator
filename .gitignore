@@ -71,6 +71,7 @@ uploads/
 outputs/
 **/outputs/debug/
 **/_tmp_retest.py
+.tmp*/
 payload.json
 scripts/_test_sdxl_remote.py
 scripts/_poll_result.py

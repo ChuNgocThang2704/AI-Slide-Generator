@@ -10,6 +10,7 @@ from routes.api import (
 )
 from services.content_extractor import ContentExtractor
 from services.lecture_quality import (
+    attach_source_page_provenance,
     build_source_page_index,
     detect_lecture_mode,
     enrich_lecture_deck,
@@ -25,6 +26,22 @@ from services.text_utils import plain_slide_text
 
 
 class LectureQualityTests(unittest.TestCase):
+    def test_generic_document_deck_receives_source_page_provenance(self):
+        source = (
+            "[[SOURCE_PAGE:1]]\nCloud infrastructure overview and deployment context.\n"
+            "[[SOURCE_PAGE:2]]\nDenseNet training achieved strong validation accuracy and stable convergence.\n"
+        )
+        deck = {
+            "presentation_mode": "presentation",
+            "slides": [{
+                "title": "DenseNet training results",
+                "bullets": ["Validation accuracy remained stable during convergence."],
+            }],
+        }
+        result = attach_source_page_provenance(deck, source)
+        self.assertEqual(result["slides"][0]["source_pages"], [2])
+        self.assertEqual(result["slides"][0]["title"], deck["slides"][0]["title"])
+
     def test_detects_textbook_but_not_generic_business_prompt(self):
         textbook = (
             "[[SOURCE_PAGE:1]]\nChapter 3 Functions\n"

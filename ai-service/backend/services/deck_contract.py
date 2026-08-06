@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, Optional
 
 from services.deck_coherence import improve_deck_coherence
-from services.lecture_quality import enrich_lecture_deck
+from services.lecture_quality import attach_source_page_provenance, enrich_lecture_deck
 from services.plan_limits import enforce_plan_slide_limit
 from services.slide_text_quality import improve_final_slide_quality
 
@@ -93,6 +93,7 @@ async def finalize_deck_for_visuals(
     # provenance supplied by lecture enrichment. Running it afterwards also
     # lets the judge repair a weak concept/example sequence selectively.
     deck = enrich_lecture_deck(deck, raw_content or "", user_instruction or "")
+    deck = attach_source_page_provenance(deck, raw_content or "")
     deck = enforce_plan_slide_limit(deck, plan)
     deck = await improve_deck_coherence(
         content_extractor,
@@ -102,6 +103,7 @@ async def finalize_deck_for_visuals(
     # A review pass may accidentally remove a requested practice/activity role.
     # Re-apply the pedagogical contract before locking the structure.
     deck = enrich_lecture_deck(deck, raw_content or "", user_instruction or "")
+    deck = attach_source_page_provenance(deck, raw_content or "")
 
     desired_count = int(target_slides) if target_slides else original_count
     desired_count = max(2, desired_count)
@@ -110,6 +112,9 @@ async def finalize_deck_for_visuals(
     deck = content_extractor._ensure_deck_boundaries(deck, desired_count)
     if len(deck.get("slides") or []) != desired_count:
         deck = await content_extractor._force_slide_count_exact(deck, desired_count)
+    # Count repair and boundary normalization may create replacement slides.
+    # Reattach provenance only after the final slide set is stable.
+    deck = attach_source_page_provenance(deck, raw_content or "")
     deck = assign_stable_slide_ids(deck)
 
     signature = deck_structure_signature(deck)
