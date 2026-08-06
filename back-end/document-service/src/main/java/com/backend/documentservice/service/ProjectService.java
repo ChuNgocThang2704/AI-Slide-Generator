@@ -1514,4 +1514,94 @@ public class ProjectService {
         }
         return false;
     }
+
+    public long countTotalProjects() {
+        return projectRepository.count();
+    }
+
+    public long countProjectsBefore(java.time.Instant date) {
+        return projectRepository.countProjectsBefore(date);
+    }
+
+    public long countProjectsBetween(java.time.Instant startDate, java.time.Instant endDate) {
+        return projectRepository.countProjectsBetween(startDate, endDate);
+    }
+
+    public java.util.List<Object[]> getTopActiveUsers(int limit) {
+        return projectRepository.findTopActiveUsers(org.springframework.data.domain.PageRequest.of(0, limit));
+    }
+
+    public java.util.List<Object[]> getProjectsCountByMonth(int year, java.time.Instant startDate, java.time.Instant endDate) {
+        return projectRepository.countProjectsByMonth(year, startDate, endDate);
+    }
+
+    public long countDistinctOwners() {
+        return projectRepository.countDistinctOwners();
+    }
+
+    public long countUserProjectsBefore(UUID ownerId, java.time.Instant date) {
+        return projectRepository.countByOwnerIdAndCreatedAtBefore(ownerId, date);
+    }
+
+    public long countUserProjectsBetween(UUID ownerId, java.time.Instant startDate, java.time.Instant endDate) {
+        return projectRepository.countByOwnerIdAndCreatedAtBetween(ownerId, startDate, endDate);
+    }
+
+    public java.util.Map<String, Object> getProjectDashboardStats(java.time.Instant startDate, java.time.Instant endDate, int year, int topUsersLimit) {
+        log.info("[document-service] Đang tính toán thống kê dashboard dự án slide tổng hợp...");
+
+        long prevCount = projectRepository.countProjectsBefore(startDate);
+        long currentCount = projectRepository.countProjectsBetween(startDate, endDate);
+        long totalCount = projectRepository.count();
+
+        java.util.Map<String, Long> rangeCountMap = new java.util.HashMap<>();
+        rangeCountMap.put("previous_value", prevCount);
+        rangeCountMap.put("current_value", currentCount);
+        rangeCountMap.put("total_value", totalCount);
+
+        long distinctOwners = projectRepository.countDistinctOwners();
+
+        java.util.List<Object[]> monthlyCounts = projectRepository.countProjectsByMonth(year, startDate, endDate);
+
+        java.util.List<Object[]> rawTop = projectRepository.findTopActiveUsers(org.springframework.data.domain.PageRequest.of(0, topUsersLimit));
+        java.util.List<UUID> topUserIds = new java.util.ArrayList<>();
+        for (Object[] row : rawTop) {
+            topUserIds.add((UUID) row[0]);
+        }
+
+        java.util.Map<String, java.util.Map<String, Long>> topUserStats = new java.util.HashMap<>();
+        if (!topUserIds.isEmpty()) {
+            java.util.List<Object[]> prevCountsList = projectRepository.countProjectsBeforeForUsers(topUserIds, startDate);
+            java.util.List<Object[]> currentCountsList = projectRepository.countProjectsBetweenForUsers(topUserIds, startDate, endDate);
+
+            java.util.Map<String, Long> prevCountsMap = new java.util.HashMap<>();
+            for (Object[] row : prevCountsList) {
+                prevCountsMap.put(row[0].toString(), ((Number) row[1]).longValue());
+            }
+
+            java.util.Map<String, Long> currentCountsMap = new java.util.HashMap<>();
+            for (Object[] row : currentCountsList) {
+                currentCountsMap.put(row[0].toString(), ((Number) row[1]).longValue());
+            }
+
+            for (UUID uId : topUserIds) {
+                String uIdStr = uId.toString();
+                java.util.Map<String, Long> uMap = new java.util.HashMap<>();
+                uMap.put("previous_value", prevCountsMap.getOrDefault(uIdStr, 0L));
+                uMap.put("current_value", currentCountsMap.getOrDefault(uIdStr, 0L));
+                topUserStats.put(uIdStr, uMap);
+            }
+        }
+
+        java.util.List<Object[]> dailyCounts = projectRepository.countProjectsByDay(startDate, endDate);
+
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+        result.put("range_count", rangeCountMap);
+        result.put("distinct_owners_count", distinctOwners);
+        result.put("monthly_counts", monthlyCounts);
+        result.put("top_users_stats", topUserStats);
+        result.put("daily_counts", dailyCounts);
+
+        return result;
+    }
 }
