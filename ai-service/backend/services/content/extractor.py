@@ -219,9 +219,13 @@ class ContentExtractor(
             print(
                 f"Using vLLM base URL: {self.vllm_base_url} | model: {model_name}"
             )
+        elif self.gemini_available:
+            print(
+                f"vLLM is not configured; using Gemini fallback | model: {self.gemini_model}"
+            )
         else:
             print(
-                "Warning: VLLM_API_BASE_URL không set — extract slide chỉ dùng heuristic/fallback."
+                "Warning: no LLM backend is configured; slide extraction will use heuristic fallback."
             )
         self._slide_lang_hint: str = "auto"
         self._lecture_mode: bool = False
@@ -663,8 +667,10 @@ class ContentExtractor(
         )
         if self._slide_lang_hint in ("vi", "en"):
             print(f"Slide language hint: {self._slide_lang_hint} (match source)")
-        # Nếu không có vLLM, dùng fallback ngay
-        if not self.vllm_available:
+        # Use deterministic fallback only when no AI provider is available.
+        # Gemini-only deployments still run the complete generation pipeline;
+        # _llm_completion_plain_text() routes every pass to Gemini.
+        if not self.vllm_available and not self.gemini_available:
             structured = self._normalize_structured_content(self._fallback_structure(raw_content))
             if force_exact_slide_count and target_slides_override:
                 structured = await self._force_slide_count_exact(structured, target_slides_override)

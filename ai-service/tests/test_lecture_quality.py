@@ -698,6 +698,27 @@ class LectureQualityTests(unittest.TestCase):
 
         self.assertEqual(result["slides"][-1]["title"], "The Cloud-Ready Future")
 
+    def test_boundary_uses_qa_closing_after_existing_conclusion(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        extractor._lecture_mode = False
+        deck = {
+            "title": "Báo cáo nghiên cứu",
+            "presentation_mode": "presentation",
+            "slides": [
+                {"title": "Báo cáo nghiên cứu", "layout": "intro", "bullets": ["Tổng quan."]},
+                {"title": "Kết quả", "bullets": ["Độ chính xác đạt 95,76%."]},
+                {"title": "Kết luận", "bullets": ["Kết quả xác nhận tính khả dụng của dữ liệu."]},
+                {"title": "Kết luận: Báo cáo nghiên cứu", "bullets": ["Tóm tắt nội dung."]},
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 4)
+
+        self.assertEqual(result["slides"][-2]["title"], "Kết luận")
+        self.assertEqual(result["slides"][-1]["title"], "Cảm ơn và Hỏi đáp")
+        self.assertEqual(result["slides"][-1]["layout"], "thankyou")
+
     def test_boundary_replaces_closing_about_a_topic_missing_from_body(self):
         extractor = ContentExtractor()
         extractor._slide_lang_hint = "en"

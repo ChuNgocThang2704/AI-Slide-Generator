@@ -11,6 +11,10 @@ from services.content.json_utils import parse_json_response
 _ENABLED = os.getenv("DECK_COHERENCE_JUDGE_ENABLE", "true").lower() in ("1", "true", "yes")
 _MAX_REFINES = max(0, int(os.getenv("DECK_COHERENCE_MAX_REFINES", "3")))
 _VALIDATE_REFINES = os.getenv("DECK_COHERENCE_VALIDATE_REFINES", "true").lower() in ("1", "true", "yes")
+_SOURCE_EVIDENCE_MAX_CHARS = max(
+    12000,
+    int(os.getenv("DECK_COHERENCE_SOURCE_MAX_CHARS", "30000")),
+)
 _DEBUG_DIR = Path("outputs") / "debug"
 _ALLOWED_ISSUES = {
     "duplicate_content",
@@ -162,7 +166,7 @@ async def _judge(
             getattr(content_extractor, "_focused_source_content", "")
             or getattr(content_extractor, "_source_content", "")
             or ""
-        )[:12000],
+        )[:_SOURCE_EVIDENCE_MAX_CHARS],
         "deck_profile": _deck_profile(structured),
         "slides": [_slide_summary(slide, idx) for idx, slide in enumerate(slides) if isinstance(slide, dict)],
     }
@@ -175,6 +179,9 @@ async def _judge(
                 "missing transitions, omitted explicit user requirements, or a table/chart/image layout that does "
                 "not support the slide claim. Compare factual and technical claims against source_evidence when it "
                 "is available; flag incorrect statements, lost exceptions, unsupported absolutes, and invented facts. "
+                "Treat dates and chronology in source_evidence as authoritative. Never change or flag a date merely "
+                "because it appears future or past relative to an assumed current date; report it only when the deck "
+                "disagrees with the supplied source. "
                 "Treat the explicit user instruction as mandatory. In lecture mode, verify that concepts follow "
                 "prerequisite order, learning objectives are fulfilled, and abstract or technical concepts have a "
                 "source-grounded worked example, demonstration, exact code/input-output trace, formula, or check. "
@@ -189,6 +196,12 @@ async def _judge(
                 "named lists with source_evidence. If a slide promises the whole set but omits a material component, "
                 "report incomplete_coverage. Judge semantic completeness in any domain; never rely on a hard-coded "
                 "topic, acronym, language, or expected list. "
+                "For research reports, analytical reports, and case studies, identify the source's indispensable "
+                "findings before scoring: primary measured results, decisive comparisons, evaluation metrics, "
+                "sample/class coverage, limitations, and the evidence supporting the conclusion. Report "
+                "incomplete_coverage when the deck spends space on metadata or description but omits a central "
+                "result. Also report weak_progression when conclusions appear before their supporting results or "
+                "when substantive slides follow what is presented as the final conclusion. "
                 "Learning-objective and summary slides are protected roles: never target either one to repair a "
                 "different missing lecture component. If practice or a knowledge check is missing, target a "
                 "redundant or lower-priority middle concept/example slide and explicitly instruct replacing it "
@@ -418,7 +431,7 @@ async def _refine(
             getattr(content_extractor, "_focused_source_content", "")
             or getattr(content_extractor, "_source_content", "")
             or ""
-        )[:12000],
+        )[:_SOURCE_EVIDENCE_MAX_CHARS],
         "targets": targets,
     }
     messages = [
@@ -427,6 +440,7 @@ async def _refine(
             "content": (
                 "You refine only the listed presentation slides to resolve the supplied coherence instruction. "
                 "Use source_evidence as the authority: correct inaccurate claims, retain exceptions and scope, and "
+                "copy source-supported dates and years exactly; never rewrite them based on an assumed current date. "
                 "add a concrete example only when it is directly supported by that evidence. In lecture mode, make "
                 "the target teachable with exact terminology and a concise worked example, code/input-output trace, "
                 "formula, process step, or knowledge check when requested by the issue. In presentation mode, preserve "

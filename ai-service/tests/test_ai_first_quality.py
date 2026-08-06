@@ -3,7 +3,7 @@ import unittest
 
 from services.content.slide_normalizer import SlideNormalizerMixin
 from services.slide_quality import build_visual_plan
-from services.slide_charts import build_chart_specs_for_slides
+from services.slide_charts import _chart_spec_has_text_evidence, build_chart_specs_for_slides, normalize_chart_spec
 from services.slide_text_quality import improve_slide_titles_quality
 from routes.api import _detect_generate_images_request
 from services.revision_rules import revision_prompt_mentions_image, revision_prompt_mentions_table
@@ -166,6 +166,24 @@ class AiFirstQualityTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(0, specs)
         self.assertEqual(specs[0]["labels"], ["2018", "2019", "2020"])
+
+    def test_fractional_percent_chart_matches_source_percent_text(self):
+        spec = normalize_chart_spec({
+            "title": "Baseline performance",
+            "chart_type": "column",
+            "labels": ["Accuracy", "Macro-F1"],
+            "values": [0.9576, 0.9452],
+            "unit": "percent",
+            "is_percent": True,
+        })
+
+        self.assertIsNotNone(spec)
+        self.assertTrue(
+            _chart_spec_has_text_evidence(
+                spec,
+                "Accuracy reached 95.76% and Macro-F1 reached 94.52%.",
+            )
+        )
 
     async def test_title_review_failure_does_not_rewrite_from_bullets(self):
         deck = {"slides": [{

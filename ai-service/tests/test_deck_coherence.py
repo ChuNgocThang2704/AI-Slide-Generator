@@ -44,6 +44,20 @@ def sample_deck():
 
 
 class DeckCoherenceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_judge_receives_late_source_results(self):
+        deck = sample_deck()
+        extractor = FakeExtractor([{"score": 9.0, "issues": []}])
+        extractor._source_content = "A" * 13000 + " LATE_PRIMARY_RESULT accuracy 95.76 percent"
+
+        result = await improve_deck_coherence(extractor, deck)
+
+        self.assertIs(result, deck)
+        judge_payload = extractor.messages[0][1]["content"]
+        self.assertIn("LATE_PRIMARY_RESULT", judge_payload)
+        judge_prompt = extractor.messages[0][0]["content"]
+        self.assertIn("indispensable findings", judge_prompt)
+        self.assertIn("assumed current date", judge_prompt)
+
     async def test_explicit_missing_topic_replaces_redundant_body_slide(self):
         deck = {
             "title": "Python Chapter 2",

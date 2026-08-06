@@ -1492,6 +1492,14 @@ class SlidePipelineMixin:
             marker in folded_closing_title
             for marker in ("ket thuc bai giang", "end of lecture", "lecture summary")
         )
+        nearby_body_has_conclusion = any(
+            any(
+                marker in self._fold_language_text(str(slide.get("title") or ""))
+                for marker in ("ket luan", "conclusion", "closing thoughts")
+            )
+            for slide in slides[max(1, len(slides) - 3):-1]
+            if isinstance(slide, dict)
+        )
         if not is_existing_closing or not existing_closing_title or closing_title_is_wrong_mode:
             if vietnamese:
                 existing_closing_title = (
@@ -1505,6 +1513,13 @@ class SlidePipelineMixin:
                     if lecture_mode
                     else f"Closing thoughts: {deck_title}"
                 )
+        if nearby_body_has_conclusion and not lecture_mode:
+            existing_closing_title = "Cảm ơn và Hỏi đáp" if vietnamese else "Thank You and Q&A"
+            closing_bullets = (
+                ["Cảm ơn mọi người đã theo dõi. Mời đặt câu hỏi và trao đổi."]
+                if vietnamese
+                else ["Thank you for your attention. Questions and discussion are welcome."]
+            )
         closing["title"] = existing_closing_title
         closing["layout"] = "thankyou"
         closing["pedagogical_role"] = "summary"

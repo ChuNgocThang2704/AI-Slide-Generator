@@ -153,7 +153,15 @@ def _chart_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
             continue
         candidates = {str(int(parsed)) if float(parsed).is_integer() else str(parsed).rstrip("0").rstrip(".")}
         if 0 < parsed < 1 and spec.get("is_percent"):
-            candidates.add(str(int(round(parsed * 100))))
+            percent_value = parsed * 100
+            percent_text = f"{percent_value:.6f}".rstrip("0").rstrip(".")
+            candidates.update(
+                {
+                    percent_text,
+                    percent_text.replace(".", ","),
+                    str(int(round(percent_value))),
+                }
+            )
         if any(
             c and (c in folded_numeric or c.replace(".", "").replace(",", "") in compact_numeric)
             for c in candidates
