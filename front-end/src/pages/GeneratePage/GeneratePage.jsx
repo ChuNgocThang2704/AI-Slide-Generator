@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
 import { projectService, documentService } from '../../services/documentService';
-import { templateService } from '../../services/templateService';
 import { evaluatePromptQuality } from '../../utils/promptQuality';
 import { Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X, LayoutDashboard, AlertCircle, CheckCircle2 } from 'lucide-react';
 import './GeneratePage.css';
@@ -26,15 +25,6 @@ const PROMPT_SUGGESTIONS = [
   },
 ];
 
-const BUILT_IN_TEMPLATES = [
-  { id: 'soft-blue', name: 'Soft Blue', preview: '#f8fbff', accent: '#0d5099' },
-  { id: 'clean-white', name: 'Clean White', preview: '#ffffff', accent: '#4f46e5' },
-  { id: 'modern-dark', name: 'Modern Dark', preview: '#0d0d1a', accent: '#ff6584' },
-  { id: 'nature-green', name: 'Nature Green', preview: '#0a2318', accent: '#2ecc71' },
-];
-
-
-
 export default function GeneratePage() {
   const { addProject, updateProject } = useProjectStore();
   const { addToast } = useUIStore();
@@ -45,30 +35,11 @@ export default function GeneratePage() {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadedFileData, setUploadedFileData] = useState(null);
-  const [customTemplates, setCustomTemplates] = useState([]);
-  const [templateUploading, setTemplateUploading] = useState(false);
   const [form, setForm] = useState({
     prompt: '',
     slideCount: 8,
-    templateId: 'soft-blue',
   });
   const promptQuality = evaluatePromptQuality(form.prompt, { hasFile: Boolean(uploadedFileData) });
-
-  React.useEffect(() => {
-    let active = true;
-    templateService.getAll()
-      .then((templates) => {
-        if (active) {
-          setCustomTemplates(templates.filter((template) => template.sourceType === 'CUSTOM_PPTX'));
-        }
-      })
-      .catch(() => {
-        // Built-in templates remain available when template-service is offline.
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   // Progress states
   const [showProgress, setShowProgress] = useState(false);
@@ -143,33 +114,6 @@ export default function GeneratePage() {
     setUploadedFileData(null);
   };
 
-  const handleTemplateUpload = async (event) => {
-    const selectedFile = event.target.files?.[0];
-    event.target.value = '';
-    if (!selectedFile) return;
-    const extension = selectedFile.name.slice(selectedFile.name.lastIndexOf('.')).toLowerCase();
-    if (!['.pptx', '.potx'].includes(extension)) {
-      addToast('Chỉ hỗ trợ template PowerPoint định dạng PPTX hoặc POTX', 'error');
-      return;
-    }
-    if (selectedFile.size > 50 * 1024 * 1024) {
-      addToast('Dung lượng template tối đa là 50MB', 'error');
-      return;
-    }
-
-    setTemplateUploading(true);
-    try {
-      const template = await templateService.uploadCustom(selectedFile);
-      setCustomTemplates((current) => [template, ...current.filter((item) => item.id !== template.id)]);
-      setForm((current) => ({ ...current, templateId: template.id }));
-      addToast(`Đã phân tích template "${template.name}"`, 'success');
-    } catch (error) {
-      addToast(error.message || 'Không thể phân tích template PowerPoint', 'error');
-    } finally {
-      setTemplateUploading(false);
-    }
-  };
-
   // Lấy câu thông báo tương ứng với % tiến độ
   const getProgressMessage = (pct, aiStatus) => {
     if (aiStatus === 'failed' || aiStatus === 'error') {
@@ -230,7 +174,7 @@ export default function GeneratePage() {
       
       const project = await projectService.create(
         promptText,
-        form.templateId,
+        'soft-blue',
         promptText,
         uploadedFileData?.fileUrl || null,
         uploadedFileData?.fileName || null,
@@ -297,7 +241,7 @@ export default function GeneratePage() {
           <h1 className="gen2-title">
             <Sparkles size={26} style={{ color: '#a89fff' }} /> Tạo slide với AI
           </h1>
-          <p className="gen2-desc">Nhập chủ đề, chọn template, AI sẽ tạo slide thuyết trình cho bạn</p>
+          <p className="gen2-desc">Nhập chủ đề, AI sẽ tạo slide thuyết trình cho bạn</p>
         </div>
 
         <div className="gen2-form-card">
@@ -376,64 +320,11 @@ export default function GeneratePage() {
             )}
           </div>
 
-          <div className="gen2-field">
-            <div className="gen2-template-heading">
-              <label className="gen2-label">Template trình chiếu</label>
-              <label className={`gen2-template-upload ${templateUploading ? 'disabled' : ''}`}>
-                {templateUploading ? <Loader2 size={15} className="spin" /> : <UploadCloud size={15} />}
-                {templateUploading ? 'Đang phân tích...' : 'Upload template'}
-                <input
-                  type="file"
-                  accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                  onChange={handleTemplateUpload}
-                  disabled={loading || uploading || templateUploading}
-                  hidden
-                />
-              </label>
-            </div>
-            <div className="gen2-template-grid">
-              {BUILT_IN_TEMPLATES.map((template) => (
-                <button
-                  key={template.id}
-                  type="button"
-                  className={`gen2-template-card ${form.templateId === template.id ? 'active' : ''}`}
-                  onClick={() => setForm((current) => ({ ...current, templateId: template.id }))}
-                  disabled={loading || uploading || templateUploading}
-                >
-                  <span className="gen2-template-preview" style={{ background: template.preview }}>
-                    <span style={{ background: template.accent }} />
-                  </span>
-                  <span>{template.name}</span>
-                </button>
-              ))}
-              {customTemplates.map((template) => (
-                <button
-                  key={template.id}
-                  type="button"
-                  className={`gen2-template-card custom ${form.templateId === template.id ? 'active' : ''}`}
-                  onClick={() => setForm((current) => ({ ...current, templateId: template.id }))}
-                  disabled={loading || uploading || templateUploading}
-                >
-                  <span
-                    className="gen2-template-preview"
-                    style={{ background: template.backgroundColor || '#ffffff' }}
-                  >
-                    <span style={{ background: template.primaryColor || '#4f46e5' }} />
-                  </span>
-                  <span title={template.name}>{template.name}</span>
-                  <small>PowerPoint</small>
-                </button>
-              ))}
-            </div>
-          </div>
-
-
-
           <button
             id="create-btn"
             className="btn btn-primary btn-lg gen2-submit"
             onClick={handleCreate}
-            disabled={loading || uploading || templateUploading || !promptQuality.valid}
+            disabled={loading || uploading || !promptQuality.valid}
           >
             {loading && !showProgress ? (
               <>
