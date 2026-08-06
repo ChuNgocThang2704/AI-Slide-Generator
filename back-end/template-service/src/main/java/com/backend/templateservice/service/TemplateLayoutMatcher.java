@@ -16,7 +16,7 @@ public class TemplateLayoutMatcher {
 
     public TemplateMatchResponse match(TemplateManifest manifest, TemplateMatchRequest request) {
         String requestedType = requestedType(request);
-        TemplateManifest.Layout layout = chooseLayout(manifest.getLayouts(), requestedType);
+        TemplateManifest.Layout layout = chooseLayout(manifest.getLayouts(), requestedType, request.getPageIndex());
         List<Map<String, Object>> elements = new ArrayList<>();
 
         elements.add(backgroundElement(layout.getBackgroundColor()));
@@ -26,7 +26,13 @@ public class TemplateLayoutMatcher {
         int bodyIndex = 0;
         for (TemplateManifest.Element source : layout.getElements()) {
             if (!source.isPlaceholder()) {
-                elements.add(toElement(source, source.getContent(), source.getSrc(), null, true));
+                elements.add(toElement(
+                        source,
+                        source.getContent(),
+                        resolveAsset(source.getSrc(), manifest),
+                        null,
+                        true
+                ));
                 continue;
             }
 
@@ -57,14 +63,27 @@ public class TemplateLayoutMatcher {
                 .build();
     }
 
-    private TemplateManifest.Layout chooseLayout(List<TemplateManifest.Layout> layouts, String type) {
-        return layouts.stream()
+    private TemplateManifest.Layout chooseLayout(
+            List<TemplateManifest.Layout> layouts,
+            String type,
+            Integer pageIndex
+    ) {
+        List<TemplateManifest.Layout> candidates = layouts.stream()
                 .filter(layout -> type.equals(layout.getType()))
-                .findFirst()
-                .orElseGet(() -> layouts.stream()
-                        .filter(layout -> "content".equals(layout.getType()))
-                        .findFirst()
-                        .orElse(layouts.getFirst()));
+                .toList();
+        if (candidates.isEmpty()) {
+            candidates = layouts.stream()
+                    .filter(layout -> "content".equals(layout.getType()))
+                    .toList();
+        }
+        if (candidates.isEmpty()) return layouts.getFirst();
+        int rotation = pageIndex == null ? 0 : Math.max(0, pageIndex - ("title".equals(type) ? 0 : 1));
+        return candidates.get(rotation % candidates.size());
+    }
+
+    private String resolveAsset(String source, TemplateManifest manifest) {
+        if (source == null || manifest.getAssets() == null) return source;
+        return manifest.getAssets().getOrDefault(source, source);
     }
 
     private String requestedType(TemplateMatchRequest request) {

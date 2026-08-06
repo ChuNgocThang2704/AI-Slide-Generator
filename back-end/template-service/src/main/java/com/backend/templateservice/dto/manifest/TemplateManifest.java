@@ -21,6 +21,8 @@ public class TemplateManifest {
     @Builder.Default
     private Theme theme = new Theme();
     @Builder.Default
+    private Map<String, String> assets = new LinkedHashMap<>();
+    @Builder.Default
     private List<Layout> layouts = new ArrayList<>();
 
     @Data

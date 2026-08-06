@@ -33,7 +33,16 @@ const cloneElement = (element) => ({
   style: element.style ? { ...element.style } : undefined,
 });
 
-export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNotify, readonly = false, preserveTemplate = false }) {
+export default function ElementCanvas({
+  slide,
+  theme,
+  scale = 1,
+  onUpdate,
+  onNotify,
+  readonly = false,
+  preserveTemplate = false,
+  preserveTemplateStyles = false,
+}) {
   const imageInputRef = useRef(null);
   const themeData = THEMES[theme] || THEMES['clean-white'];
   const fallbackElements = useMemo(() => createElementsFromSlide(slide, theme), [slide, theme]);
@@ -45,7 +54,8 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       const style = element.style || {};
       const legacyTitle = element.role === 'title' && Number(style.fontSize) === 36 && element.x === 64 && element.y === 48;
       const legacyBody = element.role === 'body' && Number(style.fontSize) === 20 && element.y === 140;
-      const isThemeDefaultColor = !style.color || DEFAULT_THEME_TEXT_COLORS.has(normalizeColor(style.color));
+      const isThemeDefaultColor = !preserveTemplateStyles
+        && (!style.color || DEFAULT_THEME_TEXT_COLORS.has(normalizeColor(style.color)));
       const themedStyle = element.role === 'title'
         ? {
             ...style,
@@ -80,7 +90,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       }
       return themedStyle === style ? element : { ...element, style: themedStyle };
     });
-  }, [fallbackElements, preserveTemplate, slide.elements, slide.imageUrl, themeData]);
+  }, [fallbackElements, preserveTemplate, preserveTemplateStyles, slide.elements, slide.imageUrl, themeData]);
   const [selectedId, setSelectedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [hasClipboard, setHasClipboard] = useState(Boolean(elementClipboard));

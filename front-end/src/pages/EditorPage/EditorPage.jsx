@@ -109,7 +109,13 @@ function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
   return (
     <div style={{ width: 960 * scale, height: 540 * scale, overflow: 'hidden' }}>
       <div style={{ width: 960, height: 540, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
-        <ElementCanvas slide={slide} theme={theme} scale={1} readonly />
+        <ElementCanvas
+          slide={slide}
+          theme={theme}
+          scale={1}
+          readonly
+          preserveTemplateStyles={isCustomTemplateId(theme)}
+        />
       </div>
     </div>
   );
@@ -1361,6 +1367,7 @@ export default function EditorPage() {
                       scale={scale}
                       onUpdate={handleSlideUpdate}
                       onNotify={addToast}
+                      preserveTemplateStyles={isCustomTemplateId(templateId)}
                     />
                   )}
                   </div>
