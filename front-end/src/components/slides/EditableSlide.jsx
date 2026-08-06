@@ -8,6 +8,7 @@ import { resolveAssetUrl } from '../../utils/assetUrl';
 import { documentService } from '../../services/documentService';
 import AssetImage from './AssetImage';
 import { fitTextToBox } from '../../utils/textFit';
+import { inferImageFit } from '../../utils/imageFit';
 
 // ─── Theme map (same as SlideRenderer) ───────────────────────────────────────
 export const THEMES = {
@@ -941,7 +942,7 @@ export default function EditableSlide({ slide, theme = 'clean-white', slideIndex
         sk={sk}
         onSave={handleSave}
         readonly={readonly}
-        imageFit={displaySlide.imageFit || 'cover'}
+        imageFit={inferImageFit(displaySlide)}
         uploadingImage={uploadingImage}
         onPickImage={() => imageInputRef.current?.click()}
       />

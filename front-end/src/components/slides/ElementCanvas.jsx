@@ -9,6 +9,7 @@ import { documentService } from '../../services/documentService';
 import AssetImage from './AssetImage';
 import { BgDecorations } from './SlideRenderer';
 import { fitTextToBox } from '../../utils/textFit';
+import { inferImageFit } from '../../utils/imageFit';
 import './ElementCanvas.css';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -193,6 +194,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       const dy = (pointerEvent.clientY - start.y) / (element.height * scale) * 100;
       updateElement(element.id, {
         objectFit: 'cover',
+        fitExplicit: true,
         objectPositionX: clamp(start.positionX - dx, 0, 100),
         objectPositionY: clamp(start.positionY - dy, 0, 100),
       });
@@ -452,7 +454,10 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
         </button>
         <button
           type="button"
-          onClick={() => updateElement(selectedElement.id, { objectFit: selectedElement.objectFit === 'contain' ? 'cover' : 'contain' })}
+          onClick={() => updateElement(selectedElement.id, {
+            objectFit: selectedElement.objectFit === 'contain' ? 'cover' : 'contain',
+            fitExplicit: true,
+          })}
           disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
           title="Chuyển giữa vừa khung và phủ khung"
         >
@@ -536,7 +541,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
               draggable={false}
               onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
               style={{
-                objectFit: element.objectFit || 'cover',
+                objectFit: element.objectFit || inferImageFit(element.src),
                 objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
               }}
             />

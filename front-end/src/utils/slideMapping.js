@@ -1,3 +1,5 @@
+import { inferImageFit } from './imageFit';
+
 export function parseBullets(page) {
   if (Array.isArray(page?.bullets)) return page.bullets;
   if (typeof page?.bullets === 'string') {
@@ -166,6 +168,15 @@ export function formatSlidePage(page, presentationMode = 'presentation') {
   const [leftColumn, rightColumn] = parseTwoColumns(bullets);
   const attribution = type === 'quote' ? String(bullets[1] || '').replace(/^—\s*/, '').split(/,\s*/, 2) : [];
 
+  const imageFit = page?.richText?._imageFit || inferImageFit(page);
+  const elements = currentElements(page, bullets).map((element) => {
+    if (element?.type !== 'image' || element.fitExplicit) return element;
+    return {
+      ...element,
+      objectFit: inferImageFit({ ...page, imageUrl: element.src || page?.imageUrl }),
+    };
+  });
+
   return {
     id: page.id,
     type,
@@ -186,7 +197,8 @@ export function formatSlidePage(page, presentationMode = 'presentation') {
     chart: page.chart || null,
     table: page.table || null,
     richText: page.richText || {},
-    elements: currentElements(page, bullets),
+    elements,
+    imageFit,
     notes: page.notes || '',
     primaryVisual: page.primaryVisual || '',
     likelyMultiPptxSlides: page.likelyMultiPptxSlides || false,
@@ -258,6 +270,10 @@ export function toSlidePageUpdate(slide) {
   const semanticBullets = elementBody
     ? String(elementBody.content || '').replace(/<\/li>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').split('\n').map((item) => item.trim()).filter(Boolean)
     : serializeBullets(slide);
+  const richText = {
+    ...(slide.richText || {}),
+    ...(slide.imageFit ? { _imageFit: slide.imageFit } : {}),
+  };
   return {
     id: slide.id,
     title: semanticTitle,
@@ -267,7 +283,7 @@ export function toSlidePageUpdate(slide) {
     layout: frontendLayoutToBackend(slide),
     chart: slide.chart || null,
     table: slide.table || null,
-    richText: slide.richText || {},
+    richText,
     elements: Array.isArray(slide.elements) ? slide.elements : [],
     primaryVisual: slide.table ? 'table' : slide.chart ? 'chart' : slide.primaryVisual || '',
     likelyMultiPptxSlides: slide.likelyMultiPptxSlides || false,

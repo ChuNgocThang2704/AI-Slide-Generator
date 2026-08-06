@@ -1,4 +1,5 @@
 import { fitTextToBox } from './textFit';
+import { inferImageFit } from './imageFit';
 
 const id = () => `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -179,7 +180,11 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     },
   ));
   if (slide?.imageUrl) {
-    elements.push({ id: id(), type: 'image', role: 'image', x: 540, y: 135, width: 350, height: 300, rotation: 0, src: slide.imageUrl });
+    elements.push({
+      id: id(), type: 'image', role: 'image', x: 540, y: 135,
+      width: 350, height: 300, rotation: 0, src: slide.imageUrl,
+      objectFit: inferImageFit(slide),
+    });
   }
   if (slide?.table) {
     elements.push({
