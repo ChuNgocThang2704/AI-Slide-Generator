@@ -82,5 +82,12 @@ spring:
             - Path=/api/payment/**
           filters:
             - StripPrefix=0
+
+        - id: statistic-service-route
+          uri: ${STATISTIC_SERVICE_URL:http://localhost:8086}
+          predicates:
+            - Path=/api/statistic/**
+          filters:
+            - StripPrefix=0
 jwt:
   signerKey: ${JWT_SIGNER_KEY}

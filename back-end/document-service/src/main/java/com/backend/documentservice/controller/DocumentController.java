@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -220,6 +221,20 @@ public class DocumentController {
         sourceDocumentService.deleteDocuments(ids, currentUserId());
         return ApiResponse.<String>builder()
                 .data("Documents deleted successfully")
+                .build();
+    }
+
+    @GetMapping("/internal/projects/dashboard-stats")
+    public ApiResponse<Map<String, Object>> getProjectDashboardStats(
+            @RequestParam("startDate") String startDateStr,
+            @RequestParam("endDate") String endDateStr,
+            @RequestParam("year") int year,
+            @RequestParam(value = "topUsersLimit", defaultValue = "10") int topUsersLimit) {
+        log.info("[document-service] Nhận yêu cầu nội bộ tính toán dashboard stats tổng hợp...");
+        Instant start = Instant.parse(startDateStr);
+        Instant end = Instant.parse(endDateStr);
+        return ApiResponse.<Map<String, Object>>builder()
+                .data(projectService.getProjectDashboardStats(start, end, year, topUsersLimit))
                 .build();
     }
 }
