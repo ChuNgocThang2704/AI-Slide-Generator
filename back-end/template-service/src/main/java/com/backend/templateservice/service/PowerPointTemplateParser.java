@@ -35,6 +35,7 @@ public class PowerPointTemplateParser {
     private static final long MAX_UNCOMPRESSED_BYTES = 150L * 1024 * 1024;
     private static final long MAX_ENTRY_BYTES = 25L * 1024 * 1024;
     private static final int MAX_ENTRIES = 2_000;
+    private static final String DISPLAY_BACKGROUND = "#FFFFFF";
 
     public TemplateManifest parse(byte[] fileBytes) {
         try {
@@ -46,7 +47,7 @@ public class PowerPointTemplateParser {
             long[] pageSize = readPageSize(entries.get("ppt/presentation.xml"));
             TemplateManifest.Theme theme = readTheme(entries);
             MasterData master = readMaster(entries, pageSize, theme);
-            List<TemplateManifest.Layout> sampleLayouts = readSampleLayouts(entries, pageSize, theme, master);
+            List<TemplateManifest.Layout> sampleLayouts = readSampleLayouts(entries, pageSize, theme);
             List<TemplateManifest.Layout> layouts = sampleLayouts.isEmpty()
                     ? readLayouts(entries, pageSize, theme, master)
                     : sampleLayouts;
@@ -173,7 +174,6 @@ public class PowerPointTemplateParser {
 
         Document document = parseXml(entries.get(path));
         MasterData result = new MasterData();
-        result.backgroundColor = readBackground(document, theme);
         List<TemplateManifest.Element> shapes = parseShapeTree(
                 document, pageSize, theme, Map.of()
         );
@@ -181,8 +181,6 @@ public class PowerPointTemplateParser {
             if (shape.isPlaceholder()) {
                 result.placeholders.put(placeholderKey(shape), shape);
                 result.placeholders.putIfAbsent(shape.getRole(), shape);
-            } else if (!"image".equals(shape.getType())) {
-                result.decorations.add(shape);
             }
         }
         return result;
@@ -213,17 +211,15 @@ public class PowerPointTemplateParser {
                     document, pageSize, theme, master.placeholders
             );
             List<TemplateManifest.Element> elements = new ArrayList<>();
-            master.decorations.stream().map(this::copyElement).forEach(elements::add);
             ownElements.stream()
-                    .filter(item -> !"image".equals(item.getType()) || item.isPlaceholder())
+                    .filter(TemplateManifest.Element::isPlaceholder)
                     .forEach(elements::add);
 
-            String background = firstNonBlank(readBackground(document, theme), master.backgroundColor, theme.getBackgroundColor());
             layouts.add(TemplateManifest.Layout.builder()
                     .id("layout-" + (++index))
                     .name(name)
                     .type(classifyLayout(name, elements))
-                    .backgroundColor(background)
+                    .backgroundColor(DISPLAY_BACKGROUND)
                     .elements(elements)
                     .build());
         }
@@ -233,8 +229,7 @@ public class PowerPointTemplateParser {
     private List<TemplateManifest.Layout> readSampleLayouts(
             Map<String, byte[]> entries,
             long[] pageSize,
-            TemplateManifest.Theme theme,
-            MasterData master
+            TemplateManifest.Theme theme
     ) throws Exception {
         List<String> paths = entries.keySet().stream()
                 .filter(name -> name.startsWith("ppt/slides/slide") && name.endsWith(".xml"))
@@ -250,15 +245,12 @@ public class PowerPointTemplateParser {
 
             if (elements.isEmpty()) continue;
 
-            String background = firstNonBlank(
-                    readBackground(document, theme), master.backgroundColor, theme.getBackgroundColor()
-            );
             String layoutType = layouts.isEmpty() ? "title" : classifyLayout("Sample slide", elements);
             layouts.add(TemplateManifest.Layout.builder()
                     .id("sample-layout-" + (++index))
                     .name("Sample slide " + index)
                     .type(layoutType)
-                    .backgroundColor(background)
+                    .backgroundColor(DISPLAY_BACKGROUND)
                     .elements(elements)
                     .build());
         }
@@ -299,6 +291,7 @@ public class PowerPointTemplateParser {
                 normalized.add(placeholder);
                 continue;
             }
+            if ("shape".equals(element.getType())) continue;
             if (!"text".equals(element.getType())) {
                 normalized.add(element);
                 continue;
@@ -445,11 +438,6 @@ public class PowerPointTemplateParser {
         return new PlaceholderInfo(true, type, index, ignored);
     }
 
-    private String readBackground(Document document, TemplateManifest.Theme theme) {
-        Element background = firstDescendant(document.getDocumentElement(), "bg");
-        return background == null ? null : colorFromNode(background, theme.getColors());
-    }
-
     private String readShapeFill(Element shape, TemplateManifest.Theme theme) {
         Element shapeProperties = firstDescendant(shape, "spPr");
         if (shapeProperties == null) return null;
@@ -548,7 +536,7 @@ public class PowerPointTemplateParser {
                 .id("layout-default")
                 .name("Title and content")
                 .type("content")
-                .backgroundColor(theme.getBackgroundColor())
+                .backgroundColor(DISPLAY_BACKGROUND)
                 .elements(elements)
                 .build();
     }
@@ -720,9 +708,7 @@ public class PowerPointTemplateParser {
     }
 
     private static class MasterData {
-        private String backgroundColor;
         private final Map<String, TemplateManifest.Element> placeholders = new HashMap<>();
-        private final List<TemplateManifest.Element> decorations = new ArrayList<>();
     }
 
     private record PlaceholderInfo(boolean present, String type, String index, boolean ignore) {

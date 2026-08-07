@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -69,12 +70,8 @@ class PowerPointTemplateParserTest {
         assertThat(imageFrame.getY()).isEqualTo(72d);
         assertThat(imageFrame.getWidth()).isEqualTo(336d);
         assertThat(imageFrame.getHeight()).isEqualTo(360d);
-        TemplateManifest.Element translucentPanel = layout.getElements().stream()
-                .filter(item -> "shape".equals(item.getType()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(translucentPanel.getFill()).isEqualTo("#FFFFFF");
-        assertThat(translucentPanel.getOpacity()).isEqualTo(0.23d);
+        assertThat(layout.getBackgroundColor()).isEqualTo("#FFFFFF");
+        assertThat(layout.getElements()).noneMatch(item -> "shape".equals(item.getType()));
         assertThat(layout.getElements()).filteredOn(TemplateManifest.Element::isPlaceholder)
                 .extracting(TemplateManifest.Element::getRole)
                 .containsExactlyInAnyOrder("title", "image");
@@ -95,12 +92,14 @@ class PowerPointTemplateParserTest {
         assertThat(match.getElements()).filteredOn(item -> "image".equals(item.get("type")))
                 .singleElement()
                 .satisfies(item -> assertThat(item.get("src")).isEqualTo("https://example.test/generated.png"));
-        assertThat(match.getElements()).filteredOn(item -> "decoration".equals(item.get("role")))
-                .singleElement()
-                .satisfies(item -> assertThat(item.get("opacity")).isEqualTo(0.23d));
+        assertThat(match.getBackgroundColor()).isEqualTo("#FFFFFF");
+        assertThat(match.getElements()).noneMatch(item -> "decoration".equals(item.get("role")));
         assertThat(match.getElements()).filteredOn(item -> "title".equals(item.get("role")))
-                .extracting(item -> item.get("content"))
-                .containsExactly("New title");
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.get("content")).isEqualTo("New title");
+                    assertThat(((Map<?, ?>) item.get("style")).get("color")).isEqualTo("#111111");
+                });
 
         TemplateMatchResponse emptyFrameMatch = new TemplateLayoutMatcher().match(
                 manifest,
@@ -121,12 +120,32 @@ class PowerPointTemplateParserTest {
                 .src("data:image/png;base64,AQID")
                 .locked(true)
                 .build();
+        TemplateManifest.Element legacyShape = TemplateManifest.Element.builder()
+                .id("legacy-shape")
+                .type("shape")
+                .role("decoration")
+                .x(0).y(0).width(960).height(540)
+                .fill("#000000")
+                .opacity(0.79d)
+                .locked(true)
+                .build();
+        TemplateManifest.Element legacyTitle = TemplateManifest.Element.builder()
+                .id("legacy-title")
+                .type("text")
+                .role("title")
+                .x(64).y(44).width(832).height(68)
+                .placeholder(true)
+                .style(Map.of("color", "#FFFFFF", "fontFamily", "Arial", "fontSize", 32))
+                .build();
         TemplateManifest manifest = TemplateManifest.builder()
+                .theme(TemplateManifest.Theme.builder()
+                        .colors(Map.of("tx1", "#111111"))
+                        .build())
                 .layouts(List.of(TemplateManifest.Layout.builder()
                         .id("legacy-layout")
                         .type("title")
-                        .backgroundColor("#FFFFFF")
-                        .elements(List.of(legacyImage))
+                        .backgroundColor("#000000")
+                        .elements(List.of(legacyImage, legacyShape, legacyTitle))
                         .build()))
                 .build();
 
@@ -136,6 +155,14 @@ class PowerPointTemplateParserTest {
         );
 
         assertThat(match.getElements()).noneMatch(item -> "image".equals(item.get("type")));
+        assertThat(match.getElements()).noneMatch(item -> "decoration".equals(item.get("role")));
+        assertThat(match.getElements()).filteredOn(item -> "background".equals(item.get("role")))
+                .singleElement()
+                .satisfies(item -> assertThat(item.get("fill")).isEqualTo("#FFFFFF"));
+        assertThat(match.getElements()).filteredOn(item -> "title".equals(item.get("role")))
+                .singleElement()
+                .satisfies(item -> assertThat(((Map<?, ?>) item.get("style")).get("color"))
+                        .isEqualTo("#111111"));
     }
 
     private byte[] minimalPptx() throws Exception {

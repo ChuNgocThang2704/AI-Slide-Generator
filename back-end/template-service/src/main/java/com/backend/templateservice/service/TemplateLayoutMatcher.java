@@ -13,29 +13,21 @@ import java.util.UUID;
 
 @Component
 public class TemplateLayoutMatcher {
+    private static final String DISPLAY_BACKGROUND = "#FFFFFF";
+    private static final double MIN_TEXT_CONTRAST = 4.5;
 
     public TemplateMatchResponse match(TemplateManifest manifest, TemplateMatchRequest request) {
         String requestedType = requestedType(request);
         TemplateManifest.Layout layout = chooseLayout(manifest.getLayouts(), requestedType, request.getPageIndex());
         List<Map<String, Object>> elements = new ArrayList<>();
 
-        elements.add(backgroundElement(layout.getBackgroundColor()));
+        elements.add(backgroundElement());
         List<TemplateManifest.Element> bodyPlaceholders = layout.getElements().stream()
                 .filter(item -> item.isPlaceholder() && "body".equals(item.getRole()))
                 .toList();
         int bodyIndex = 0;
         for (TemplateManifest.Element source : layout.getElements()) {
-            if (!source.isPlaceholder()) {
-                if ("image".equals(source.getType())) continue;
-                elements.add(toElement(
-                        source,
-                        source.getContent(),
-                        null,
-                        null,
-                        true
-                ));
-                continue;
-            }
+            if (!source.isPlaceholder()) continue;
 
             String role = source.getRole();
             if ("title".equals(role) && notBlank(request.getTitle())) {
@@ -56,10 +48,11 @@ public class TemplateLayoutMatcher {
         }
 
         ensureSemanticElements(elements, request, manifest);
+        ensureReadableTextColors(elements, manifest);
         return TemplateMatchResponse.builder()
                 .layoutId(layout.getId())
                 .layoutType(layout.getType())
-                .backgroundColor(layout.getBackgroundColor())
+                .backgroundColor(DISPLAY_BACKGROUND)
                 .elements(elements)
                 .build();
     }
@@ -96,7 +89,7 @@ public class TemplateLayoutMatcher {
         return "content";
     }
 
-    private Map<String, Object> backgroundElement(String color) {
+    private Map<String, Object> backgroundElement() {
         Map<String, Object> element = new LinkedHashMap<>();
         element.put("id", "template-background-" + UUID.randomUUID());
         element.put("type", "shape");
@@ -106,10 +99,85 @@ public class TemplateLayoutMatcher {
         element.put("width", 960);
         element.put("height", 540);
         element.put("rotation", 0);
-        element.put("fill", color == null ? "#FFFFFF" : color);
+        element.put("fill", DISPLAY_BACKGROUND);
         element.put("borderColor", "transparent");
         element.put("locked", true);
         return element;
+    }
+
+    private void ensureReadableTextColors(
+            List<Map<String, Object>> elements,
+            TemplateManifest manifest
+    ) {
+        String replacement = mostReadableThemeColor(manifest, DISPLAY_BACKGROUND);
+        for (Map<String, Object> element : elements) {
+            if (!"text".equals(element.get("type"))) continue;
+            Map<String, Object> style = copyStyle(element.get("style"));
+            String current = String.valueOf(style.getOrDefault("color", ""));
+            if (contrastRatio(current, DISPLAY_BACKGROUND) < MIN_TEXT_CONTRAST) {
+                style.put("color", replacement);
+                element.put("style", style);
+            }
+        }
+    }
+
+    private Map<String, Object> copyStyle(Object value) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (value instanceof Map<?, ?> source) {
+            source.forEach((key, item) -> result.put(String.valueOf(key), item));
+        }
+        return result;
+    }
+
+    private String mostReadableThemeColor(TemplateManifest manifest, String background) {
+        Map<String, String> colors = manifest.getTheme() == null || manifest.getTheme().getColors() == null
+                ? Map.of()
+                : manifest.getTheme().getColors();
+        List<String> candidates = List.of(
+                defaultColor(colors.get("tx1"), "#000000"),
+                defaultColor(colors.get("dk1"), "#000000"),
+                defaultColor(colors.get("tx2"), "#1F2937"),
+                defaultColor(colors.get("dk2"), "#1F2937"),
+                "#000000",
+                "#FFFFFF"
+        );
+        String themeMatch = candidates.stream()
+                .filter(candidate -> contrastRatio(candidate, background) >= MIN_TEXT_CONTRAST)
+                .findFirst()
+                .orElse(null);
+        if (themeMatch != null) return themeMatch;
+        return candidates.stream()
+                .max((left, right) -> Double.compare(
+                        contrastRatio(left, background),
+                        contrastRatio(right, background)
+                ))
+                .orElse("#000000");
+    }
+
+    private double contrastRatio(String foreground, String background) {
+        double foregroundLuminance = relativeLuminance(foreground);
+        double backgroundLuminance = relativeLuminance(background);
+        double lighter = Math.max(foregroundLuminance, backgroundLuminance);
+        double darker = Math.min(foregroundLuminance, backgroundLuminance);
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    private double relativeLuminance(String color) {
+        if (color == null || !color.matches("#[0-9A-Fa-f]{6}")) return 1;
+        double red = linearChannel(Integer.parseInt(color.substring(1, 3), 16) / 255d);
+        double green = linearChannel(Integer.parseInt(color.substring(3, 5), 16) / 255d);
+        double blue = linearChannel(Integer.parseInt(color.substring(5, 7), 16) / 255d);
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    }
+
+    private double linearChannel(double channel) {
+        return channel <= 0.04045
+                ? channel / 12.92
+                : Math.pow((channel + 0.055) / 1.055, 2.4);
+    }
+
+    private String defaultColor(String value, String fallback) {
+        return value == null || !value.matches("#[0-9A-Fa-f]{6}") ? fallback : value.toUpperCase();
     }
 
     private Map<String, Object> toElement(
