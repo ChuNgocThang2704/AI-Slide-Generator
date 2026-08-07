@@ -21,6 +21,28 @@ const textElement = (role, content, x, y, width, height, style = {}) => ({
   style: { fontFamily: 'Inter, sans-serif', fontSize: 22, color: '#1a1a1a', textAlign: 'left', fontWeight: 400, ...style },
 });
 
+const CODE_LINE = /^\s*(?:>>>|\.\.\.|def\s+|class\s+|return\b|import\s+|from\s+\S+\s+import\s+|print\s*\(|if\s+.+:|for\s+.+:|while\s+.+:|[A-Za-z_]\w*\s*=)/;
+const LANGUAGE_MARKER = /^\s*(?:python|py|javascript|typescript|java|c\+\+|cpp)\s*$/i;
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const bodyHtmlFromBullets = (bullets) => {
+  const normal = [];
+  const code = [];
+  (bullets || []).forEach((item) => {
+    const value = String(item || '').trim();
+    if (!value || LANGUAGE_MARKER.test(value)) return;
+    if (CODE_LINE.test(value)) code.push(value);
+    else normal.push(value);
+  });
+  const list = normal.length
+    ? `<ul>${normal.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '';
+  const codeBlock = code.length
+    ? `<pre class="slide-code-block"><code>${escapeHtml(code.join('\n'))}</code></pre>`
+    : '';
+  return `${list}${codeBlock}`;
+};
+
 const isVietnameseSlide = (slide) => {
   const language = String(slide?.language || slide?.lang || '').toLowerCase();
   if (language.startsWith('vi')) return true;
@@ -163,7 +185,7 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
   }));
 
   const body = Array.isArray(slide?.bullets) && slide.bullets.length
-    ? `<ul>${slide.bullets.map((item) => `<li>${item}</li>`).join('')}</ul>`
+    ? bodyHtmlFromBullets(slide.bullets)
     : slide?.text || slide?.subtitle || slide?.richText?.bullets || slide?.richText?.text || '';
   if (body && !slide?.table && !slide?.chart) elements.push(textElement(
     'body',

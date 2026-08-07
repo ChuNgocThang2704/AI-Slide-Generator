@@ -35,6 +35,9 @@
 .canvas-element.role-image { isolation:isolate; }
 .canvas-image-viewport { position:absolute; inset:0; z-index:1; overflow:hidden; border-radius:inherit; }
 .canvas-image-viewport > img { position:relative; z-index:1; border-radius:inherit; transition:transform .12s ease-out; }
+.canvas-element.role-image.fit-contain { border-radius:10px !important; }
+.canvas-element.role-image.fit-contain > .canvas-image-viewport { border-radius:10px !important; background:rgba(255,255,255,.72); }
+.canvas-element.role-image.fit-contain::before { display:none !important; }
 .element-canvas[data-theme="soft-blue"] .canvas-element.role-image,
 .element-canvas[data-theme="royal-purple"] .canvas-element.role-image {
   border-radius:50%;
@@ -106,6 +109,12 @@
 .canvas-text ul { margin:0; padding-left:1.2em; }
 .canvas-text ol { margin:0; padding-left:1.65em; list-style:decimal; }
 .canvas-text ol li { padding-left:.25em; margin-bottom:.35em; }
+.canvas-text .slide-code-block {
+  margin:.55em 0 0; padding:.65em .8em; border-radius:7px;
+  background:rgba(15,23,42,.9); color:#e2e8f0;
+  font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace;
+  font-size:.82em; line-height:1.45; white-space:pre-wrap;
+}
 .canvas-element.role-title .canvas-text ul { display:none; }
 .canvas-element.role-title .canvas-text ol { display:none; }
 

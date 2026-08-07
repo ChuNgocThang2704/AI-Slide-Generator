@@ -223,6 +223,10 @@ def _sanitize_inline_markup(text: str) -> str:
             continue
         cleaned_chars.append(ch)
     t = "".join(cleaned_chars)
+    # Remove balanced presentation markup while preserving programming
+    # operators such as exponentiation (`x ** 2`) and bare identifiers.
+    t = re.sub(r"(?<!\*)\*\*([^*\n]+)\*\*(?!\*)", r"\1", t)
+    t = re.sub(r"(?<!`)`([^`\n]+)`(?!`)", r"\1", t)
     t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
     t = re.sub(r"^\s*\*+", "", t)
     # Preserve programming operators and identifiers (`*`, `**`, `_`,

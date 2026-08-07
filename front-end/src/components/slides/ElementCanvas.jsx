@@ -513,7 +513,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       {elements.map((element, index) => (
         <div
           key={element.id}
-          className={`canvas-element role-${element.role || 'custom'} ${selectedId === element.id ? 'selected' : ''} ${editingId === element.id ? 'editing' : ''} ${element.locked ? 'locked' : ''} ${croppingId === element.id ? 'cropping' : ''}`}
+          className={`canvas-element role-${element.role || 'custom'} ${element.type === 'image' && (element.objectFit || inferImageFit(element.src)) === 'contain' ? 'fit-contain' : ''} ${selectedId === element.id ? 'selected' : ''} ${editingId === element.id ? 'editing' : ''} ${element.locked ? 'locked' : ''} ${croppingId === element.id ? 'cropping' : ''}`}
           style={{
             left: element.x,
             top: element.y,

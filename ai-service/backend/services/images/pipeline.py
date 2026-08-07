@@ -78,6 +78,22 @@ def _is_continuation_slide(slide: Dict[str, Any], prev_slide: Optional[Dict[str,
     return False
 
 
+def _titles_share_visual_topic(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    def tokens(slide: Dict[str, Any]) -> set[str]:
+        value = unicodedata.normalize("NFKD", str(slide.get("title") or ""))
+        value = "".join(ch for ch in value if not unicodedata.combining(ch)).lower()
+        return {
+            token for token in re.findall(r"[a-z0-9_]{3,}", value)
+            if token not in {"slide", "phan", "tiep", "example", "dinh", "nghia"}
+        }
+
+    left_tokens = tokens(left)
+    right_tokens = tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    return len(left_tokens & right_tokens) / min(len(left_tokens), len(right_tokens)) >= 0.6
+
+
 def _normalize_slide_content(slide: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize paragraph-like content into concise bullet list for image prompting."""
     if not isinstance(slide, dict):
@@ -1285,8 +1301,14 @@ async def build_image_paths_for_slides(
                         pass
 
         remaining_slots = max(0, configured_limit - len(out))
+        source_indices = set(out)
         generated_target_indices = [
-            idx for idx in target_indices if idx not in out
+            idx for idx in target_indices
+            if idx not in out
+            and not any(
+                _titles_share_visual_topic(slides[idx], slides[source_idx])
+                for source_idx in source_indices
+            )
         ][:remaining_slots]
         n = len(out) + len(generated_target_indices)
 

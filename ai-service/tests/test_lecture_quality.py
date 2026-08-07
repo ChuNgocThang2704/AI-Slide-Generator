@@ -796,6 +796,10 @@ class LectureQualityTests(unittest.TestCase):
         text = "Use miles * 1.61, 2 ** 3, and obj.__init__() in this example."
         self.assertEqual(_sanitize_inline_markup(text), text)
 
+    def test_technical_sanitizer_removes_balanced_markdown_labels(self):
+        self.assertEqual(_sanitize_inline_markup("**Thực hành:** Định nghĩa hàm"), "Thực hành: Định nghĩa hàm")
+        self.assertEqual(_sanitize_inline_markup("Dùng `print()` để hiển thị"), "Dùng print() để hiển thị")
+
     def test_slide_normalizer_preserves_python_operators_and_identifiers(self):
         extractor = ContentExtractor()
         text = "* Use '*' for repetition, 2 ** 3, and obj.__init__()."
