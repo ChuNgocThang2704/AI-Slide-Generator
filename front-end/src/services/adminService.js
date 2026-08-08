@@ -5,7 +5,8 @@ const normalizeApiResponse = (response) => {
     throw new Error('Không nhận được phản hồi từ máy chủ');
   }
 
-  if (response.code && response.code !== 200) {
+  // Accept code 200 or 1000 as success (Spring Boot microservices use code 1000)
+  if (response.code && response.code !== 200 && response.code !== 1000) {
     throw new Error(response.message || 'Yêu cầu thất bại');
   }
 
@@ -59,6 +60,21 @@ export const adminService = {
 
   async deletePermission(permName) {
     const response = await apiClient.delete(`/permissions/${permName}`);
+    return normalizeApiResponse(response.data);
+  },
+
+  // ── STATISTIC & DASHBOARD APIS ──
+  async getRevenueDashboard(startDate, endDate) {
+    const response = await apiClient.get('/statistic/dashboard/revenue', {
+      params: { startDate, endDate }
+    });
+    return normalizeApiResponse(response.data);
+  },
+
+  async getUsersDashboard(startDate, endDate) {
+    const response = await apiClient.get('/statistic/dashboard/users', {
+      params: { startDate, endDate }
+    });
     return normalizeApiResponse(response.data);
   }
 };
