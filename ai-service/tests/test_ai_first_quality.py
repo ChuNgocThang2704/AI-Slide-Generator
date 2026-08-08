@@ -3,6 +3,7 @@ import unittest
 
 from services.content.slide_normalizer import SlideNormalizerMixin
 from services.slide_quality import build_visual_plan
+from services.slide_charts import _chart_spec_has_text_evidence, build_chart_specs_for_slides, normalize_chart_spec
 from services.slide_text_quality import improve_slide_titles_quality
 from routes.api import _detect_generate_images_request
 from services.revision_rules import revision_prompt_mentions_image, revision_prompt_mentions_table
@@ -38,6 +39,10 @@ class AllNoneVisualExtractor:
                 for slide in payload["slides"]
             ],
         })
+
+
+class ChartFallbackExtractor:
+    pass
 
 
 class FailingTitleExtractor:
@@ -138,6 +143,47 @@ class AiFirstQualityTest(unittest.IsolatedAsyncioTestCase):
             else:
                 current_none_run = 0
         self.assertLessEqual(longest_none_run, 4)
+
+    async def test_unmatched_raw_chart_does_not_block_planned_slide_pairs(self):
+        deck = {
+            "slides": [{
+                "title": "Vietnam e-commerce growth",
+                "layout": "text_chart",
+                "bullets": ["2018: 8", "2019: 11", "2020: 14"],
+            }],
+        }
+        unrelated_raw = (
+            "Regional classroom attendance chart\n"
+            "North: 40\nSouth: 60\n"
+        )
+
+        specs = await build_chart_specs_for_slides(
+            ChartFallbackExtractor(),
+            deck,
+            raw_content=unrelated_raw,
+            visual_plan={0: "chart"},
+        )
+
+        self.assertIn(0, specs)
+        self.assertEqual(specs[0]["labels"], ["2018", "2019", "2020"])
+
+    def test_fractional_percent_chart_matches_source_percent_text(self):
+        spec = normalize_chart_spec({
+            "title": "Baseline performance",
+            "chart_type": "column",
+            "labels": ["Accuracy", "Macro-F1"],
+            "values": [0.9576, 0.9452],
+            "unit": "percent",
+            "is_percent": True,
+        })
+
+        self.assertIsNotNone(spec)
+        self.assertTrue(
+            _chart_spec_has_text_evidence(
+                spec,
+                "Accuracy reached 95.76% and Macro-F1 reached 94.52%.",
+            )
+        )
 
     async def test_title_review_failure_does_not_rewrite_from_bullets(self):
         deck = {"slides": [{

@@ -274,6 +274,13 @@
   font-size: 0.85rem;
 }
 
+.qpi-caption {
+  min-height: 6px;
+  color: rgba(255,255,255,0.32);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
 .qpi-title {
   color: rgba(255,255,255,0.7);
   font-weight: 500;

@@ -138,14 +138,11 @@ async def improve_deck_source_grounding(
             if isinstance(s, dict)
         ],
     }
-    from services.lecture_quality import select_relevant_source_excerpt
-
     user_instruction = str(getattr(content_extractor, "_user_instruction", "") or "").strip()
-    source_excerpt = select_relevant_source_excerpt(
-        source,
-        user_instruction,
-        max_chars=9000,
+    focused_source = str(
+        getattr(content_extractor, "_focused_source_content", "") or ""
     )
+    source_excerpt = (focused_source or source)[:12000]
     messages = [
         {
             "role": "system",
@@ -167,6 +164,11 @@ async def improve_deck_source_grounding(
                 "- Preserve all technical terms, proper nouns, numbers, and user intent.\n"
                 "- The explicit user instruction is the authoritative scope. Do not replace a requested chapter, "
                 "section, audience, or teaching goal with a different part of the source.\n"
+                "- Never put internal messages such as 'not supported by the source', 'insufficient evidence', "
+                "or comments about retrieval/grounding into slide titles, bullets, or notes.\n"
+                "- If a mandatory requested topic has limited direct source support, keep the topic and add only "
+                "stable foundational explanation, clearly illustrative examples, or a practice question. "
+                "Never invent statistics, quotations, citations, named findings, or document-specific claims.\n"
                 "- Do not add chart/table/image fields. Preserve each existing layout value, especially intro and thankyou.\n"
                 "Return ONLY valid JSON."
             ),

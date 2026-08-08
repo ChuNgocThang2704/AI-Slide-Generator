@@ -196,15 +196,53 @@ def revision_prompt_add_slide_count(text: str) -> int:
     folded = fold_revision_text(text)
     if not re.search(r"\b(?:them|add|bo\s+sung|chen)\b", folded):
         return 0
-    match = re.search(r"\b(?:them|add|bo\s+sung|chen)\s*(\d+)?\s*(?:slide|trang)\b", folded)
+    number_words = {
+        "mot": 1, "moi": 1, "a": 1, "an": 1, "one": 1,
+        "hai": 2, "two": 2, "ba": 3, "three": 3,
+        "bon": 4, "tu": 4, "four": 4, "nam": 5, "five": 5,
+        "sau": 6, "six": 6, "bay": 7, "seven": 7,
+        "tam": 8, "eight": 8, "chin": 9, "nine": 9,
+        "muoi": 10, "ten": 10,
+    }
+    match = re.search(
+        r"\b(?:them|add|bo\s+sung|chen)\s*"
+        r"(?:(\d+|mot|moi|a|an|one|hai|two|ba|three|bon|tu|four|nam|five|sau|six|bay|seven|tam|eight|chin|nine|muoi|ten)\s*)?"
+        r"(?:slide|trang)\b",
+        folded,
+    )
     if match:
         try:
-            return max(1, min(int(match.group(1) or "1"), 10))
+            raw_count = match.group(1) or "1"
+            count = int(raw_count) if raw_count.isdigit() else number_words.get(raw_count, 1)
+            return max(1, min(count, 10))
         except Exception:
             return 1
     if re.search(r"\b(?:slide|trang)\s+(?:moi|cuoi)\b", folded):
         return 1
     return 0
+
+
+def revision_added_slide_indices(text: str, old_count: int, new_count: int, add_count: int) -> List[int]:
+    """Resolve structural insertion slots; content decisions remain AI-owned."""
+    if add_count <= 0 or new_count <= old_count:
+        return []
+    count = min(add_count, new_count - old_count)
+    folded = fold_revision_text(text)
+
+    numbered = re.search(r"\b(?:truoc|before)\s+(?:slide|trang)\s*(\d+)\b", folded)
+    if numbered:
+        start = max(0, min(int(numbered.group(1)) - 1, new_count - count))
+        return list(range(start, start + count))
+    numbered = re.search(r"\b(?:sau|after)\s+(?:slide|trang)\s*(\d+)\b", folded)
+    if numbered:
+        start = max(0, min(int(numbered.group(1)), new_count - count))
+        return list(range(start, start + count))
+    if re.search(r"\b(?:truoc|before).{0,40}\b(?:ket\s+luan|ket\s+thuc|closing|conclusion|thank\s*you)\b", folded):
+        start = max(0, new_count - 1 - count)
+        return list(range(start, start + count))
+    if re.search(r"\b(?:dau|beginning|start|first)\b", folded):
+        return list(range(count))
+    return list(range(new_count - count, new_count))
 
 def revision_prompt_delete_slide_indices(text: str, slide_count: int) -> List[int]:
     folded = fold_revision_text(text)
@@ -392,6 +430,7 @@ def fallback_table_from_revision_prompt(prompt: str) -> Optional[Dict[str, Any]]
 
 def internal_slide_to_spec_row(idx: int, slide: Dict[str, Any]) -> Dict[str, Any]:
     row: Dict[str, Any] = {
+        "slide_id": str(slide.get("slide_id") or f"slide-{idx + 1:03d}"),
         "index": idx,
         "title": plain_slide_text(slide.get("title") or f"Slide {idx + 1}"),
         "bullets": [

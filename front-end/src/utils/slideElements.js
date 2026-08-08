@@ -1,3 +1,6 @@
+import { fitTextToBox } from './textFit';
+import { inferImageFit } from './imageFit';
+
 const id = () => `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const THEME_TEXT = {
@@ -18,6 +21,28 @@ const textElement = (role, content, x, y, width, height, style = {}) => ({
   style: { fontFamily: 'Inter, sans-serif', fontSize: 22, color: '#1a1a1a', textAlign: 'left', fontWeight: 400, ...style },
 });
 
+const CODE_LINE = /^\s*(?:>>>|\.\.\.|def\s+|class\s+|return\b|import\s+|from\s+\S+\s+import\s+|print\s*\(|if\s+.+:|for\s+.+:|while\s+.+:|[A-Za-z_]\w*\s*=)/;
+const LANGUAGE_MARKER = /^\s*(?:python|py|javascript|typescript|java|c\+\+|cpp)\s*$/i;
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const bodyHtmlFromBullets = (bullets) => {
+  const normal = [];
+  const code = [];
+  (bullets || []).forEach((item) => {
+    const value = String(item || '').trim();
+    if (!value || LANGUAGE_MARKER.test(value)) return;
+    if (CODE_LINE.test(value)) code.push(value);
+    else normal.push(value);
+  });
+  const list = normal.length
+    ? `<ul>${normal.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '';
+  const codeBlock = code.length
+    ? `<pre class="slide-code-block"><code>${escapeHtml(code.join('\n'))}</code></pre>`
+    : '';
+  return `${list}${codeBlock}`;
+};
+
 const isVietnameseSlide = (slide) => {
   const language = String(slide?.language || slide?.lang || '').toLowerCase();
   if (language.startsWith('vi')) return true;
@@ -26,14 +51,48 @@ const isVietnameseSlide = (slide) => {
   return /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i.test(text)
     || /\b(bài giảng|tổng kết|mục tiêu|nội dung|cảm ơn)\b/i.test(text);
 };
+
+const contentTextMetrics = (slide) => {
+  const bullets = Array.isArray(slide?.bullets) ? slide.bullets.filter(Boolean) : [];
+  const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
+  const width = slide?.imageUrl ? 430 : 832;
+  const x = slide?.imageUrl ? 64 : bullets.length <= 4 ? 84 : 64;
+  const adjustedWidth = slide?.imageUrl ? width : bullets.length <= 4 ? 792 : width;
+  const lineHeight = bullets.length <= 4 ? 1.6 : 1.5;
+  const fontSize = fitTextToBox(bullets.join('\n'), {
+    width: adjustedWidth,
+    height: 344,
+    min: hasVisual ? 12 : 13,
+    max: hasVisual ? 22 : 24,
+    lineHeight,
+    itemCount: bullets.length,
+  });
+  return { fontSize, lineHeight, x, width: adjustedWidth };
+};
+
 export function createElementsFromSlide(slide, theme = 'clean-white') {
   if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
   const isVietnamese = isVietnameseSlide(slide);
+  const isLecture = String(slide?.presentationMode || '').toLowerCase() === 'lecture';
 
   if (slide?.type === 'title') {
-    elements.push(textElement('custom', isVietnamese ? 'BÀI GIẢNG' : 'LECTURE', 110, 116, 740, 34, {
+    const introTitle = slide?.title || slide?.richText?.title || '';
+    const introSubtitle = slide?.subtitle
+      || (Array.isArray(slide?.bullets) ? slide.bullets[0] : '')
+      || slide?.richText?.subtitle
+      || '';
+    const introTitleSize = fitTextToBox(introTitle, {
+      width: 740, height: 132, min: 30, max: 54, lineHeight: 1.12,
+    });
+    const introSubtitleSize = fitTextToBox(introSubtitle, {
+      width: 600, height: 90, min: 15, max: 24, lineHeight: 1.45,
+    });
+    const introLabel = isLecture
+      ? (isVietnamese ? 'BÀI GIẢNG' : 'LECTURE')
+      : (isVietnamese ? 'BÀI THUYẾT TRÌNH' : 'PRESENTATION');
+    elements.push(textElement('custom', introLabel, 110, 116, 740, 34, {
       fontFamily: colors.body,
       fontSize: 14,
       color: colors.sub,
@@ -41,22 +100,18 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
       textAlign: 'center',
       letterSpacing: 2,
     }));
-    elements.push(textElement('title', slide?.title || slide?.richText?.title, 110, 164, 740, 132, {
+    elements.push(textElement('title', introTitle, 110, 164, 740, 132, {
       fontFamily: colors.title,
-      fontSize: 48,
+      fontSize: introTitleSize,
       color: colors.text,
       fontWeight: 800,
       lineHeight: 1.12,
       textAlign: 'center',
     }));
-    const subtitle = slide?.subtitle
-      || (Array.isArray(slide?.bullets) ? slide.bullets[0] : '')
-      || slide?.richText?.subtitle
-      || '';
-    if (subtitle) {
-      elements.push(textElement('body', subtitle, 180, 318, 600, 90, {
+    if (introSubtitle) {
+      elements.push(textElement('body', introSubtitle, 180, 318, 600, 90, {
         fontFamily: colors.body,
-        fontSize: 20,
+        fontSize: introSubtitleSize,
         color: colors.sub,
         lineHeight: 1.45,
         textAlign: 'center',
@@ -66,7 +121,20 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
   }
 
   if (slide?.type === 'thankyou') {
-    elements.push(textElement('custom', isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE', 130, 112, 700, 34, {
+    const closingTitle = slide?.title || (isVietnamese ? 'Tổng kết và Hỏi đáp' : 'Summary and Q&A');
+    const closingItems = Array.isArray(slide?.bullets)
+      ? slide.bullets.filter(Boolean)
+      : [slide?.subtitle, slide?.contact].filter(Boolean);
+    const closingTitleSize = fitTextToBox(closingTitle, {
+      width: 720, height: 112, min: 30, max: 50, lineHeight: 1.15,
+    });
+    const closingBodySize = fitTextToBox(closingItems.join('\n'), {
+      width: 660, height: 168, min: 16, max: 24, lineHeight: 1.45, itemCount: closingItems.length,
+    });
+    const closingLabel = isLecture
+      ? (isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE')
+      : (isVietnamese ? 'KẾT LUẬN' : 'CLOSING');
+    elements.push(textElement('custom', closingLabel, 130, 112, 700, 34, {
       fontFamily: colors.body,
       fontSize: 14,
       color: colors.sub,
@@ -74,30 +142,27 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
       textAlign: 'center',
       letterSpacing: 2,
     }));
-    elements.push(textElement('title', slide?.title || (isVietnamese ? 'Tổng kết và Hỏi đáp' : 'Summary and Q&A'), 120, 164, 720, 112, {
+    elements.push(textElement('title', closingTitle, 120, 164, 720, 112, {
       fontFamily: colors.title,
-      fontSize: 46,
+      fontSize: closingTitleSize,
       color: colors.text,
       fontWeight: 800,
       lineHeight: 1.15,
       textAlign: 'center',
     }));
-    const closingItems = Array.isArray(slide?.bullets)
-      ? slide.bullets
-      : [slide?.subtitle, slide?.contact].filter(Boolean);
     if (closingItems.length) {
       elements.push(textElement(
         'body',
         `<ul>${closingItems.map((item) => `<li>${item}</li>`).join('')}</ul>`,
-        190,
-        302,
-        580,
-        132,
+        150,
+        286,
+        660,
+        168,
         {
           fontFamily: colors.body,
-          fontSize: 19,
+          fontSize: closingBodySize,
           color: colors.sub,
-          lineHeight: 1.5,
+          lineHeight: 1.45,
           textAlign: 'left',
         },
       ));
@@ -105,18 +170,43 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     return elements;
   }
 
-  elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 58, {
-    fontFamily: colors.title, fontSize: 34, color: colors.text, fontWeight: 700, lineHeight: 1.2,
+  const contentMetrics = contentTextMetrics(slide);
+  const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
+  const titleFontSize = fitTextToBox(slide?.title || slide?.richText?.title, {
+    width: 832,
+    height: 66,
+    min: 24,
+    max: hasVisual ? 34 : 38,
+    lineHeight: 1.2,
+    padding: 0,
+  });
+  elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 66, {
+    fontFamily: colors.title, fontSize: titleFontSize, color: colors.text, fontWeight: 700, lineHeight: 1.2,
   }));
 
   const body = Array.isArray(slide?.bullets) && slide.bullets.length
-    ? `<ul>${slide.bullets.map((item) => `<li>${item}</li>`).join('')}</ul>`
+    ? bodyHtmlFromBullets(slide.bullets)
     : slide?.text || slide?.subtitle || slide?.richText?.bullets || slide?.richText?.text || '';
-  if (body && !slide?.table && !slide?.chart) elements.push(textElement('body', body, 64, 112, slide?.imageUrl ? 430 : 832, 350, {
-    fontFamily: colors.body, fontSize: 16.5, color: colors.sub, lineHeight: 1.55,
-  }));
+  if (body && !slide?.table && !slide?.chart) elements.push(textElement(
+    'body',
+    body,
+    contentMetrics.x,
+    126,
+    contentMetrics.width,
+    344,
+    {
+      fontFamily: colors.body,
+      fontSize: contentMetrics.fontSize,
+      color: colors.sub,
+      lineHeight: contentMetrics.lineHeight,
+    },
+  ));
   if (slide?.imageUrl) {
-    elements.push({ id: id(), type: 'image', role: 'image', x: 540, y: 135, width: 350, height: 300, rotation: 0, src: slide.imageUrl });
+    elements.push({
+      id: id(), type: 'image', role: 'image', x: 540, y: 135,
+      width: 350, height: 300, rotation: 0, src: slide.imageUrl,
+      objectFit: inferImageFit(slide),
+    });
   }
   if (slide?.table) {
     elements.push({

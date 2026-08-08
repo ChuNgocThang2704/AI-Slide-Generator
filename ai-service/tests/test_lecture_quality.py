@@ -1,14 +1,21 @@
+import asyncio
 import unittest
 
 from routes.api import (
     _build_slide_spec_payload,
+    _clean_visual_schema_bullets,
+    _infer_slide_layout,
     _resolve_unique_visual_specs,
     _structured_content_from_spec_payload,
 )
 from services.content_extractor import ContentExtractor
 from services.lecture_quality import (
+    attach_source_page_provenance,
+    build_source_page_index,
     detect_lecture_mode,
     enrich_lecture_deck,
+    excerpt_from_source_pages,
+    has_explicit_structural_scope,
     lecture_prompt_block,
     select_relevant_source_excerpt,
 )
@@ -19,6 +26,22 @@ from services.text_utils import plain_slide_text
 
 
 class LectureQualityTests(unittest.TestCase):
+    def test_generic_document_deck_receives_source_page_provenance(self):
+        source = (
+            "[[SOURCE_PAGE:1]]\nCloud infrastructure overview and deployment context.\n"
+            "[[SOURCE_PAGE:2]]\nDenseNet training achieved strong validation accuracy and stable convergence.\n"
+        )
+        deck = {
+            "presentation_mode": "presentation",
+            "slides": [{
+                "title": "DenseNet training results",
+                "bullets": ["Validation accuracy remained stable during convergence."],
+            }],
+        }
+        result = attach_source_page_provenance(deck, source)
+        self.assertEqual(result["slides"][0]["source_pages"], [2])
+        self.assertEqual(result["slides"][0]["title"], deck["slides"][0]["title"])
+
     def test_detects_textbook_but_not_generic_business_prompt(self):
         textbook = (
             "[[SOURCE_PAGE:1]]\nChapter 3 Functions\n"
@@ -39,6 +62,72 @@ class LectureQualityTests(unittest.TestCase):
                 "Create a lecture for beginner students with learning objectives.",
             )
         )
+
+    def test_explicit_presentation_request_overrides_textbook_source(self):
+        textbook = (
+            "Chapter 2 Variables and Statements. Learning objectives and exercises. "
+            "This lesson is part of a programming course curriculum."
+        )
+        self.assertFalse(
+            detect_lecture_mode(
+                textbook,
+                "Create 8 English presentation slides introducing the key ideas.",
+            )
+        )
+        self.assertFalse(
+            detect_lecture_mode(
+                textbook,
+                "Tao 8 slide tieng Viet gioi thieu cac kien thuc quan trong.",
+            )
+        )
+
+    def test_explicit_lecture_still_wins_when_request_mentions_slides(self):
+        self.assertTrue(
+            detect_lecture_mode(
+                "Chapter 2 Variables",
+                "Create 10 lecture slides with learning objectives and examples.",
+            )
+        )
+
+    def test_chart_layout_requires_a_valid_chart_payload(self):
+        layout, primary = _infer_slide_layout(
+            None,
+            None,
+            None,
+            {"layout": "text_chart"},
+        )
+        self.assertEqual((layout, primary), ("text_only", None))
+
+    def test_internal_chart_schema_is_not_exposed_as_bullets(self):
+        bullets = [
+            "chart",
+            "type: bar",
+            "title: Revenue trend",
+            "x_axis: Year",
+            "data:",
+            "year: 2018, revenue: 8",
+        ]
+        cleaned = _clean_visual_schema_bullets(
+            bullets,
+            title="Doanh thu TMĐT Việt Nam",
+            has_chart=False,
+        )
+        self.assertEqual(len(cleaned), 1)
+        self.assertIn("chưa đủ", cleaned[0])
+
+    def test_valid_chart_hides_schema_without_adding_warning(self):
+        cleaned = _clean_visual_schema_bullets(
+            ["chart", "type: line", "labels: 2020 | 2021", "values: 8 | 12"],
+            title="Revenue",
+            has_chart=True,
+        )
+        self.assertEqual(cleaned, [])
+
+    def test_lecture_contract_requires_grounded_technical_examples(self):
+        contract = lecture_prompt_block()
+        self.assertIn("concrete, source-grounded example", contract)
+        self.assertIn("valid code", contract)
+        self.assertIn("unsupported absolutes", contract)
 
     def test_vietnamese_lecture_request_in_source_enables_mode(self):
         self.assertTrue(
@@ -84,6 +173,139 @@ class LectureQualityTests(unittest.TestCase):
         self.assertIn(11, result["slides"][1]["source_pages"])
         self.assertEqual(result["slides"][2]["pedagogical_role"], "practice")
         self.assertTrue(result["learning_objectives"])
+
+    def test_enrichment_inserts_missing_learning_objectives_slide(self):
+        deck = {
+            "title": "Python Variables",
+            "presentation_mode": "lecture",
+            "learning_objectives": [
+                "Explain variables and assignment.",
+                "Apply expressions in short programs.",
+            ],
+            "slides": [
+                {
+                    "title": "Python Variables",
+                    "layout": "intro",
+                    "bullets": ["A beginner lecture."],
+                },
+                {
+                    "title": "Variables and Assignment",
+                    "layout": "normal",
+                    "bullets": ["A variable refers to a value."],
+                },
+            ],
+        }
+
+        result = enrich_lecture_deck(deck, "", "Create a lecture in English.")
+
+        self.assertEqual(result["slides"][0]["layout"], "intro")
+        self.assertEqual(result["slides"][1]["pedagogical_role"], "learning_objectives")
+        self.assertEqual(result["slides"][1]["title"], "Learning Objectives")
+
+    def test_enrichment_derives_objectives_from_real_slide_topics(self):
+        deck = {
+            "title": "Python Variables",
+            "presentation_mode": "lecture",
+            "learning_objectives": [],
+            "slides": [
+                {"title": "Python Variables", "layout": "intro", "bullets": ["Overview."]},
+                {"title": "Assignment Statements", "bullets": ["Assignment binds a name."]},
+                {"title": "Expression Evaluation", "bullets": ["Operators produce values."]},
+                {"title": "Operator Precedence", "bullets": ["Precedence controls order."]},
+                {"title": "Summary", "layout": "thankyou", "bullets": ["Review."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(deck, "", "Create a beginner lecture in English.")
+
+        objective_slide = next(
+            slide
+            for slide in result["slides"]
+            if slide.get("pedagogical_role") == "learning_objectives"
+        )
+        self.assertEqual(objective_slide["title"], "Learning Objectives")
+        self.assertGreaterEqual(len(objective_slide["bullets"]), 2)
+        self.assertTrue(any("assignment" in item.lower() for item in objective_slide["bullets"]))
+
+    def test_enrichment_reuses_knowledge_check_as_requested_practice(self):
+        deck = {
+            "title": "Biến trong Python",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Giải thích biến.", "Vận dụng phép gán."],
+            "slides": [
+                {"title": "Biến trong Python", "layout": "intro", "bullets": ["Tổng quan."]},
+                {
+                    "title": "Kiểm tra lỗi phép gán",
+                    "pedagogical_role": "knowledge_check",
+                    "bullets": ["Tìm lỗi trong đoạn mã."],
+                },
+                {"title": "Tổng kết", "layout": "thankyou", "bullets": ["Ôn tập."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(
+            deck,
+            "",
+            "Tạo bài giảng có một slide bài tập thực hành.",
+        )
+
+        practice = next(
+            slide for slide in result["slides"] if slide.get("pedagogical_role") == "practice"
+        )
+        self.assertIn("Bài tập thực hành", practice["title"])
+        self.assertEqual(practice["bullets"], ["Tìm lỗi trong đoạn mã."])
+
+    def test_enrichment_reuses_existing_objective_titled_slide(self):
+        deck = {
+            "title": "Biến trong Python",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Giải thích biến.", "Vận dụng phép gán."],
+            "slides": [
+                {"title": "Biến trong Python", "layout": "intro", "bullets": ["Tổng quan."]},
+                {
+                    "title": "Giới thiệu và Mục tiêu bài học",
+                    "pedagogical_role": "concept",
+                    "bullets": ["Nội dung bài học."],
+                },
+                {"title": "Phép gán", "bullets": ["Phép gán liên kết tên với giá trị."]},
+                {"title": "Tổng kết", "layout": "thankyou", "bullets": ["Ôn tập."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(deck, "", "Tạo bài giảng bằng tiếng Việt.")
+        objective_slides = [
+            slide
+            for slide in result["slides"]
+            if slide.get("pedagogical_role") == "learning_objectives"
+        ]
+
+        self.assertEqual(len(objective_slides), 1)
+        self.assertEqual(objective_slides[0]["bullets"], deck["learning_objectives"])
+
+    def test_enrichment_creates_requested_practice_from_content_fallback(self):
+        deck = {
+            "title": "Biến trong Python",
+            "presentation_mode": "lecture",
+            "learning_objectives": ["Giải thích biến.", "Vận dụng phép gán."],
+            "slides": [
+                {"title": "Biến trong Python", "layout": "intro", "bullets": ["Tổng quan."]},
+                {"title": "Phép gán", "bullets": ["Phép gán liên kết tên với giá trị."]},
+                {"title": "Từ khóa", "bullets": ["Không dùng từ khóa làm tên biến."]},
+                {"title": "Tổng kết", "layout": "thankyou", "bullets": ["Ôn tập."]},
+            ],
+        }
+
+        result = enrich_lecture_deck(
+            deck,
+            "",
+            "Tạo bài giảng có một slide bài tập thực hành.",
+        )
+        practice = next(
+            slide for slide in result["slides"] if slide.get("pedagogical_role") == "practice"
+        )
+
+        self.assertIn("Bài tập thực hành", practice["title"])
+        self.assertEqual(len(practice["bullets"]), 3)
 
     def test_enrichment_merges_or_removes_dangling_bullet_labels(self):
         deck = {
@@ -238,6 +460,79 @@ class LectureQualityTests(unittest.TestCase):
         self.assertIn("Chapter 3 Functions", excerpt)
         self.assertNotIn("[[SOURCE_PAGE:1]]", excerpt)
 
+    def test_source_excerpt_matches_vietnamese_chapter_request_to_english_source(self):
+        source = "\n\n".join(
+            [
+                "[[SOURCE_PAGE:1]]\nChapter 2 Variables\nAssignments and expressions.",
+                "[[SOURCE_PAGE:2]]\n2.8 Debugging\nSyntax, runtime, and semantic errors.",
+                "[[SOURCE_PAGE:3]]\nChapter 3 Functions\nFunction calls and return values.",
+                "[[SOURCE_PAGE:4]]\n3.3 Composition\nNested function calls and expressions.",
+                "[[SOURCE_PAGE:5]]\n3.14 Exercises\nPractice defining functions.",
+            ]
+        )
+        excerpt = select_relevant_source_excerpt(
+            source,
+            "Sinh 12 slide theo chương 3 trong file bài giảng.",
+            max_chars=5000,
+        )
+        self.assertNotIn("Chapter 2 Variables", excerpt)
+        self.assertNotIn("2.8 Debugging", excerpt)
+        self.assertIn("Chapter 3 Functions", excerpt)
+        self.assertIn("3.3 Composition", excerpt)
+        self.assertIn("3.14 Exercises", excerpt)
+
+    def test_scope_helpers_support_structural_and_semantic_selection(self):
+        source = "\n\n".join(
+            [
+                "[[SOURCE_PAGE:1]]\nOverview of cloud infrastructure.",
+                "[[SOURCE_PAGE:2]]\nFruitful functions return computed values.",
+                "[[SOURCE_PAGE:3]]\nLocal variables exist only inside functions.",
+                "[[SOURCE_PAGE:4]]\nNetwork deployment checklist.",
+            ]
+        )
+        self.assertTrue(has_explicit_structural_scope("Sinh slide từ chương 3"))
+        self.assertFalse(
+            has_explicit_structural_scope(
+                "Chỉ trình bày hàm trả về kết quả và phạm vi biến."
+            )
+        )
+        index = build_source_page_index(source)
+        self.assertIn("PAGE 2: Fruitful functions", index)
+        excerpt = excerpt_from_source_pages(
+            source,
+            [2],
+            include_neighbors=False,
+        )
+        self.assertIn("Fruitful functions", excerpt)
+        self.assertNotIn("Network deployment", excerpt)
+
+    def test_ai_scope_selection_handles_cross_language_semantic_request(self):
+        extractor = ContentExtractor()
+        extractor.vllm_available = True
+        source = "\n\n".join(
+            [
+                "[[SOURCE_PAGE:1]]\nCloud infrastructure overview. " + ("cloud " * 80),
+                "[[SOURCE_PAGE:2]]\nFruitful functions return computed values. " + ("return " * 80),
+                "[[SOURCE_PAGE:3]]\nLocal variables and parameters. " + ("local " * 80),
+                "[[SOURCE_PAGE:4]]\nNetwork deployment checklist. " + ("network " * 80),
+            ]
+        )
+
+        async def fake_completion(*args, **kwargs):
+            return '{"pages":[2,3],"confidence":0.91,"reason":"semantic match"}'
+
+        extractor._llm_completion_plain_text = fake_completion
+        excerpt = asyncio.run(
+            extractor._focus_document_scope(
+                source,
+                "Chỉ trình bày hàm trả về kết quả và phạm vi biến.",
+                max_chars=900,
+            )
+        )
+        self.assertIn("Fruitful functions", excerpt)
+        self.assertIn("Local variables", excerpt)
+        self.assertNotIn("Network deployment", excerpt)
+
     def test_explicit_output_language_overrides_source_language_both_ways(self):
         extractor = ContentExtractor()
         english_source = "Functions accept arguments and may return values. " * 20
@@ -253,6 +548,25 @@ class LectureQualityTests(unittest.TestCase):
             extractor._resolve_output_language_hint(
                 vietnamese_source,
                 "Create the entire lecture deck in English.",
+            ),
+            "en",
+        )
+
+    def test_instruction_language_overrides_source_when_output_language_is_implicit(self):
+        extractor = ContentExtractor()
+        english_source = "Variables, expressions, and statements in Python. " * 20
+        vietnamese_source = "Biến, biểu thức và câu lệnh trong Python. " * 20
+        self.assertEqual(
+            extractor._resolve_output_language_hint(
+                english_source,
+                "Tạo 10 slide bài giảng từ chương 2 trong file.",
+            ),
+            "vi",
+        )
+        self.assertEqual(
+            extractor._resolve_output_language_hint(
+                vietnamese_source,
+                "Create 10 lecture slides from chapter 2 of the document.",
             ),
             "en",
         )
@@ -338,6 +652,120 @@ class LectureQualityTests(unittest.TestCase):
         self.assertEqual(result["slides"][-1]["layout"], "thankyou")
         self.assertEqual(result["slides"][1]["title"], "Topic 1")
 
+    def test_presentation_boundaries_do_not_use_lecture_copy(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "en"
+        extractor._lecture_mode = False
+        deck = {
+            "title": "Cloud Computing",
+            "presentation_mode": "presentation",
+            "slides": [
+                {"title": "Cloud Models", "bullets": ["Public, private, and hybrid clouds."]},
+                {"title": "Benefits", "bullets": ["Cloud platforms improve scalability."]},
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 3)
+
+        self.assertNotIn("lecture", result["slides"][0]["bullets"][0].lower())
+        self.assertEqual(
+            result["slides"][-1]["title"],
+            "Closing thoughts: Cloud Computing",
+        )
+
+    def test_presentation_replaces_stale_lecture_intro_copy(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "en"
+        extractor._lecture_mode = False
+        deck = {
+            "title": "Cloud Computing",
+            "presentation_mode": "presentation",
+            "slides": [
+                {
+                    "title": "Cloud Computing",
+                    "layout": "intro",
+                    "bullets": ["Lecture overview and key concepts."],
+                },
+                {"title": "Summary", "bullets": ["Cloud platforms scale on demand."]},
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 2)
+
+        self.assertNotIn("lecture", result["slides"][0]["bullets"][0].lower())
+
+    def test_boundary_preserves_ai_generated_closing_title(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "en"
+        extractor._lecture_mode = False
+        deck = {
+            "title": "Cloud Computing",
+            "presentation_mode": "presentation",
+            "slides": [
+                {"title": "Cloud Models", "bullets": ["Cloud platforms offer flexible models."]},
+                {
+                    "title": "The Cloud-Ready Future",
+                    "layout": "thankyou",
+                    "bullets": ["Cloud adoption enables flexible growth."],
+                },
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 3)
+
+        self.assertEqual(result["slides"][-1]["title"], "The Cloud-Ready Future")
+
+    def test_boundary_uses_qa_closing_after_existing_conclusion(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        extractor._lecture_mode = False
+        deck = {
+            "title": "Báo cáo nghiên cứu",
+            "presentation_mode": "presentation",
+            "slides": [
+                {"title": "Báo cáo nghiên cứu", "layout": "intro", "bullets": ["Tổng quan."]},
+                {"title": "Kết quả", "bullets": ["Độ chính xác đạt 95,76%."]},
+                {"title": "Kết luận", "bullets": ["Kết quả xác nhận tính khả dụng của dữ liệu."]},
+                {"title": "Kết luận: Báo cáo nghiên cứu", "bullets": ["Tóm tắt nội dung."]},
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 4)
+
+        self.assertEqual(result["slides"][-2]["title"], "Kết luận")
+        self.assertEqual(result["slides"][-1]["title"], "Cảm ơn và Hỏi đáp")
+        self.assertEqual(result["slides"][-1]["layout"], "thankyou")
+
+    def test_boundary_replaces_closing_about_a_topic_missing_from_body(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "en"
+        extractor._lecture_mode = False
+        deck = {
+            "title": "Python Foundations",
+            "presentation_mode": "presentation",
+            "slides": [
+                {"title": "Variables", "bullets": ["Variables store assigned values."]},
+                {"title": "Expressions", "bullets": ["Expressions combine values and operators."]},
+                {"title": "Interactive and Script Modes", "bullets": ["The two modes execute code differently."]},
+                {
+                    "title": "Summary",
+                    "layout": "thankyou",
+                    "bullets": [
+                        "Syntax errors violate language rules.",
+                        "Runtime errors interrupt program execution.",
+                        "Semantic errors produce unintended results.",
+                    ],
+                },
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 5)
+
+        closing_text = " ".join(result["slides"][-1]["bullets"]).lower()
+        self.assertIn("variables", closing_text)
+        self.assertIn("expressions", closing_text)
+        self.assertNotIn("syntax errors", closing_text)
+
     def test_boundary_replaces_unfinished_practice_with_complete_closing(self):
         extractor = ContentExtractor()
         extractor._slide_lang_hint = "vi"
@@ -367,6 +795,10 @@ class LectureQualityTests(unittest.TestCase):
     def test_technical_sanitizer_preserves_python_operators_and_identifiers(self):
         text = "Use miles * 1.61, 2 ** 3, and obj.__init__() in this example."
         self.assertEqual(_sanitize_inline_markup(text), text)
+
+    def test_technical_sanitizer_removes_balanced_markdown_labels(self):
+        self.assertEqual(_sanitize_inline_markup("**Thực hành:** Định nghĩa hàm"), "Thực hành: Định nghĩa hàm")
+        self.assertEqual(_sanitize_inline_markup("Dùng `print()` để hiển thị"), "Dùng print() để hiển thị")
 
     def test_slide_normalizer_preserves_python_operators_and_identifiers(self):
         extractor = ContentExtractor()
@@ -420,6 +852,110 @@ class LectureQualityTests(unittest.TestCase):
         result = extractor._ensure_deck_boundaries(deck, 3)
         body = result["slides"][1]["bullets"]
         self.assertEqual(body, ["A variable refers to a stored value."])
+
+    def test_boundary_moves_existing_intro_before_learning_objectives(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        deck = {
+            "title": "Biến, Biểu thức và Câu lệnh trong Python",
+            "slides": [
+                {
+                    "title": "Mục tiêu học tập",
+                    "layout": "normal",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Giải thích được biến và biểu thức."],
+                },
+                {
+                    "title": "Biến, Biểu thức và Câu lệnh trong Python",
+                    "layout": "intro",
+                    "bullets": ["Bài giảng cho người mới bắt đầu."],
+                },
+                {
+                    "title": "Tổng kết",
+                    "layout": "normal",
+                    "bullets": ["Ôn tập các khái niệm chính."],
+                },
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 3)
+
+        self.assertEqual(result["slides"][0]["layout"], "intro")
+        self.assertEqual(result["slides"][1]["pedagogical_role"], "learning_objectives")
+        self.assertEqual(result["slides"][-1]["layout"], "thankyou")
+
+    def test_boundary_replaces_generic_deck_title_with_subject_title(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        deck = {
+            "title": "Bài thuyết trình",
+            "slides": [
+                {
+                    "title": "Mục tiêu học tập về Python",
+                    "layout": "normal",
+                    "pedagogical_role": "learning_objectives",
+                    "bullets": ["Nhận biết các khái niệm."],
+                },
+                {
+                    "title": "Bài thuyết trình",
+                    "layout": "intro",
+                    "bullets": ["Bài giảng tổng quan."],
+                },
+                {
+                    "title": "Giới thiệu về Biến, Biểu thức và Câu lệnh trong Python",
+                    "layout": "normal",
+                    "bullets": ["Biến tham chiếu tới một giá trị."],
+                },
+                {
+                    "title": "Tổng kết",
+                    "layout": "normal",
+                    "bullets": ["Ôn tập."],
+                },
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 4)
+
+        self.assertEqual(result["title"], "Biến, Biểu thức và Câu lệnh trong Python")
+        self.assertEqual(result["slides"][0]["title"], result["title"])
+
+    def test_boundary_replaces_off_topic_closing_with_deck_takeaways(self):
+        extractor = ContentExtractor()
+        extractor._slide_lang_hint = "vi"
+        deck = {
+            "title": "Hàm trong lập trình",
+            "slides": [
+                {"title": "Hàm trong lập trình", "layout": "intro", "bullets": ["Tổng quan."]},
+                {
+                    "title": "Định nghĩa hàm",
+                    "layout": "normal",
+                    "bullets": ["Hàm là một nhóm câu lệnh có tên để thực hiện một nhiệm vụ."],
+                },
+                {
+                    "title": "Đối số và tham số",
+                    "layout": "normal",
+                    "bullets": ["Đối số được truyền vào tham số tương ứng khi gọi hàm."],
+                },
+                {
+                    "title": "Tổng kết",
+                    "layout": "thankyou",
+                    "bullets": [
+                        "Mô-đun chứa tập hợp các hàm.",
+                        "Lệnh import tải một mô-đun.",
+                    ],
+                },
+            ],
+        }
+
+        result = extractor._ensure_deck_boundaries(deck, 4)
+
+        self.assertEqual(
+            result["slides"][-1]["bullets"],
+            [
+                "Hàm là một nhóm câu lệnh có tên để thực hiện một nhiệm vụ.",
+                "Đối số được truyền vào tham số tương ứng khi gọi hàm.",
+            ],
+        )
 
     def test_duplicate_table_is_kept_on_most_relevant_slide(self):
         table = {

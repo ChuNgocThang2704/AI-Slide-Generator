@@ -44,6 +44,7 @@ from services.revision_rules import (
     internal_slide_to_spec_row as _internal_slide_to_spec_row,
     parse_revision_target_indices as _parse_revision_target_indices,
     revision_prompt_add_slide_count as _revision_prompt_add_slide_count,
+    revision_added_slide_indices as _revision_added_slide_indices,
     revision_prompt_delete_slide_indices as _revision_prompt_delete_slide_indices,
     revision_prompt_mentions_image as _revision_prompt_mentions_image,
     revision_prompt_mentions_table as _revision_prompt_mentions_table,
@@ -153,7 +154,13 @@ def _infer_slide_layout(
         if ai_layout in {"thankyou", "thank_you"}:
             return "thankyou", None
         valid_layouts = {"text_only", "text_image", "text_table", "text_chart", "split_columns", "timeline", "big_quote", "hero_stat", "normal"}
-        if ai_layout in valid_layouts and ai_layout not in {"text_only", "normal"}:
+        visual_layout_available = (
+            (ai_layout == "text_image" and bool(image))
+            or (ai_layout == "text_table" and bool(table))
+            or (ai_layout == "text_chart" and bool(chart))
+            or ai_layout in {"split_columns", "timeline", "big_quote", "hero_stat"}
+        )
+        if ai_layout in valid_layouts and ai_layout not in {"text_only", "normal"} and visual_layout_available:
             primary = None
             if "image" in ai_layout or image:
                 primary = "image"
@@ -189,8 +196,12 @@ def _resolve_unique_visual_specs(
         if not isinstance(slide, dict):
             continue
         raw_specs: List[Dict[str, Any]] = []
-        if isinstance(external.get(idx), dict):
-            raw_specs.append(external[idx])
+        slide_id = str(slide.get("slide_id") or "").strip()
+        external_spec = external.get(slide_id) if slide_id else None
+        if not isinstance(external_spec, dict):
+            external_spec = external.get(idx)
+        if isinstance(external_spec, dict):
+            raw_specs.append(external_spec)
         embedded = slide.get(kind)
         if isinstance(embedded, dict):
             raw_specs.append(embedded)
@@ -215,6 +226,38 @@ def _resolve_unique_visual_specs(
             resolved[idx] = (spec, score)
     return {idx: spec for idx, (spec, _) in resolved.items()}
 
+
+_VISUAL_SCHEMA_LINE_RE = re.compile(
+    r"^\s*(?:chart|type|chart_type|title|x_axis|y_axis|x-axis|y-axis|labels|categories|"
+    r"series|series_name|values|data|year|revenue)\s*(?::|$)",
+    re.IGNORECASE,
+)
+
+
+def _clean_visual_schema_bullets(
+    bullets: List[str],
+    *,
+    title: str = "",
+    has_chart: bool = False,
+) -> List[str]:
+    """Prevent internal chart schema from leaking into user-visible bullets."""
+    clean = [str(item or "").strip() for item in bullets if str(item or "").strip()]
+    schema_flags = [bool(_VISUAL_SCHEMA_LINE_RE.match(item)) for item in clean]
+    if sum(schema_flags) < 2 and not any(item.lower() == "chart" for item in clean):
+        return clean
+
+    narrative = [item for item, is_schema in zip(clean, schema_flags) if not is_schema]
+    if narrative or has_chart:
+        return narrative
+
+    language_sample = f"{title} {' '.join(clean)}"
+    vietnamese = bool(re.search(r"[\u00c0-\u1ef9]", language_sample))
+    return [
+        "Dữ liệu hiện có chưa đủ để tạo biểu đồ xu hướng đáng tin cậy."
+        if vietnamese
+        else "The available data is insufficient to build a reliable trend chart."
+    ]
+
 def _build_slide_spec_payload(
     *,
     task_id: str,
@@ -235,6 +278,7 @@ def _build_slide_spec_payload(
             continue
         row: Dict[str, Any] = {
             "index": idx,
+            "slide_id": str(slide.get("slide_id") or f"slide-{idx + 1:03d}"),
             "title": _plain_slide_text(slide.get("title") or ""),
             "bullets": [_plain_slide_text(x) for x in (slide.get("bullets") or slide.get("content") or []) if _plain_slide_text(x)],
             "notes": _plain_slide_text(slide.get("notes") or slide.get("script") or ""),
@@ -253,10 +297,16 @@ def _build_slide_spec_payload(
             c_spec["type"] = c_spec.get("chart_type")
             c_spec["categories"] = c_spec.get("labels")
             row["chart"] = c_spec
+        row["bullets"] = _clean_visual_schema_bullets(
+            row["bullets"],
+            title=row["title"],
+            has_chart=bool(row["chart"]),
+        )
         if idx in unique_tables:
             row["table"] = unique_tables[idx]
-        if image_paths and idx in image_paths:
-            img_path = str(image_paths[idx])
+        image_key = row["slide_id"] if image_paths and row["slide_id"] in image_paths else idx
+        if image_paths and image_key in image_paths:
+            img_path = str(image_paths[image_key])
             img_url = _image_url_from_path(img_path)
             img = {
                 "path": img_path,
@@ -315,6 +365,7 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
         if not isinstance(slide, dict):
             continue
         row: Dict[str, Any] = {
+            "slide_id": str(slide.get("slide_id") or f"slide-{idx + 1:03d}"),
             "title": _plain_slide_text(slide.get("title") or f"Slide {idx + 1}"),
             "bullets": [
                 _plain_slide_text(x)
@@ -358,6 +409,75 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
     return result
 
 
+def _requested_exact_bullet_count(prompt: str) -> Optional[int]:
+    """Extract an explicit exact bullet count without treating ranges as exact."""
+    folded = _fold_revision_text(prompt)
+    number_words = {
+        "mot": 1, "hai": 2, "ba": 3, "bon": 4, "tu": 4, "nam": 5,
+        "sau": 6, "bay": 7, "tam": 8, "chin": 9, "muoi": 10,
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    }
+    number_token = r"(?:\d{1,2}|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi|one|two|three|four|five|six|seven|eight|nine|ten)"
+    unit = r"(?:y(?:\s+chinh)?|gach\s+dau\s+dong|bullet(?:\s+point)?s?)"
+    patterns = (
+        rf"\b(?:dung|chinh\s+xac|con|thanh|gom|bao\s+gom|exactly|into|to)\s+({number_token})\s+{unit}\b",
+        rf"\b({number_token})\s+{unit}\s+(?:dung|chinh\s+xac|exactly)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, folded)
+        if not match:
+            continue
+        token = match.group(1)
+        value = int(token) if token.isdigit() else number_words.get(token)
+        if value is not None and 1 <= value <= 12:
+            return value
+    return None
+
+
+def _complete_bullets_from_previous(
+    current: List[Any],
+    previous: List[Any],
+    expected: int,
+) -> List[str]:
+    """Fill an under-produced rewrite with relevant prior ideas, avoiding near duplicates."""
+    result = [str(item).strip() for item in current if str(item).strip()]
+
+    def tokens(value: str) -> set[str]:
+        ignored = {
+            "va", "voi", "cua", "cho", "cac", "nhung", "mot", "duoc", "the",
+            "and", "with", "the", "for", "from", "that", "this", "are", "is",
+        }
+        return {
+            token for token in re.sub(r"[^a-z0-9]+", " ", _fold_revision_text(value)).split()
+            if len(token) >= 2 and token not in ignored
+        }
+
+    for item in previous:
+        candidate = str(item).strip()
+        if not candidate:
+            continue
+        candidate_tokens = tokens(candidate)
+        duplicate = False
+        for existing in result:
+            existing_tokens = tokens(existing)
+            if not candidate_tokens or not existing_tokens:
+                duplicate = candidate.casefold() == existing.casefold()
+            else:
+                overlap = len(candidate_tokens & existing_tokens)
+                duplicate = (
+                    overlap >= 3
+                    and overlap / max(1, min(len(candidate_tokens), len(existing_tokens))) >= 0.5
+                )
+            if duplicate:
+                break
+        if not duplicate:
+            result.append(candidate)
+        if len(result) >= expected:
+            break
+    return result[:expected]
+
+
 def _review_revised_spec_payload(
     spec_payload: Dict[str, Any],
     *,
@@ -384,6 +504,7 @@ def _review_revised_spec_payload(
     issues: List[Dict[str, Any]] = []
     fixes: List[Dict[str, Any]] = []
     target_set = set(plan_targets or [])
+    expected_bullet_count = _requested_exact_bullet_count(revision_prompt)
 
     if not wants_deck_restructure and old_slides:
         if len(slides) != len(old_slides):
@@ -495,9 +616,40 @@ def _review_revised_spec_payload(
             if not isinstance(slides[idx].get("image"), dict):
                 issues.append({"type": "missing_image_after_image_revision", "slide": idx + 1})
 
+    if expected_bullet_count is not None:
+        for idx in sorted(target_set):
+            if not (0 <= idx < len(slides)) or not isinstance(slides[idx], dict):
+                continue
+            bullets = [
+                str(item).strip()
+                for item in (slides[idx].get("bullets") or [])
+                if str(item).strip()
+            ]
+            if len(bullets) > expected_bullet_count:
+                slides[idx]["bullets"] = bullets[:expected_bullet_count]
+                fixes.append({
+                    "type": "enforced_exact_bullet_count",
+                    "slide": idx + 1,
+                    "count": expected_bullet_count,
+                })
+            elif len(bullets) < expected_bullet_count:
+                issues.append({
+                    "type": "bullet_count_mismatch",
+                    "slide": idx + 1,
+                    "expected": expected_bullet_count,
+                    "actual": len(bullets),
+                })
+
     for idx, slide in enumerate(slides):
         if not isinstance(slide, dict):
             continue
+        if not str(slide.get("slide_id") or "").strip():
+            old_slide_id = (
+                old_slides[idx].get("slide_id")
+                if idx < len(old_slides) and isinstance(old_slides[idx], dict)
+                else None
+            )
+            slide["slide_id"] = str(old_slide_id or f"slide-{idx + 1:03d}")
         slide["index"] = idx
         if slide.get("table"):
             slide["layout"] = "text_table"
@@ -536,6 +688,10 @@ async def _build_revised_slide_spec_payload(
 ) -> Dict[str, Any]:
     old_slides = previous_structured_content.get("slides") or []
     explicit_add_count = _revision_prompt_add_slide_count(revision_prompt)
+    explicit_visual_targets = _explicit_visual_targets_from_prompt(
+        revision_prompt,
+        max(len(old_slides) + explicit_add_count, len(old_slides)),
+    )
     explicit_delete_targets = _revision_prompt_delete_slide_indices(
         revision_prompt,
         len(old_slides),
@@ -633,17 +789,56 @@ async def _build_revised_slide_spec_payload(
                 if idx not in set(explicit_delete_targets) and isinstance(slide, dict)
             ]
         if explicit_add_count:
-            generated_additions = (
-                revised_slides[-explicit_add_count:]
-                if len(revised_slides) > len(old_slides)
-                else []
-            )
-            revised_slides = [dict(slide) for slide in old_slides if isinstance(slide, dict)]
-            for add_idx in range(explicit_add_count):
-                generated = generated_additions[add_idx] if add_idx < len(generated_additions) else None
-                if isinstance(generated, dict):
-                    revised_slides.append(dict(generated))
+            expected_count = len(old_slides) + explicit_add_count
+            # Keep the model's requested insertion position when the returned
+            # deck already has the exact count. Recompose only on mismatch.
+            if len(revised_slides) != expected_count:
+                revised_with_count = await content_extractor._force_slide_count_exact(
+                    {**revised, "slides": revised_slides},
+                    expected_count,
+                )
+                revised_slides = [
+                    dict(slide)
+                    for slide in (revised_with_count.get("slides") or [])
+                    if isinstance(slide, dict)
+                ]
         revised["slides"] = revised_slides
+
+    added_slide_indices = _revision_added_slide_indices(
+        revision_prompt,
+        len(old_slides),
+        len(revised.get("slides") or []),
+        explicit_add_count,
+    )
+    if added_slide_indices:
+        model_slides = [
+            slide for slide in (revised.get("slides") or []) if isinstance(slide, dict)
+        ]
+        additions = [
+            dict(model_slides[idx])
+            for idx in added_slide_indices
+            if 0 <= idx < len(model_slides)
+        ]
+        # Existing slides are immutable during an add operation. Rebuild from
+        # the saved originals and insert only the newly generated candidates.
+        rebuilt = [dict(slide) for slide in old_slides if isinstance(slide, dict)]
+        for offset, target_idx in enumerate(added_slide_indices):
+            if offset >= len(additions):
+                break
+            rebuilt.insert(max(0, min(target_idx, len(rebuilt))), additions[offset])
+        revised["slides"] = rebuilt
+        addition_prompt = (
+            "Rewrite only the newly added slide(s) so they satisfy the user's request exactly. "
+            "Keep them distinct from existing slides, preserve the requested topic, intent, language, "
+            "bullet count, visual requirement, and insertion purpose. Do not replace the request with "
+            "a merely related example or opportunity.\n\nOriginal user request:\n"
+            f"{revision_prompt}"
+        )
+        revised = await content_extractor.revise_selected_slides(
+            revised,
+            addition_prompt,
+            added_slide_indices,
+        )
 
     # A deck-level wording/layout revision must not silently add or remove slides.
     # Slide count changes are allowed only when the request explicitly asks for them.
@@ -692,18 +887,106 @@ async def _build_revised_slide_spec_payload(
     for idx, slide in enumerate(revised.get("slides") or []):
         if not isinstance(slide, dict):
             continue
-        if idx < len(old_slides) and isinstance(old_slides[idx], dict):
+        if not wants_deck_restructure and idx < len(old_slides) and isinstance(old_slides[idx], dict):
             old_slide = old_slides[idx]
             if plan_targets and idx not in plan_targets:
                 revised["slides"][idx] = dict(old_slide)
                 continue
             if not slide.get("image_url") and old_slide.get("image_url"):
                 slide["image_url"] = old_slide.get("image_url")
+            if old_slide.get("slide_id") and not slide.get("slide_id"):
+                slide["slide_id"] = old_slide.get("slide_id")
+            if idx in plan_targets and idx not in explicit_visual_targets:
+                # Text edits must not silently convert image/table/chart slides.
+                for key in ("table", "chart"):
+                    if isinstance(old_slide.get(key), dict):
+                        slide[key] = old_slide.get(key)
+                    else:
+                        slide.pop(key, None)
+                if old_slide.get("image_url"):
+                    slide["image_url"] = old_slide.get("image_url")
+                else:
+                    slide.pop("image_url", None)
+                slide["layout"] = old_slide.get("layout") or slide.get("layout")
             if idx not in plan_targets:
                 if "table" not in slide and isinstance(old_slide.get("table"), dict):
                     slide["table"] = old_slide.get("table")
                 if "chart" not in slide and isinstance(old_slide.get("chart"), dict):
                     slide["chart"] = old_slide.get("chart")
+
+    expected_bullet_count = _requested_exact_bullet_count(revision_prompt)
+    count_contract_targets = sorted(set(plan_targets) | set(added_slide_indices))
+    if expected_bullet_count is not None and count_contract_targets and wants_text_revision:
+        revised_slides = revised.get("slides") or []
+        mismatch_targets = [
+            idx for idx in count_contract_targets
+            if 0 <= idx < len(revised_slides)
+            and isinstance(revised_slides[idx], dict)
+            and len([b for b in (revised_slides[idx].get("bullets") or []) if str(b).strip()])
+            != expected_bullet_count
+        ]
+        if mismatch_targets:
+            retry_prompt = (
+                f"{revision_prompt}\n\nMANDATORY OUTPUT CONTRACT: Each targeted slide must contain EXACTLY "
+                f"{expected_bullet_count} bullet points, neither fewer nor more. Return complete slide content."
+            )
+            try:
+                retry_result = await content_extractor.revise_selected_slides(
+                    revised,
+                    retry_prompt,
+                    mismatch_targets,
+                )
+                retry_slides = [
+                    slide for slide in (retry_result.get("slides") or [])
+                    if isinstance(slide, dict)
+                ] if isinstance(retry_result, dict) else []
+                for pos, idx in enumerate(mismatch_targets):
+                    candidate = None
+                    if len(retry_slides) == len(mismatch_targets):
+                        candidate = retry_slides[pos]
+                    elif idx < len(retry_slides):
+                        candidate = retry_slides[idx]
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidate_bullets = [
+                        str(item).strip()
+                        for item in (candidate.get("bullets") or [])
+                        if str(item).strip()
+                    ]
+                    if len(candidate_bullets) >= expected_bullet_count:
+                        candidate["bullets"] = candidate_bullets[:expected_bullet_count]
+                        if idx < len(old_slides) and isinstance(old_slides[idx], dict):
+                            if not candidate.get("image_url") and old_slides[idx].get("image_url"):
+                                candidate["image_url"] = old_slides[idx].get("image_url")
+                            if old_slides[idx].get("slide_id") and not candidate.get("slide_id"):
+                                candidate["slide_id"] = old_slides[idx].get("slide_id")
+                        revised_slides[idx] = candidate
+            except Exception as count_retry_error:
+                print(f"[revise-spec] exact bullet-count retry failed: {count_retry_error!r}")
+
+        # Never let a verbose model response exceed an explicit exact count.
+        for idx in count_contract_targets:
+            if not (0 <= idx < len(revised_slides)) or not isinstance(revised_slides[idx], dict):
+                continue
+            bullets = [
+                str(item).strip()
+                for item in (revised_slides[idx].get("bullets") or [])
+                if str(item).strip()
+            ]
+            if len(bullets) > expected_bullet_count:
+                revised_slides[idx]["bullets"] = bullets[:expected_bullet_count]
+            elif len(bullets) < expected_bullet_count:
+                folded_prompt = _fold_revision_text(revision_prompt)
+                removes_content = bool(re.search(
+                    r"\b(?:xoa|bo|loai\s+bo|remove|delete|omit|exclude)\b",
+                    folded_prompt,
+                ))
+                if not removes_content and idx < len(old_slides) and isinstance(old_slides[idx], dict):
+                    revised_slides[idx]["bullets"] = _complete_bullets_from_previous(
+                        bullets,
+                        old_slides[idx].get("bullets") or [],
+                        expected_bullet_count,
+                    )
 
     if wants_image_revision:
         image_instruction_targets = plan_targets or list(range(len(revised.get("slides") or [])))
@@ -717,6 +1000,40 @@ async def _build_revised_slide_spec_payload(
 
     if await should_stop():
         raise TaskCancelledError()
+
+    from services.slide_text_quality import improve_slide_titles_quality, improve_speaker_notes_quality
+    if not wants_deck_restructure:
+        revised = await improve_slide_titles_quality(
+            content_extractor,
+            revised,
+            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        )
+        revised = await improve_speaker_notes_quality(
+            content_extractor,
+            revised,
+            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        )
+    if wants_text_revision and not wants_deck_restructure:
+        from services.deck_coherence import improve_deck_coherence
+        revised = await improve_deck_coherence(
+            content_extractor,
+            revised,
+            task_id=task_id,
+            allowed_indices=plan_targets or None,
+        )
+
+    from services.deck_contract import (
+        assert_deck_structure_locked,
+        assign_stable_slide_ids,
+        deck_structure_signature,
+    )
+    # Revision must preserve the user's existing boundaries. Generation uses
+    # _ensure_deck_boundaries, but applying it here can rewrite or re-add a
+    # cover/closing slide after an explicit add/delete operation.
+    revised = assign_stable_slide_ids(revised)
+    locked_signature = deck_structure_signature(revised)
+    revised["_structure_locked"] = True
+    revised["_structure_signature"] = list(locked_signature)
 
     visual_plan = await build_visual_plan(
         content_extractor,
@@ -740,10 +1057,19 @@ async def _build_revised_slide_spec_payload(
             visual_plan[idx] = "image"
         else:
             visual_plan[idx] = "none"
-    if explicit_add_count:
-        for idx, old_slide in enumerate(old_slides):
-            if not isinstance(old_slide, dict):
+    if wants_deck_restructure:
+        surviving_old_slides = [
+            slide for idx, slide in enumerate(old_slides)
+            if idx not in set(explicit_delete_targets) and isinstance(slide, dict)
+        ]
+        old_cursor = 0
+        for idx in range(len(revised.get("slides") or [])):
+            if idx in set(added_slide_indices):
                 continue
+            if old_cursor >= len(surviving_old_slides):
+                break
+            old_slide = surviving_old_slides[old_cursor]
+            old_cursor += 1
             if isinstance(old_slide.get("table"), dict):
                 visual_plan[idx] = "table"
             elif isinstance(old_slide.get("chart"), dict):
@@ -867,7 +1193,6 @@ async def _build_revised_slide_spec_payload(
         explicit_chart_type_targets,
     )
 
-    from services.slide_text_quality import improve_slide_titles_quality, improve_speaker_notes_quality
     note_slides = revised.get("slides") or []
     for idx, spec in table_specs.items():
         if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
@@ -875,24 +1200,7 @@ async def _build_revised_slide_spec_payload(
     for idx, spec in chart_specs.items():
         if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
             note_slides[idx]["chart"] = spec
-    revised = await improve_slide_titles_quality(
-        content_extractor,
-        revised,
-        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-    )
-    revised = await improve_speaker_notes_quality(
-        content_extractor,
-        revised,
-        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-    )
-    if wants_text_revision or wants_deck_restructure:
-        from services.deck_coherence import improve_deck_coherence
-        revised = await improve_deck_coherence(
-            content_extractor,
-            revised,
-            task_id=task_id,
-            allowed_indices=plan_targets or None,
-        )
+    assert_deck_structure_locked(revised, locked_signature)
 
     image_paths = None
     if want_images and wants_image_revision:
@@ -952,19 +1260,21 @@ async def _build_revised_slide_spec_payload(
                     image_paths[idx] = old_url
             changed_fields.append("image_partial")
 
+    assert_deck_structure_locked(revised, locked_signature)
+    from services.deck_contract import paths_by_slide_id, specs_by_slide_id
     spec_payload = _build_slide_spec_payload(
         task_id=task_id,
         structured_content=revised,
-        chart_specs=chart_specs,
-        table_specs=table_specs,
-        image_paths=image_paths,
+        chart_specs=specs_by_slide_id(revised, chart_specs),
+        table_specs=specs_by_slide_id(revised, table_specs),
+        image_paths=paths_by_slide_id(revised, image_paths),
         slide_theme=slide_theme,
     )
     spec_payload = _review_revised_spec_payload(
         spec_payload,
         previous_structured_content=previous_structured_content,
         revision_prompt=revision_prompt,
-        plan_targets=plan_targets,
+        plan_targets=count_contract_targets or plan_targets,
         wants_deck_restructure=wants_deck_restructure,
         forced_table_targets=forced_table_targets,
         fallback_table=fallback_table,
@@ -972,6 +1282,17 @@ async def _build_revised_slide_spec_payload(
         wants_image_revision=wants_image_revision,
         image_instruction_targets=image_instruction_targets if wants_image_revision else [],
     )
+    count_mismatches = [
+        issue for issue in (spec_payload.get("post_review", {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("type") == "bullet_count_mismatch"
+    ]
+    if count_mismatches:
+        mismatch = count_mismatches[0]
+        raise RuntimeError(
+            "AI could not satisfy the requested exact bullet count "
+            f"for slide {mismatch.get('slide')}: expected {mismatch.get('expected')}, "
+            f"got {mismatch.get('actual')}."
+        )
     spec_payload["revision_plan"] = revision_plan
     spec_payload["revision_scope"] = "deck" if wants_deck_restructure else ("slide" if plan_targets else str(revision_plan.get("scope") or "deck"))
     spec_payload["target_slide_indices"] = plan_targets
@@ -1098,6 +1419,7 @@ async def generate_slide_spec(
 
         raw_content = None
         structured_content = None
+        source_file_path: Optional[str] = None
 
         file_content = ""
         if file:
@@ -1108,6 +1430,8 @@ async def generate_slide_spec(
             with open(file_path, "wb") as f:
                 f.write(await file.read())
             file_content = await file_processor.process_file(file_path)
+            if file_ext == ".pdf":
+                source_file_path = str(file_path)
 
         validated_instruction = _validate_generation_instruction(
             text,
@@ -1149,6 +1473,7 @@ async def generate_slide_spec(
             slide_theme_bg: str,
             want_images_bg: bool,
             image_limit_bg: int,
+            source_file_path_bg: Optional[str],
         ):
             try:
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
@@ -1224,48 +1549,38 @@ async def generate_slide_spec(
                         raw_content_bg or "",
                         task_id=task_id_bg,
                     )
-                structured = _enforce_plan_slide_limit(structured, plan_norm)
-                from services.deck_coherence import improve_deck_coherence
-                structured = await improve_deck_coherence(
+                from services.deck_contract import (
+                    assert_deck_structure_locked,
+                    finalize_deck_for_visuals,
+                )
+                structured = await finalize_deck_for_visuals(
                     content_extractor,
                     structured,
+                    raw_content=raw_content_bg or "",
+                    user_instruction=user_instruction or "",
                     task_id=task_id_bg,
+                    plan=plan_norm,
+                    target_slides=target_slides_override,
                 )
-                from services.lecture_quality import enrich_lecture_deck
-                structured = enrich_lecture_deck(
-                    structured,
-                    raw_content_bg or "",
-                    user_instruction or "",
-                )
-                from services.slide_text_quality import improve_final_slide_quality
-                structured = await improve_final_slide_quality(
-                    content_extractor,
-                    structured,
-                    task_id=task_id_bg,
-                    source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
-                )
-                boundary_target = int(target_slides_override) if target_slides_override else len(
-                    structured.get("slides") or []
-                )
-                structured = content_extractor._ensure_deck_boundaries(
-                    structured,
-                    boundary_target,
-                )
-                structured = enrich_lecture_deck(
-                    structured,
-                    raw_content_bg or "",
-                    user_instruction or "",
-                )
+                locked_signature = assert_deck_structure_locked(structured)
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
+                visual_context_bg = "\n\n".join(
+                    part
+                    for part in (
+                        f"USER REQUEST:\n{user_instruction}" if user_instruction else "",
+                        f"SOURCE CONTENT:\n{raw_content_bg}" if raw_content_bg else "",
+                    )
+                    if part
+                )
                 visual_plan_bg = await build_visual_plan(
                     content_extractor,
                     structured,
-                    raw_content_bg or "",
+                    visual_context_bg,
                     want_images=want_images_bg,
                 )
                 visual_plan_bg.update(
                     _explicit_visual_targets_from_prompt(
-                        raw_content_bg or "",
+                        user_instruction or raw_content_bg or "",
                         len(structured.get("slides") or []),
                     )
                 )
@@ -1277,7 +1592,7 @@ async def generate_slide_spec(
                     structured,
                     task_id=task_id_bg,
                     should_stop=should_stop,
-                    raw_content=raw_content_bg or "",
+                    raw_content=visual_context_bg,
                     visual_plan=visual_plan_bg,
                 )
                 chart_specs_bg = await build_chart_specs_for_slides(
@@ -1286,13 +1601,14 @@ async def generate_slide_spec(
                     task_id=task_id_bg,
                     should_stop=should_stop,
                     table_indices=set(table_specs_bg.keys()),
-                    raw_content=raw_content_bg or "",
+                    raw_content=visual_context_bg,
                     visual_plan=visual_plan_bg,
                 )
+                assert_deck_structure_locked(structured, locked_signature)
                 _apply_explicit_chart_type_targets(
                     chart_specs_bg,
                     _explicit_chart_type_targets_from_prompt(
-                        raw_content_bg or "",
+                        user_instruction or raw_content_bg or "",
                         len(structured.get("slides") or []),
                     ),
                 )
@@ -1322,20 +1638,24 @@ async def generate_slide_spec(
                             force_target_indices=sorted(
                                 idx
                                 for idx, visual in _explicit_visual_targets_from_prompt(
-                                    raw_content_bg or "",
+                                    user_instruction or raw_content_bg or "",
                                     len(structured.get("slides") or []),
                                 ).items()
                                 if str(visual or "").strip().lower() == "image"
                             ),
                             force_instructions={
-                                idx: _explicit_slide_instruction_from_prompt(raw_content_bg or "", idx)
+                                idx: _explicit_slide_instruction_from_prompt(
+                                    user_instruction or raw_content_bg or "",
+                                    idx,
+                                )
                                 for idx, visual in _explicit_visual_targets_from_prompt(
-                                    raw_content_bg or "",
+                                    user_instruction or raw_content_bg or "",
                                     len(structured.get("slides") or []),
                                 ).items()
                                 if str(visual or "").strip().lower() == "image"
                             },
                             visual_plan=visual_plan_bg,
+                            source_file_path=source_file_path_bg,
                         )
                     except Exception as image_error:
                         print(
@@ -1346,13 +1666,15 @@ async def generate_slide_spec(
                 if await should_stop():
                     return
 
+                assert_deck_structure_locked(structured, locked_signature)
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=80)
+                from services.deck_contract import paths_by_slide_id, specs_by_slide_id
                 spec_payload = _build_slide_spec_payload(
                     task_id=task_id_bg,
                     structured_content=structured,
-                    chart_specs=chart_specs_bg,
-                    table_specs=table_specs_bg,
-                    image_paths=image_paths_bg,
+                    chart_specs=specs_by_slide_id(structured, chart_specs_bg),
+                    table_specs=specs_by_slide_id(structured, table_specs_bg),
+                    image_paths=paths_by_slide_id(structured, image_paths_bg),
                     slide_theme=slide_theme_bg,
                 )
 
@@ -1391,6 +1713,7 @@ async def generate_slide_spec(
                 "slide_theme": slide_preset,
                 "generate_images": "true" if want_images_flag else "false",
                 "image_limit": resolved_image_limit,
+                "source_file_path": source_file_path,
             }
             await redis_queue.add_task(task_id, task_data)
             return {
@@ -1409,6 +1732,7 @@ async def generate_slide_spec(
             slide_preset,
             want_images_flag,
             resolved_image_limit,
+            source_file_path,
         )
         return {
             "task_id": task_id,

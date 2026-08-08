@@ -10,6 +10,11 @@ from services.content.json_utils import parse_json_response
 
 _ENABLED = os.getenv("DECK_COHERENCE_JUDGE_ENABLE", "true").lower() in ("1", "true", "yes")
 _MAX_REFINES = max(0, int(os.getenv("DECK_COHERENCE_MAX_REFINES", "3")))
+_VALIDATE_REFINES = os.getenv("DECK_COHERENCE_VALIDATE_REFINES", "true").lower() in ("1", "true", "yes")
+_SOURCE_EVIDENCE_MAX_CHARS = max(
+    12000,
+    int(os.getenv("DECK_COHERENCE_SOURCE_MAX_CHARS", "30000")),
+)
 _DEBUG_DIR = Path("outputs") / "debug"
 _ALLOWED_ISSUES = {
     "duplicate_content",
@@ -19,6 +24,24 @@ _ALLOWED_ISSUES = {
     "contradiction",
     "visual_mismatch",
     "missing_requirement",
+    "factual_accuracy",
+    "missing_example",
+    "objective_mismatch",
+    "unsupported_claim",
+    "incomplete_coverage",
+    "weak_support",
+}
+_TEACHING_SUPPORT_ROLES = {
+    "worked_example",
+    "demonstration",
+    "practice",
+    "knowledge_check",
+}
+_ALLOWED_LECTURE_ROLES = {
+    "learning_objectives",
+    "concept",
+    *_TEACHING_SUPPORT_ROLES,
+    "summary",
 }
 _ISSUE_ALIASES = {
     "duplicate": "duplicate_content",
@@ -33,6 +56,18 @@ _ISSUE_ALIASES = {
     "visual_inconsistency": "visual_mismatch",
     "missing_user_requirement": "missing_requirement",
     "missing_requested_content": "missing_requirement",
+    "factual_error": "factual_accuracy",
+    "incorrect_fact": "factual_accuracy",
+    "inaccurate": "factual_accuracy",
+    "weak_example": "missing_example",
+    "missing_worked_example": "missing_example",
+    "learning_objective_mismatch": "objective_mismatch",
+    "unsupported_absolute": "unsupported_claim",
+    "missing_component": "incomplete_coverage",
+    "incomplete_list": "incomplete_coverage",
+    "partial_framework": "incomplete_coverage",
+    "insufficient_evidence": "weak_support",
+    "weak_evidence": "weak_support",
 }
 
 
@@ -59,6 +94,34 @@ def _slide_summary(slide: Dict[str, Any], index: int) -> Dict[str, Any]:
         "has_chart": isinstance(slide.get("chart"), dict),
         "has_image": bool(slide.get("image") or slide.get("image_url")),
         "pedagogical_role": str(slide.get("pedagogical_role") or ""),
+    }
+
+
+def _deck_profile(structured: Dict[str, Any]) -> Dict[str, Any]:
+    slides = [slide for slide in (structured.get("slides") or []) if isinstance(slide, dict)]
+    roles = [str(slide.get("pedagogical_role") or "").strip().lower() for slide in slides]
+    support_indices = [
+        index
+        for index, slide in enumerate(slides)
+        if str(slide.get("pedagogical_role") or "").strip().lower() in _TEACHING_SUPPORT_ROLES
+    ]
+    evidence_indices = [
+        index
+        for index, slide in enumerate(slides)
+        if (
+            isinstance(slide.get("table"), dict)
+            or isinstance(slide.get("chart"), dict)
+            or str(slide.get("pedagogical_role") or "").strip().lower()
+            in {"worked_example", "demonstration"}
+        )
+    ]
+    return {
+        "slide_count": len(slides),
+        "role_counts": {role: roles.count(role) for role in sorted(set(roles)) if role},
+        "teaching_support_indices": support_indices,
+        "teaching_support_count": len(support_indices),
+        "evidence_indices": evidence_indices,
+        "evidence_count": len(evidence_indices),
     }
 
 
@@ -97,6 +160,14 @@ async def _judge(
         "deck_title": str(structured.get("title") or ""),
         "presentation_mode": str(structured.get("presentation_mode") or "presentation"),
         "user_instruction": str(getattr(content_extractor, "_user_instruction", "") or ""),
+        "learning_objectives": structured.get("learning_objectives") or [],
+        "user_instruction": str(getattr(content_extractor, "_user_instruction", "") or ""),
+        "source_evidence": str(
+            getattr(content_extractor, "_focused_source_content", "")
+            or getattr(content_extractor, "_source_content", "")
+            or ""
+        )[:_SOURCE_EVIDENCE_MAX_CHARS],
+        "deck_profile": _deck_profile(structured),
         "slides": [_slide_summary(slide, idx) for idx, slide in enumerate(slides) if isinstance(slide, dict)],
     }
     messages = [
@@ -106,15 +177,43 @@ async def _judge(
                 "You are a presentation deck coherence judge. Evaluate the deck as one narrative. "
                 "Report only material issues: duplicated ideas, off-topic slides, contradictions, weak progression, "
                 "missing transitions, omitted explicit user requirements, or a table/chart/image layout that does "
-                "not support the slide claim. Treat the explicit user instruction as mandatory. In lecture mode, "
-                "verify requested objectives, examples, practice/knowledge checks, and summary are actually present. "
+                "not support the slide claim. Compare factual and technical claims against source_evidence when it "
+                "is available; flag incorrect statements, lost exceptions, unsupported absolutes, and invented facts. "
+                "Treat dates and chronology in source_evidence as authoritative. Never change or flag a date merely "
+                "because it appears future or past relative to an assumed current date; report it only when the deck "
+                "disagrees with the supplied source. "
+                "Treat the explicit user instruction as mandatory. In lecture mode, verify that concepts follow "
+                "prerequisite order, learning objectives are fulfilled, and abstract or technical concepts have a "
+                "source-grounded worked example, demonstration, exact code/input-output trace, formula, or check. "
+                "Do not require these teaching devices in ordinary presentation mode; there, prioritize a clear "
+                "claim-evidence-conclusion narrative appropriate to the user's purpose. "
+                "Use deck_profile as a deterministic coverage signal. In lecture mode, if teaching_support_count is "
+                "zero, you MUST report missing_example and target a redundant or lower-priority middle slide for "
+                "conversion into a source-grounded worked example, demonstration, practice, or knowledge check. "
+                "In ordinary presentation mode, do not require a teaching activity, but flag a major conclusion or "
+                "recommendation with no concrete example, comparison, data, or source-backed rationale as weak_support. "
+                "For every mode, compare headings and declared frameworks, classifications, stages, rule sets, or "
+                "named lists with source_evidence. If a slide promises the whole set but omits a material component, "
+                "report incomplete_coverage. Judge semantic completeness in any domain; never rely on a hard-coded "
+                "topic, acronym, language, or expected list. "
+                "For research reports, analytical reports, and case studies, identify the source's indispensable "
+                "findings before scoring: primary measured results, decisive comparisons, evaluation metrics, "
+                "sample/class coverage, limitations, and the evidence supporting the conclusion. Report "
+                "incomplete_coverage when the deck spends space on metadata or description but omits a central "
+                "result. Also report weak_progression when conclusions appear before their supporting results or "
+                "when substantive slides follow what is presented as the final conclusion. "
                 "Learning-objective and summary slides are protected roles: never target either one to repair a "
                 "different missing lecture component. If practice or a knowledge check is missing, target a "
                 "redundant or lower-priority middle concept/example slide and explicitly instruct replacing it "
                 "with a source-grounded activity. Do not propose adding a new slide when slide count is fixed. "
+                "When the user explicitly requests an exercise, practice, activity, or knowledge check, preserve "
+                "at least one such slide through every repair. Never write internal retrieval, evidence, source "
+                "support, validation, or grounding messages as user-facing slide content. "
                 "Do not penalize style preferences and do not invent facts. Use zero-based slide indices. "
                 "The type must be exactly one of: duplicate_content, off_topic, weak_progression, "
-                "missing_transition, contradiction, visual_mismatch, missing_requirement. "
+                "missing_transition, contradiction, visual_mismatch, missing_requirement, factual_accuracy, "
+                "missing_example, objective_mismatch, unsupported_claim. "
+                "The remaining allowed types are incomplete_coverage and weak_support. "
                 "For a missing requirement, target the most redundant or lowest-priority slide that should be "
                 "replaced or adapted to satisfy it. A score below 8 must include at least one "
                 "high or medium issue with a concrete repair instruction. "
@@ -151,6 +250,166 @@ async def _judge(
     return score, list(unique.values())[:_MAX_REFINES]
 
 
+async def _audit_instruction_coverage(
+    content_extractor,
+    structured: Dict[str, Any],
+    allowed_indices: Optional[Set[int]],
+) -> List[Dict[str, Any]]:
+    """Find explicit requested topics missing from substantive body slides."""
+    instruction = str(getattr(content_extractor, "_user_instruction", "") or "").strip()
+    slides = structured.get("slides") or []
+    if not instruction or len(slides) < 3:
+        return []
+
+    payload = {
+        "user_instruction": instruction,
+        "presentation_mode": str(structured.get("presentation_mode") or "presentation"),
+        "slides": [
+            _slide_summary(slide, index)
+            for index, slide in enumerate(slides)
+            if isinstance(slide, dict)
+        ],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a strict requirement-coverage auditor for presentation decks. "
+                "First identify the atomic CONTENT topics explicitly required by the user, in any language. "
+                "Ignore slide count, output language, audience, tone, formatting, and visual-style instructions. "
+                "Preserve every explicitly named list as a requirement group with separate required_components. "
+                "For example, a request naming A, B, and C is not satisfied by a slide about only A or by an "
+                "umbrella title. Never collapse named components into one broad topic. "
+                "Then verify that every required topic is substantively taught or explained in a BODY slide. "
+                "A mention in a title/cover, agenda, learning-objectives slide, or final summary is only a promise "
+                "and does NOT count as coverage. A topic needs its own meaningful explanation, example, comparison, "
+                "data, process, or exercise in the body. Detect semantically equivalent wording across languages. "
+                "Also identify body slides that substantially duplicate another slide. "
+                "For each genuinely missing topic, target the most redundant or lowest-priority BODY slide that "
+                "can be replaced. Never target the cover, learning objectives, or closing summary. "
+                "Do not request a new slide and do not hard-code any domain vocabulary. "
+                "For every requirement group, return required_components, covered_components, missing_components, "
+                "and target_index. target_index must be a redundant or lowest-priority body slide when components "
+                "are missing, otherwise null. Return no issue when all explicit content requirements are covered. "
+                "Return strict JSON only: "
+                "{\"requirements\":[{\"topic\":string,\"required_components\":[string],"
+                "\"covered_components\":[string],\"missing_components\":[string],"
+                "\"covered_by\":[number],\"target_index\":number|null}],"
+                "\"issues\":[{\"index\":number,\"type\":\"missing_requirement\","
+                "\"severity\":\"high|medium\",\"instruction\":string}]}."
+            ),
+        },
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+    raw = await content_extractor._llm_completion_plain_text(
+        messages,
+        max_tokens=min(2200, 800 + len(slides) * 120),
+        temperature=0.05,
+        json_mode=True,
+    )
+    parsed = parse_json_response(raw, clean_result_text=_clean_json_text)
+    if not isinstance(parsed, dict):
+        return []
+    content_extractor._last_coverage_requirements = parsed.get("requirements") or []
+    issues: List[Dict[str, Any]] = []
+
+    protected_indices = {
+        index
+        for index, slide in enumerate(slides)
+        if isinstance(slide, dict)
+        and (
+            str(slide.get("layout") or "").strip().lower()
+            in {"intro", "title", "thankyou", "thank_you"}
+            or str(slide.get("pedagogical_role") or "").strip().lower()
+            in {"learning_objectives", "summary"}
+        )
+    }
+    for requirement in parsed.get("requirements") or []:
+        if not isinstance(requirement, dict):
+            continue
+        required = [
+            str(value or "").strip()
+            for value in (requirement.get("required_components") or [])
+            if str(value or "").strip()
+        ]
+        covered = {
+            str(value or "").strip().casefold()
+            for value in (requirement.get("covered_components") or [])
+            if str(value or "").strip()
+        }
+        explicit_missing = [
+            str(value or "").strip()
+            for value in (requirement.get("missing_components") or [])
+            if str(value or "").strip()
+        ]
+        missing = explicit_missing or [
+            value for value in required if value.casefold() not in covered
+        ]
+        if not missing:
+            continue
+        valid_targets = [
+            index
+            for index, slide in enumerate(slides)
+            if isinstance(slide, dict)
+            and index not in protected_indices
+            and (allowed_indices is None or index in allowed_indices)
+        ]
+        try:
+            target_index = int(requirement.get("target_index"))
+        except (TypeError, ValueError):
+            target_index = -1
+        if target_index not in valid_targets:
+            covered_by: List[int] = []
+            for value in requirement.get("covered_by") or []:
+                try:
+                    index = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if index in valid_targets:
+                    covered_by.append(index)
+            if covered_by:
+                # Expand the slide that already teaches part of the same
+                # requirement group instead of scattering the classification.
+                target_index = covered_by[0]
+            elif valid_targets:
+                # When the auditor identifies missing content but cannot name a
+                # redundant target, replace the thinnest body slide. Never
+                # silently discard an explicit user requirement.
+                target_index = min(
+                    valid_targets,
+                    key=lambda index: (
+                        len(slides[index].get("bullets") or slides[index].get("content") or []),
+                        -index,
+                    ),
+                )
+            else:
+                continue
+        topic = str(requirement.get("topic") or "requested content").strip()
+        issues.append({
+            "index": target_index,
+            "type": "missing_requirement",
+            "severity": "high",
+            "instruction": (
+                f"Replace this redundant or lower-priority slide so the deck fully covers {topic}. "
+                f"The replacement must substantively explain every missing component: {', '.join(missing)}. "
+                "Keep all named components together when they form one requested classification or framework."
+            )[:500],
+        })
+
+    for raw_issue in parsed.get("issues") or []:
+        issue = _clean_issue(raw_issue, len(slides), allowed_indices)
+        if (
+            issue
+            and issue["type"] in {"missing_requirement", "incomplete_coverage"}
+            and issue["index"] not in protected_indices
+        ):
+            issues.append(issue)
+    unique: Dict[int, Dict[str, Any]] = {}
+    for issue in issues:
+        unique.setdefault(issue["index"], issue)
+    return list(unique.values())[:_MAX_REFINES]
+
+
 async def _refine(
     content_extractor,
     structured: Dict[str, Any],
@@ -166,7 +425,13 @@ async def _refine(
             targets.append({**_slide_summary(slides[index], index), "instruction": issue["instruction"]})
     payload = {
         "deck_title": str(structured.get("title") or ""),
+        "presentation_mode": str(structured.get("presentation_mode") or "presentation"),
         "deck_outline": [{"index": idx, "title": str(slide.get("title") or "")} for idx, slide in enumerate(slides) if isinstance(slide, dict)],
+        "source_evidence": str(
+            getattr(content_extractor, "_focused_source_content", "")
+            or getattr(content_extractor, "_source_content", "")
+            or ""
+        )[:_SOURCE_EVIDENCE_MAX_CHARS],
         "targets": targets,
     }
     messages = [
@@ -174,10 +439,28 @@ async def _refine(
             "role": "system",
             "content": (
                 "You refine only the listed presentation slides to resolve the supplied coherence instruction. "
-                "Preserve all facts, language, and meaning. Do not add claims or numbers. Do not change slide count, "
+                "Use source_evidence as the authority: correct inaccurate claims, retain exceptions and scope, and "
+                "copy source-supported dates and years exactly; never rewrite them based on an assumed current date. "
+                "add a concrete example only when it is directly supported by that evidence. In lecture mode, make "
+                "the target teachable with exact terminology and a concise worked example, code/input-output trace, "
+                "formula, process step, or knowledge check when requested by the issue. In presentation mode, preserve "
+                "the user's communication purpose and strengthen claim-to-evidence flow. Do not invent claims or numbers. "
+                "When repairing incomplete_coverage, restore every material missing component supported by the source "
+                "without padding the slide with unrelated detail. "
+                "Never put messages about missing source support, evidence, retrieval, validation, or grounding "
+                "inside a slide. If direct support is limited, use stable foundational explanation or a clearly "
+                "illustrative example without inventing document-specific facts. "
+                "For a requested chart, preserve each supported label-value pair as a separate bullet in the exact "
+                "form 'Label: number'. You may create an illustrative numeric series only when user_instruction "
+                "explicitly permits illustrative, sample, simulated, or hypothetical data; then clearly label one "
+                "bullet as illustrative. Otherwise never invent chart values. "
+                "Do not change slide count, "
                 "layout, table, chart, or image. Return complete replacement title, bullets, and notes only for targets. "
+                "In lecture mode you may also return pedagogical_role when the target is genuinely converted into a "
+                "worked_example, demonstration, practice, or knowledge_check. In presentation mode omit that field. "
                 "Use plain text, zero-based indices, and strict JSON: "
-                "{\"slides\":[{\"index\":number,\"title\":string,\"bullets\":[string],\"notes\":string}]}"
+                "{\"slides\":[{\"index\":number,\"title\":string,\"bullets\":[string],\"notes\":string,"
+                "\"pedagogical_role\":\"optional\"}]}"
             ),
         },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -209,6 +492,7 @@ async def _refine(
         title = str(item.get("title") or "").strip()
         bullets = item.get("bullets") or []
         notes = str(item.get("notes") or "").strip()
+        new_role = str(item.get("pedagogical_role") or "").strip().lower()
         if not title or not isinstance(bullets, list):
             continue
         clean_bullets = [str(value or "").strip() for value in bullets if str(value or "").strip()]
@@ -219,6 +503,11 @@ async def _refine(
         improved_slides[index]["bullets"] = clean_bullets[:8]
         if notes:
             improved_slides[index]["notes"] = notes
+        if (
+            str(improved.get("presentation_mode") or "").strip().lower() == "lecture"
+            and new_role in _ALLOWED_LECTURE_ROLES
+        ):
+            improved_slides[index]["pedagogical_role"] = new_role
         changed.append(index)
     return improved, sorted(set(changed))
 
@@ -251,11 +540,55 @@ async def improve_deck_coherence(
         return structured
     allowed = set(allowed_indices) if allowed_indices is not None else None
     try:
+        coverage_issues = await _audit_instruction_coverage(
+            content_extractor,
+            structured,
+            allowed,
+        )
         score, issues = await _judge(content_extractor, structured, allowed)
+        merged_issues: List[Dict[str, Any]] = []
+        seen_indices: Set[int] = set()
+        for issue in [*coverage_issues, *issues]:
+            if issue["index"] in seen_indices:
+                continue
+            seen_indices.add(issue["index"])
+            merged_issues.append(issue)
+            if len(merged_issues) >= _MAX_REFINES:
+                break
+        issues = merged_issues
         improved, changed = await _refine(content_extractor, structured, issues)
-        report = {"score": score, "issues": issues, "refined_slide_indices": changed}
+        report: Dict[str, Any] = {
+            "score": score,
+            "coverage_requirements": getattr(content_extractor, "_last_coverage_requirements", []),
+            "coverage_issues": coverage_issues,
+            "issues": issues,
+            "refined_slide_indices": changed,
+        }
+        if _VALIDATE_REFINES and changed:
+            try:
+                validation_score, remaining = await _judge(
+                    content_extractor,
+                    improved,
+                    set(changed),
+                )
+                report["validation_score"] = validation_score
+                report["remaining_issues"] = remaining
+                if remaining:
+                    improved, second_changed = await _refine(
+                        content_extractor,
+                        improved,
+                        remaining,
+                    )
+                    report["second_refined_slide_indices"] = second_changed
+            except Exception as validation_error:
+                # Keep the first verified improvement if the optional validation
+                # call is unavailable; provider failure must not roll it back.
+                report["validation_error"] = str(validation_error)
         _write_report(task_id, report)
-        print(f"[deck_coherence] score={score:.1f} issues={len(issues)} refined={changed}")
+        print(
+            f"[deck_coherence] score={score:.1f} issues={len(issues)} "
+            f"refined={changed} validation={report.get('validation_score')}"
+        )
         return improved
     except Exception as error:
         _write_report(task_id, {"error": str(error), "issues": [], "refined_slide_indices": []})

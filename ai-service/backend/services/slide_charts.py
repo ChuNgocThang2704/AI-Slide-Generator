@@ -153,7 +153,15 @@ def _chart_spec_has_text_evidence(spec: Dict[str, Any], text: str) -> bool:
             continue
         candidates = {str(int(parsed)) if float(parsed).is_integer() else str(parsed).rstrip("0").rstrip(".")}
         if 0 < parsed < 1 and spec.get("is_percent"):
-            candidates.add(str(int(round(parsed * 100))))
+            percent_value = parsed * 100
+            percent_text = f"{percent_value:.6f}".rstrip("0").rstrip(".")
+            candidates.update(
+                {
+                    percent_text,
+                    percent_text.replace(".", ","),
+                    str(int(round(percent_value))),
+                }
+            )
         if any(
             c and (c in folded_numeric or c.replace(".", "").replace(",", "") in compact_numeric)
             for c in candidates
@@ -365,6 +373,35 @@ def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Di
             chart_type = "pie"
         else:
             chart_type = "bar"
+
+        # Natural requests often provide a label range followed by a separate
+        # value list: "2021-2025 with values 13, 16, 20, 25, 31".
+        range_match = re.search(r"\b(\d{4})\s*[-–—]\s*(\d{4})\b", segment)
+        values_match = re.search(
+            r"\b(?:cac\s+)?(?:gia\s+tri|values?|data)\s*(?::|la|are|gom|including)?\s*(.{1,180})",
+            _fold_text(segment),
+        )
+        if range_match and values_match:
+            start_year, end_year = int(range_match.group(1)), int(range_match.group(2))
+            labels = [str(year) for year in range(start_year, end_year + 1)] if end_year >= start_year else []
+            values = [
+                value for value in (
+                    _parse_float_cell(token)
+                    for token in re.findall(r"[-+]?\d+(?:[.,]\d+)?", values_match.group(1))
+                ) if value is not None
+            ]
+            if len(labels) >= 2 and len(labels) == len(values):
+                spec = normalize_chart_spec({
+                    "title": "Biá»ƒu Ä‘á»“ cá»™t" if chart_type == "bar" else "Biá»ƒu Ä‘á»“ Ä‘Æ°á»ng",
+                    "chart_type": chart_type,
+                    "labels": labels,
+                    "values": values,
+                    "unit": "percent" if "%" in segment else "number",
+                    "is_percent": "%" in segment,
+                })
+                if spec:
+                    out[idx] = spec
+                    continue
 
         chunks = [part.strip(" .") for part in re.split(r"[,;]", segment) if part.strip(" .")]
         labels: List[str] = []
@@ -823,8 +860,9 @@ async def build_chart_specs_for_slides(
 
         if idx in skip:
             continue
-        if raw_candidates:
-            continue
+        # A malformed or unmatched raw candidate elsewhere must not disable
+        # this slide's own pair/LLM fallback. assigned_raw already prevents
+        # duplicate extraction for candidates that were successfully mapped.
 
         pair_chart = _pair_chart_from_lines(
             str(slide.get("title") or ""),

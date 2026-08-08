@@ -33,13 +33,17 @@
 .canvas-element.locked.selected { border-style:dashed; border-color:#94a3b8; box-shadow:none; }
 .canvas-element img { width:100%; height:100%; object-fit:cover; display:block; }
 .canvas-element.role-image { isolation:isolate; }
-.canvas-element.role-image > img { position:relative; z-index:1; }
+.canvas-image-viewport { position:absolute; inset:0; z-index:1; overflow:hidden; border-radius:inherit; }
+.canvas-image-viewport > img { position:relative; z-index:1; border-radius:inherit; transition:transform .12s ease-out; }
+.canvas-element.role-image.fit-contain { border-radius:10px !important; }
+.canvas-element.role-image.fit-contain > .canvas-image-viewport { border-radius:10px !important; background:rgba(255,255,255,.72); }
+.canvas-element.role-image.fit-contain::before { display:none !important; }
 .element-canvas[data-theme="soft-blue"] .canvas-element.role-image,
 .element-canvas[data-theme="royal-purple"] .canvas-element.role-image {
   border-radius:50%;
 }
-.element-canvas[data-theme="soft-blue"] .canvas-element.role-image > img,
-.element-canvas[data-theme="royal-purple"] .canvas-element.role-image > img {
+.element-canvas[data-theme="soft-blue"] .canvas-element.role-image > .canvas-image-viewport,
+.element-canvas[data-theme="royal-purple"] .canvas-element.role-image > .canvas-image-viewport {
   border-radius:50%;
 }
 .element-canvas[data-theme="soft-blue"] .canvas-element.role-image::before,
@@ -60,16 +64,16 @@
   background:#9948ff;
   opacity:.18;
 }
-.element-canvas[data-theme="clean-white"] .canvas-element.role-image > img {
+.element-canvas[data-theme="clean-white"] .canvas-element.role-image > .canvas-image-viewport {
   border-radius:6px;
   box-shadow:0 12px 32px rgba(15,23,42,.14);
 }
-.element-canvas[data-theme="modern-dark"] .canvas-element.role-image > img {
+.element-canvas[data-theme="modern-dark"] .canvas-element.role-image > .canvas-image-viewport {
   border:1px solid rgba(108,99,255,.4);
   border-radius:10px;
   box-shadow:0 14px 36px rgba(0,0,0,.35);
 }
-.element-canvas[data-theme="playful-yellow"] .canvas-element.role-image > img {
+.element-canvas[data-theme="playful-yellow"] .canvas-element.role-image > .canvas-image-viewport {
   border:7px solid #fff;
   border-radius:14px;
   box-shadow:8px 8px 0 rgba(245,158,11,.3);
@@ -80,20 +84,20 @@
   border-radius:10px;
   background:linear-gradient(135deg,#6c63ff,#38bdf8);
 }
-.element-canvas[data-theme="gradient-border"] .canvas-element.role-image > img {
+.element-canvas[data-theme="gradient-border"] .canvas-element.role-image > .canvas-image-viewport {
   border-radius:7px;
 }
-.element-canvas[data-theme="blue-planet"] .canvas-element.role-image > img {
+.element-canvas[data-theme="blue-planet"] .canvas-element.role-image > .canvas-image-viewport {
   border:2px solid rgba(0,242,254,.65);
   border-radius:50%;
   box-shadow:0 0 28px rgba(0,242,254,.28);
 }
-.element-canvas[data-theme="nature-green"] .canvas-element.role-image > img {
+.element-canvas[data-theme="nature-green"] .canvas-element.role-image > .canvas-image-viewport {
   border:5px solid rgba(46,204,113,.5);
   border-radius:8px 36px 8px 36px;
   box-shadow:0 14px 30px rgba(0,0,0,.25);
 }
-.element-canvas[data-theme="tech-purple"] .canvas-element.role-image > img {
+.element-canvas[data-theme="tech-purple"] .canvas-element.role-image > .canvas-image-viewport {
   border:2px solid rgba(224,86,253,.65);
   border-radius:8px;
   box-shadow:10px 10px 0 rgba(155,89,182,.18);
@@ -105,6 +109,12 @@
 .canvas-text ul { margin:0; padding-left:1.2em; }
 .canvas-text ol { margin:0; padding-left:1.65em; list-style:decimal; }
 .canvas-text ol li { padding-left:.25em; margin-bottom:.35em; }
+.canvas-text .slide-code-block {
+  margin:.55em 0 0; padding:.65em .8em; border-radius:7px;
+  background:rgba(15,23,42,.9); color:#e2e8f0;
+  font-family:'JetBrains Mono','Cascadia Code',Consolas,monospace;
+  font-size:.82em; line-height:1.45; white-space:pre-wrap;
+}
 .canvas-element.role-title .canvas-text ul { display:none; }
 .canvas-element.role-title .canvas-text ol { display:none; }
 

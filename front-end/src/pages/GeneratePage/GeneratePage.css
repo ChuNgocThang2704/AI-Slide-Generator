@@ -259,6 +259,39 @@
 }
 
 /* Upload styles */
+.gen2-source-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gen2-library-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(168, 159, 255, 0.3);
+  background: rgba(108, 99, 255, 0.08);
+  color: #c7c2ff;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.gen2-library-trigger:hover {
+  border-color: rgba(168, 159, 255, 0.55);
+  background: rgba(108, 99, 255, 0.15);
+  color: white;
+}
+
+.gen2-library-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .gen2-upload-zone {
   position: relative;
   border: 2px dashed rgba(255, 255, 255, 0.15);
@@ -370,6 +403,168 @@
   justify-content: center;
   border-radius: 50%;
   transition: all 0.15s;
+}
+
+.gen2-library-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(7, 7, 16, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.gen2-library-dialog {
+  width: min(620px, 100%);
+  max-height: min(680px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: #121220;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}
+
+.gen2-library-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.gen2-library-header h2 {
+  margin: 0;
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.15rem;
+}
+
+.gen2-library-header p {
+  margin: 5px 0 0;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.8rem;
+}
+
+.gen2-library-close {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+}
+
+.gen2-library-close:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: white;
+}
+
+.gen2-library-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 16px 24px 10px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.gen2-library-search:focus-within {
+  border-color: rgba(168, 159, 255, 0.55);
+}
+
+.gen2-library-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: white;
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.gen2-library-list {
+  min-height: 180px;
+  overflow-y: auto;
+  padding: 6px 16px 18px;
+}
+
+.gen2-library-item {
+  width: 100%;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+  text-align: left;
+  cursor: pointer;
+}
+
+.gen2-library-item:hover {
+  border-color: rgba(168, 159, 255, 0.22);
+  background: rgba(108, 99, 255, 0.09);
+  color: white;
+}
+
+.gen2-library-file-icon {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  background: rgba(108, 99, 255, 0.14);
+  color: #aaa3ff;
+}
+
+.gen2-library-file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gen2-library-file-info strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gen2-library-file-info small {
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 0.72rem;
+}
+
+.gen2-library-state {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.84rem;
 }
 
 /* Progress Overlay & Modal */
@@ -524,4 +719,26 @@
 
 @keyframes spin-slow {
   to { transform: rotate(360deg); }
+}
+
+@media (max-width: 560px) {
+  .gen2-source-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .gen2-library-trigger {
+    justify-content: center;
+  }
+
+  .gen2-library-header,
+  .gen2-library-search {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+
+  .gen2-library-header {
+    padding-left: 0;
+    padding-right: 0;
+  }
 }

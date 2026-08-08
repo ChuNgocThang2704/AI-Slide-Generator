@@ -7,6 +7,8 @@ import './StructuredVisual.css';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import { documentService } from '../../services/documentService';
 import AssetImage from './AssetImage';
+import { fitTextToBox } from '../../utils/textFit';
+import { inferImageFit } from '../../utils/imageFit';
 
 // ─── Theme map (same as SlideRenderer) ───────────────────────────────────────
 export const THEMES = {
@@ -159,24 +161,20 @@ function InlineBullets({ bullets = [], richValue = '', onSave, slideKey, t }) {
   const initialHTML = richValue || (bullets.length
     ? `<ul>${bullets.map((b) => `<li>${b}</li>`).join('')}</ul>`
     : '');
-  const totalChars = bullets.reduce((sum, bullet) => sum + plainTextLength(bullet), 0);
   const estimatedLines = bullets.reduce(
     (sum, bullet) => sum + Math.max(1, Math.ceil(plainTextLength(bullet) / 82)),
     0,
   );
-  const fontSize = estimatedLines > 20 || totalChars > 1200
-    ? 10
-    : estimatedLines > 16 || totalChars > 900
-      ? 11.5
-      : estimatedLines > 12 || totalChars > 680
-        ? 14
-        : estimatedLines > 9 || totalChars > 500
-          ? 16
-          : estimatedLines > 7
-            ? 17
-            : 18;
   const gap = estimatedLines > 16 ? 3 : estimatedLines > 12 ? 6 : estimatedLines > 9 ? 10 : 14;
   const boxHeight = estimatedLines > 14 ? 380 : estimatedLines > 9 ? 365 : bullets.length >= 4 ? 340 : 270;
+  const fontSize = fitTextToBox(initialHTML, {
+    width: 820,
+    height: boxHeight,
+    min: 10,
+    max: 22,
+    lineHeight: 1.5,
+    itemCount: bullets.length,
+  });
 
   const handleSave = (html) => {
     // Parse HTML back to array of plain text lines
@@ -722,8 +720,32 @@ function ImageTextSlide({ slide, t, sk, onSave, readonly, onPickImage, imageFit 
     : textLength > 520 || titleLength > 78
       ? 'density-dense'
       : 'density-normal';
+  const contentWidth = density === 'density-extreme' ? 530 : density === 'density-dense' ? 470 : 390;
+  const bodyFontSize = fitTextToBox(slide.text, {
+    width: contentWidth,
+    height: density === 'density-extreme' ? 390 : 350,
+    min: 11.5,
+    max: 21,
+    lineHeight: density === 'density-normal' ? 1.6 : 1.45,
+    itemCount: Math.max(1, String(slide.text || '').split(/\n+/).filter(Boolean).length),
+  });
+  const titleFontSize = fitTextToBox(slide.title, {
+    width: contentWidth,
+    height: density === 'density-normal' ? 92 : 76,
+    min: 23,
+    max: 35,
+    lineHeight: 1.15,
+    padding: 0,
+  });
   return (
-    <div className={`es-slide es-imgtext ${density}`} style={{ background: t.bgGrad }}>
+    <div
+      className={`es-slide es-imgtext ${density}`}
+      style={{
+        background: t.bgGrad,
+        '--image-body-font-size': `${bodyFontSize}px`,
+        '--image-title-font-size': `${titleFontSize}px`,
+      }}
+    >
       <Deco t={t} />
       <div className="es-imgtext-inner">
         <div className="es-img-box" style={{ background: t.surface, borderColor: t.surfaceBorder, overflow: 'hidden', padding: 0 }}>
@@ -920,7 +942,7 @@ export default function EditableSlide({ slide, theme = 'clean-white', slideIndex
         sk={sk}
         onSave={handleSave}
         readonly={readonly}
-        imageFit={displaySlide.imageFit || 'cover'}
+        imageFit={inferImageFit(displaySlide)}
         uploadingImage={uploadingImage}
         onPickImage={() => imageInputRef.current?.click()}
       />

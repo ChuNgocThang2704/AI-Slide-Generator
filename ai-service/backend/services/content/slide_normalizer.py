@@ -226,6 +226,8 @@ class SlideNormalizerMixin:
                 continue
             cleaned_chars.append(ch)
         t = "".join(cleaned_chars)
+        t = re.sub(r"(?<!\*)\*\*([^*\n]+)\*\*(?!\*)", r"\1", t)
+        t = re.sub(r"(?<!`)`([^`\n]+)`(?!`)", r"\1", t)
         t = re.sub(r"^\s*(?:[-+*]|•)\s+", "", t)
         # Preserve internal `*`, `**`, `_`, and identifiers such as
         # `__init__`; these are programming syntax, not necessarily Markdown.

@@ -208,6 +208,18 @@ export default function FloatingTextToolbar({
     setIsItalic(queryState('italic'));
     setIsUnderline(queryState('underline'));
     const editor = editorRef.current;
+    if (editor) {
+      const range = selectionRangeRef?.current;
+      const startNode = range?.startContainer;
+      const startElement = startNode?.nodeType === Node.ELEMENT_NODE
+        ? startNode
+        : startNode?.parentElement;
+      const formatElement = startElement && editor.contains(startElement)
+        ? startElement
+        : editor;
+      const effectiveSize = Number.parseFloat(window.getComputedStyle(formatElement).fontSize);
+      if (Number.isFinite(effectiveSize)) setFontSize(String(Math.round(effectiveSize)));
+    }
     if (batchMode) {
       setIsBold(Number(boxStyle?.fontWeight) >= 600);
       setIsItalic(boxStyle?.fontStyle === 'italic');
@@ -227,7 +239,7 @@ export default function FloatingTextToolbar({
       queryState('justifyCenter') ? 'center' :
       queryState('justifyRight')  ? 'right'  : 'left'
     );
-  }, [batchMode, boxStyle, editorRef, visible]);
+  }, [batchMode, boxStyle, editorRef, selectionRangeRef, visible]);
 
   if (!visible) return null;
 

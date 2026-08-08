@@ -21,13 +21,22 @@ const normalizeApiResponse = (response) => {
 // ─────────────────────────────────────────────
 export const projectService = {
   // Tạo project mới
-  async create(title, templateId = 'soft-blue', prompt = '', fileUrl = null, fileName = null, fileSize = null) {
+  async create(
+    title,
+    templateId = 'soft-blue',
+    prompt = '',
+    fileUrl = null,
+    fileName = null,
+    fileSize = null,
+    sourceDocId = null
+  ) {
     const response = await apiClient.post('/document/projects', {
       prompt: prompt || title,
       templateId,
-      fileUrl,
-      fileName,
-      fileSize
+      sourceDocId,
+      fileUrl: sourceDocId ? null : fileUrl,
+      fileName: sourceDocId ? null : fileName,
+      fileSize: sourceDocId ? null : fileSize,
     });
     return normalizeApiResponse(response.data);
   },
