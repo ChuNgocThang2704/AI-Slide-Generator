@@ -4,6 +4,7 @@ import { ChartVisual, TableVisual } from './StructuredVisual';
 import './StructuredVisual.css';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import AssetImage from './AssetImage';
+import { inferImageFit } from '../../utils/imageFit';
 
 // ─────────────────────────────────────────────
 // Template Themes (colors, fonts, accent styles)
@@ -801,7 +802,7 @@ function ImageTextSlide({ slide, theme, index }) {
       <div style={{ position: 'absolute', left: 64, top: 44, right: 64, bottom: 44, display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 36, alignItems: 'center' }}>
         <div className="slide-image-box" style={{ background: t.surface, borderColor: t.surfaceBorder, overflow: 'hidden', padding: 0, height: '100%', maxHeight: 380, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 16 }}>
           {slide.imageUrl ? (
-            <img src={resolveAssetUrl(slide.imageUrl)} alt={slide.title} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'inherit' }} />
+            <img src={resolveAssetUrl(slide.imageUrl)} alt={slide.title} style={{ width: '100%', height: '100%', objectFit: inferImageFit(slide), borderRadius: 'inherit' }} />
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: 24, textAlign: 'center' }}>
               <div className="slide-image-emoji" style={{ fontSize: 52 }}>{slide.imageEmoji || '🖼️'}</div>
@@ -930,7 +931,7 @@ export default function SlideRenderer({ slide, theme = 'clean-white', index = 0,
         {slide.elements.map((element, elementIndex) => (
           <div key={element.id} style={{ position:'absolute', left:element.x, top:element.y, width:element.width, height:element.height, zIndex:elementIndex + 1, transform:`rotate(${element.rotation || 0}deg)`, overflow:'hidden' }}>
             {element.type === 'image'
-              ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || 'cover', objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%` }}/>
+              ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || inferImageFit(element.src), objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`, transform:`scale(${element.imageScale || 1})`, transformOrigin:'center' }}/>
               : <div style={{ width:'100%', height:'100%', ...element.style }} dangerouslySetInnerHTML={{ __html: element.content || '' }}/>
             }
           </div>

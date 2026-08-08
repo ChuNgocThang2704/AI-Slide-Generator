@@ -305,6 +305,7 @@ FE nen render dua vao `result.deck.slides`.
 ```json
 {
   "index": 0,
+  "slide_id": "slide-001-a1b2c3d4e5f6",
   "title": "Toc do xu ly",
   "bullets": [
     "Toc do xu ly nhanh hon nho cam bien va xu ly tu dong."
@@ -324,6 +325,7 @@ FE nen render dua vao `result.deck.slides`.
 | Field | Type | Description |
 |---|---:|---|
 | `index` | integer | Thu tu slide, bat dau tu `0`. |
+| `slide_id` | string | Dinh danh on dinh cua slide. Khong doi khi chi sua text/visual; dung de gan table/chart/image dung slide. |
 | `title` | string | Tieu de slide. |
 | `bullets` | string[] | Noi dung chinh. |
 | `notes` | string | Ghi chu/loi thuyet trinh. |
@@ -342,6 +344,7 @@ Quan trong:
 - `layout = "text_chart"` chi khi `chart` co data that.
 - `layout = "text_image"` chi khi `image.url` hoac `image.path` ton tai.
 - FE khong can tu doan bang/chart tu text.
+- `slide_id` la khoa on dinh; `index` chi la thu tu hien tai va co the doi sau thao tac them/xoa/sap xep.
 - `presentation_mode` va cac truong lecture la metadata tuy chon; FE cu co the bo qua ma khong anh huong render.
 
 ## 5. Table Object

@@ -256,9 +256,12 @@ For textbook or lecture-oriented inputs, `result.deck` may additionally contain:
 
 - `presentation_mode: "lecture"`
 - `learning_objectives: string[]`
-- Per slide: `pedagogical_role` and `source_pages: number[]`
+- Per slide: `slide_id`, `pedagogical_role`, and `source_pages: number[]`
 
 These fields are optional and backward compatible. Existing renderers may ignore them.
+`slide_id` is the stable identity for a slide and should be preserved when FE
+saves edits. `index` remains the current display order and may change after
+add/delete/reorder operations.
 
 Revision quota is enforced by BE from the authenticated user's subscription:
 

@@ -21,6 +21,11 @@ _LECTURE_REQUEST_TERMS = (
     "bai giang", "giao an", "bai hoc", "muc tieu hoc tap",
     "learning objective", "lecture", "lesson", "course", "curriculum", "tutorial",
 )
+_PRESENTATION_REQUEST_TERMS = (
+    "presentation", "slide deck", "pitch deck", "business presentation",
+    "gioi thieu", "thuyet trinh", "trinh bay", "tong quan",
+    "introduction", "introduce", "overview", "showcase", "pitch",
+)
 _EDUCATIONAL_SOURCE_PATTERNS = (
     r"\bchapter\s+\d+\b",
     r"\b(?:section|exercise|example)\s+\d+(?:\.\d+)*\b",
@@ -49,8 +54,13 @@ def detect_lecture_mode(source_text: str, user_instruction: str = "") -> bool:
     """Detect teaching-oriented requests and textbook-like source material."""
     instruction = _fold(user_instruction)
     source = _fold((source_text or "")[:30000])
+    # Explicit user intent outranks the shape of an uploaded textbook or the
+    # educational vocabulary produced while expanding a prompt. A source can
+    # provide presentation content without turning the deck into a lesson.
     if any(term in instruction for term in _LECTURE_REQUEST_TERMS):
         return True
+    if any(term in instruction for term in _PRESENTATION_REQUEST_TERMS):
+        return False
     if any(term in source[:3000] for term in _LECTURE_REQUEST_TERMS):
         return True
     pattern_hits = sum(bool(re.search(pattern, source, re.IGNORECASE)) for pattern in _EDUCATIONAL_SOURCE_PATTERNS)
@@ -66,6 +76,12 @@ def lecture_prompt_block() -> str:
         "- Begin the content deck with concrete learning objectives appropriate to the source and audience.\n"
         "- Order ideas by prerequisite: prior knowledge -> core concept -> explanation -> example or demonstration "
         "-> guided practice or knowledge check -> synthesis.\n"
+        "- Every abstract or technical concept must be made teachable with a concrete, source-grounded example "
+        "on that slide or the immediately following slide. For programming, prefer valid code or an exact "
+        "input/output trace; for mathematics, prefer a worked expression; for processes, prefer numbered steps.\n"
+        "- Do not replace a useful technical example, code sample, formula, or diagram with a generic stock-photo idea.\n"
+        "- Avoid unsupported absolutes such as 'always', 'never', 'unlimited', or 'only' unless the source states "
+        "the precise rule. Preserve exceptions and scope conditions.\n"
         "- Use worked examples, code examples, formulas, diagrams, exercises, or checks only when supported by "
         "the source or explicitly requested; never invent technical facts or source examples.\n"
         "- Prefer one instructional purpose per slide and avoid repeating the same concept across slides.\n"
@@ -116,24 +132,172 @@ def enrich_lecture_deck(
     raw_objectives = deck.get("learning_objectives")
     if isinstance(raw_objectives, list):
         objectives = [str(item).strip() for item in raw_objectives if str(item).strip()] + objectives
+    objectives = _dedupe(objectives)[:5]
+    language_source = " ".join(
+        [str(deck.get("title") or ""), str(user_instruction or "")]
+        + [str(item) for item in objectives]
+    )
+    vietnamese = bool(
+        re.search(
+            r"[ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]",
+            language_source,
+            re.IGNORECASE,
+        )
+    )
+    if len(objectives) < 2:
+        objectives = _fallback_learning_objectives(
+            deck,
+            [slide for slide in slides if isinstance(slide, dict)],
+            vietnamese=vietnamese,
+        )
 
+    objective_title_terms = (
+        "muc tieu",
+        "learning objective",
+        "lesson objective",
+        "course objective",
+    )
     objective_index = next(
         (
             idx
             for idx, slide in enumerate(slides)
-            if isinstance(slide, dict) and slide.get("pedagogical_role") == "learning_objectives"
+            if isinstance(slide, dict)
+            and (
+                slide.get("pedagogical_role") == "learning_objectives"
+                or any(
+                    term in _fold(slide.get("title") or "")
+                    for term in objective_title_terms
+                )
+            )
         ),
         None,
     )
+    if objective_index is not None:
+        objective_slide = slides[objective_index]
+        objective_slide["pedagogical_role"] = "learning_objectives"
+        if len(objectives) >= 2:
+            objective_slide["bullets"] = objectives
+    if objective_index is None and len(objectives) >= 2:
+        objective_slide = {
+            "title": "Mục tiêu học tập" if vietnamese else "Learning Objectives",
+            "bullets": objectives,
+            "notes": "",
+            "layout": "text_only",
+            "pedagogical_role": "learning_objectives",
+            "source_pages": [],
+        }
+        intro_index = next(
+            (
+                idx
+                for idx, slide in enumerate(slides)
+                if isinstance(slide, dict)
+                and str(slide.get("layout") or "").strip().lower() in {"intro", "title"}
+            ),
+            None,
+        )
+        slides.insert(1 if intro_index == 0 else 0, objective_slide)
+        objective_index = 1 if intro_index == 0 else 0
     if objective_index is not None and objective_index > 1:
         objective_slide = slides.pop(objective_index)
-        first_title = _fold((slides[0] if slides and isinstance(slides[0], dict) else {}).get("title") or "")
+        first_slide = slides[0] if slides and isinstance(slides[0], dict) else {}
+        first_layout = str(first_slide.get("layout") or "").strip().lower()
+        first_title = _fold(first_slide.get("title") or "")
         intro_terms = ("introduction", "overview", "gioi thieu", "tong quan", "title")
-        slides.insert(1 if any(term in first_title for term in intro_terms) else 0, objective_slide)
+        has_intro = first_layout in {"intro", "title"} or any(
+            term in first_title for term in intro_terms
+        )
+        slides.insert(1 if has_intro else 0, objective_slide)
+
+    folded_instruction = _fold(user_instruction)
+    wants_practice = any(
+        term in folded_instruction
+        for term in ("bai tap", "thuc hanh", "luyen tap", "practice", "exercise", "activity")
+    )
+    has_practice = any(
+        isinstance(slide, dict)
+        and (
+            str(slide.get("pedagogical_role") or "").strip().lower() == "practice"
+            or any(
+                term in _fold(slide.get("title") or "")
+                for term in ("bai tap", "thuc hanh", "luyen tap", "practice", "exercise", "activity")
+            )
+        )
+        for slide in slides
+    )
+    if wants_practice and not has_practice:
+        synthesized_practice = False
+        candidate_index = next(
+            (
+                idx
+                for idx in range(len(slides) - 1, -1, -1)
+                if isinstance(slides[idx], dict)
+                and str(slides[idx].get("pedagogical_role") or "").strip().lower()
+                in {"knowledge_check", "worked_example"}
+            ),
+            None,
+        )
+        if candidate_index is None:
+            synthesized_practice = True
+            candidate_index = next(
+                (
+                    idx
+                    for idx in range(len(slides) - 2, 0, -1)
+                    if isinstance(slides[idx], dict)
+                    and str(slides[idx].get("pedagogical_role") or "").strip().lower()
+                    not in {"learning_objectives", "summary", "practice"}
+                    and str(slides[idx].get("layout") or "").strip().lower()
+                    not in {"intro", "title", "thankyou", "thank_you"}
+                ),
+                None,
+            )
+        if candidate_index is not None:
+            practice_slide = slides[candidate_index]
+            original_title = str(practice_slide.get("title") or "").strip()
+            practice_slide["pedagogical_role"] = "practice"
+            practice_slide["title"] = (
+                f"Bài tập thực hành: {original_title}"
+                if vietnamese
+                else f"Practice: {original_title}"
+            )
+            if synthesized_practice and vietnamese:
+                practice_slide["bullets"] = [
+                    f"Vận dụng các khái niệm chính về {original_title.lower()} vào một tình huống cụ thể.",
+                    "Trình bày từng bước thực hiện và giải thích lựa chọn của bạn.",
+                    "Đối chiếu kết quả với nội dung đã học và nêu một lỗi thường gặp.",
+                ]
+            elif synthesized_practice:
+                practice_slide["bullets"] = [
+                    f"Apply the key ideas from {original_title.lower()} to a concrete scenario.",
+                    "Show each step and explain the choices you make.",
+                    "Check the result against the lesson and identify one common mistake.",
+                ]
 
     deck["presentation_mode"] = "lecture"
-    deck["learning_objectives"] = _dedupe(objectives)[:5]
+    deck["learning_objectives"] = objectives
     _clean_fragmented_bullets(slides)
+    return deck
+
+
+def attach_source_page_provenance(
+    structured_content: Dict[str, Any],
+    source_text: str,
+) -> Dict[str, Any]:
+    """Attach source pages to any document-backed deck without changing content."""
+    if not isinstance(structured_content, dict):
+        return structured_content
+    pages = _split_source_pages(source_text or "")
+    if not pages:
+        return structured_content
+    deck = copy.deepcopy(structured_content)
+    slides = deck.get("slides")
+    if not isinstance(slides, list):
+        return deck
+    valid_pages = {page for page, _text in pages}
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        explicit = _normalize_page_numbers(slide.get("source_pages"), valid_pages=valid_pages)
+        slide["source_pages"] = explicit or _match_source_pages(slide, pages)
     return deck
 
 
@@ -145,15 +309,49 @@ def select_relevant_source_excerpt(
 ) -> str:
     """Choose source pages most relevant to the user's requested scope."""
     source = str(source_text or "")
+    pages = _split_source_pages(source)
+    folded_instruction = _fold(user_instruction)
+    requested_chapter = re.search(
+        r"\b(?:chapter|chuong)\s+(\d+)\b",
+        folded_instruction,
+    )
+    if requested_chapter and pages:
+        chapter_number = requested_chapter.group(1)
+        active_chapter: Optional[str] = None
+        chapter_pages: List[Tuple[int, str]] = []
+        for page_number, page_text in pages:
+            chapter_heading = re.search(
+                r"\b(?:chapter|chuong)\s+(\d+)\b",
+                _fold(page_text),
+            )
+            if chapter_heading:
+                active_chapter = chapter_heading.group(1)
+            if active_chapter == chapter_number:
+                chapter_pages.append((page_number, page_text))
+        if chapter_pages:
+            parts: List[str] = []
+            used = 0
+            for page_number, page_text in chapter_pages:
+                part = (
+                    f"{SOURCE_PAGE_MARKER.format(page=page_number)}\n"
+                    f"{page_text.strip()}"
+                )
+                if parts and used + len(part) > max_chars:
+                    break
+                if not parts and len(part) > max_chars:
+                    part = part[:max_chars]
+                parts.append(part)
+                used += len(part)
+            if parts:
+                return "\n\n".join(parts)
+
     if len(source) <= max_chars:
         return source
 
-    pages = _split_source_pages(source)
     query_tokens = _tokens(user_instruction)
     if not pages or not query_tokens:
         return source[:max_chars]
 
-    folded_instruction = _fold(user_instruction)
     scope_anchors = set(
         re.findall(
             r"\b(?:chapter|chuong|section|unit|module|lesson|bai)\s+\d+(?:\.\d+)*\b",
@@ -200,6 +398,68 @@ def select_relevant_source_excerpt(
         parts.append(part)
         used += len(part)
     return "\n\n".join(parts) or source[:max_chars]
+
+
+def has_explicit_structural_scope(user_instruction: str) -> bool:
+    """Return whether the request names a deterministic document boundary."""
+    folded = _fold(user_instruction)
+    return bool(
+        re.search(
+            r"\b(?:chapter|chuong|section|unit|module|lesson|bai|page|trang)"
+            r"\s+\d+(?:\.\d+)*\b",
+            folded,
+        )
+    )
+
+
+def build_source_page_index(source_text: str, *, max_chars: int = 22000) -> str:
+    """Build a compact, evenly sampled page index for semantic scope selection."""
+    pages = _split_source_pages(source_text)
+    if not pages:
+        return ""
+    preview_budget = max(140, min(520, max_chars // max(1, len(pages))))
+    entries: List[str] = []
+    used = 0
+    for page_number, page_text in pages:
+        compact = re.sub(r"\s+", " ", str(page_text or "")).strip()
+        entry = f"PAGE {page_number}: {compact[:preview_budget]}"
+        if entries and used + len(entry) + 1 > max_chars:
+            break
+        entries.append(entry)
+        used += len(entry) + 1
+    return "\n".join(entries)
+
+
+def excerpt_from_source_pages(
+    source_text: str,
+    selected_pages: Sequence[int],
+    *,
+    max_chars: int = 30000,
+    include_neighbors: bool = True,
+) -> str:
+    """Materialize an ordered source excerpt from an AI-selected page set."""
+    pages = _split_source_pages(source_text)
+    page_map = {page: text for page, text in pages}
+    wanted = {int(page) for page in selected_pages if int(page) in page_map}
+    if include_neighbors:
+        for page in list(wanted):
+            if page - 1 in page_map:
+                wanted.add(page - 1)
+            if page + 1 in page_map:
+                wanted.add(page + 1)
+    parts: List[str] = []
+    used = 0
+    ordered_pages = sorted(wanted)
+    for index, page in enumerate(ordered_pages):
+        part = f"{SOURCE_PAGE_MARKER.format(page=page)}\n{page_map[page].strip()}"
+        remaining_pages = len(ordered_pages) - index
+        remaining_budget = max(0, max_chars - used)
+        fair_budget = max(160, remaining_budget // max(1, remaining_pages))
+        if len(part) > fair_budget:
+            part = part[:fair_budget].rstrip()
+        parts.append(part)
+        used += len(part)
+    return "\n\n".join(parts)
 
 
 def _fold(text: str) -> str:
@@ -322,3 +582,61 @@ def _dedupe(items: Sequence[str]) -> List[str]:
             seen.add(key)
             result.append(item)
     return result
+
+
+def _fallback_learning_objectives(
+    deck: Dict[str, Any],
+    slides: Sequence[Dict[str, Any]],
+    *,
+    vietnamese: bool,
+) -> List[str]:
+    structural_terms = (
+        "muc tieu",
+        "learning objective",
+        "tong ket",
+        "ket luan",
+        "summary",
+        "conclusion",
+        "bai tap",
+        "thuc hanh",
+        "practice",
+        "exercise",
+        "kiem tra",
+        "knowledge check",
+        "quiz",
+    )
+    topics: List[str] = []
+    seen_topics: set[str] = set()
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        layout = str(slide.get("layout") or "").strip().lower()
+        role = str(slide.get("pedagogical_role") or "").strip().lower()
+        title = str(slide.get("title") or "").strip()
+        folded = _fold(title)
+        if (
+            not title
+            or layout in {"intro", "title", "thankyou", "thank_you"}
+            or role in {"learning_objectives", "summary", "practice", "knowledge_check"}
+            or any(term in folded for term in structural_terms)
+            or folded in seen_topics
+        ):
+            continue
+        topics.append(title)
+        seen_topics.add(folded)
+        if len(topics) >= 3:
+            break
+
+    if not topics:
+        deck_title = str(deck.get("title") or "").strip()
+        topics = [deck_title] if deck_title else []
+    verbs = (
+        ("Giải thích", "Phân tích", "Vận dụng kiến thức về")
+        if vietnamese
+        else ("Explain", "Analyze", "Apply knowledge of")
+    )
+    return [
+        f"{verbs[index]} {topic[:1].lower() + topic[1:]}."
+        for index, topic in enumerate(topics[:3])
+        if topic
+    ]

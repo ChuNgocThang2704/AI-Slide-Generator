@@ -58,13 +58,24 @@ def resolve_plan_image_limit(
 def detect_requested_slide_count(text: str) -> Optional[int]:
     if not text:
         return None
-    # Tìm kiếm các mẫu như: "15 slide", "12 trang", "10 pages", "12 slides"
-    # Keep the number and unit on one line. Using \s here would incorrectly
-    # combine e.g. "score: 86\nSlide 7" into a request for 86 slides.
-    matches = re.findall(r"\b(\d+)[ \t]*(?:slide|trang|page)s?\b", text.lower())
+    # Allow natural modifiers between count and unit, e.g.
+    # "10 English lecture slides" or "12 slide bài giảng".
+    # Horizontal whitespace is intentional: never join a number from a
+    # previous line with a later "Slide N" label.
+    matches = re.findall(
+        r"\b(\d{1,3})(?:[ \t]+[\wÀ-ỹ-]+){0,4}[ \t]+"
+        r"(?:slides?|trang|pages?)\b",
+        text.lower(),
+        flags=re.UNICODE,
+    )
+    matches += re.findall(
+        r"\b(?:slides?|trang|pages?)[ \t]*(?::|=)?[ \t]*(\d{1,3})\b",
+        text.lower(),
+        flags=re.UNICODE,
+    )
     if matches:
         try:
-            return int(matches[-1]) # Lấy giá trị khớp cuối cùng
+            return int(matches[-1])
         except ValueError:
             return None
     return None

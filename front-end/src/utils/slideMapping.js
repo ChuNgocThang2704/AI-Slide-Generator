@@ -1,3 +1,5 @@
+import { inferImageFit } from './imageFit';
+
 export function parseBullets(page) {
   if (Array.isArray(page?.bullets)) return page.bullets;
   if (typeof page?.bullets === 'string') {
@@ -13,16 +15,27 @@ export function parseBullets(page) {
 }
 
 export function backendLayoutToFrontend(page) {
+  const layout = String(page?.layout || '').toLowerCase();
+  const role = String(page?.pedagogicalRole || '').toLowerCase();
+  const title = String(page?.title || '').toLocaleLowerCase('vi');
+
+  // Boundary slides keep their dedicated composition even when they contain
+  // an optional visual or stale persisted editor metadata.
+  if (layout === 'title' || layout === 'intro') return 'title';
+  if (['thankyou', 'thank_you'].includes(layout)) return 'thankyou';
+  if (Number(page?.pageIndex) === 0 && !['table', 'chart'].includes(layout)) return 'title';
+  if (
+    role === 'summary'
+    && /(tổng kết|kết luận|hỏi đáp|cảm ơn|summary|conclusion|thank|q&a)/i.test(title)
+  ) return 'thankyou';
+
   if (page?.table) return 'table';
   if (page?.chart) return 'chart';
   if (page?.imageUrl) return 'imageText';
 
-  const layout = String(page?.layout || '').toLowerCase();
-  if (layout === 'title' || layout === 'intro') return 'title';
   if (['text_image', 'image_text', 'imagetext'].includes(layout)) return 'imageText';
   if (['twocolumn', 'two_column', 'split_columns'].includes(layout)) return 'twoColumn';
   if (['quote', 'big_quote'].includes(layout)) return 'quote';
-  if (['thankyou', 'thank_you'].includes(layout)) return 'thankyou';
   // Never render an empty visual frame when the structured payload is absent.
   if (layout === 'text_table') return page?.table ? 'table' : 'content';
   if (layout === 'text_chart') return page?.chart ? 'chart' : 'content';
@@ -66,7 +79,24 @@ function currentElements(page, bullets) {
   const titleElement = elements.find((element) => element?.type === 'text' && element?.role === 'title');
   const bodyElement = elements.find((element) => element?.type === 'text' && element?.role === 'body');
   const backendLayout = String(page?.layout || '').toLowerCase();
-  const isBoundarySlide = ['title', 'intro', 'thankyou', 'thank_you'].includes(backendLayout);
+  const frontendType = backendLayoutToFrontend(page);
+  const isBoundarySlide = frontendType === 'title' || frontendType === 'thankyou';
+  const isLegacyBoundaryTextCanvas = isBoundarySlide
+    && elements.length > 0
+    && elements.every((element) => (
+      element?.type === 'text'
+      && ['title', 'body'].includes(element?.role)
+    ))
+    && Number(titleElement?.style?.fontSize || 0) <= 40
+    && String(titleElement?.style?.textAlign || 'left') === 'left'
+    && (
+      !bodyElement
+      || (
+        Number(bodyElement?.style?.fontSize || 0) <= 22
+        && String(bodyElement?.style?.textAlign || 'left') === 'left'
+      )
+    );
+  if (isLegacyBoundaryTextCanvas) return [];
   const genericCanvasLayout = titleElement
     && titleElement.x === 64
     && [44, 48].includes(Number(titleElement.y))
@@ -131,12 +161,21 @@ function serializeBullets(slide) {
   return Array.isArray(slide.bullets) ? slide.bullets : [];
 }
 
-export function formatSlidePage(page) {
+export function formatSlidePage(page, presentationMode = 'presentation') {
   const bullets = parseBullets(page);
   const type = backendLayoutToFrontend(page);
   const joinedText = bullets.join('\n');
   const [leftColumn, rightColumn] = parseTwoColumns(bullets);
   const attribution = type === 'quote' ? String(bullets[1] || '').replace(/^—\s*/, '').split(/,\s*/, 2) : [];
+
+  const imageFit = page?.richText?._imageFit || inferImageFit(page);
+  const elements = currentElements(page, bullets).map((element) => {
+    if (element?.type !== 'image' || element.fitExplicit) return element;
+    return {
+      ...element,
+      objectFit: inferImageFit({ ...page, imageUrl: element.src || page?.imageUrl }),
+    };
+  });
 
   return {
     id: page.id,
@@ -158,13 +197,69 @@ export function formatSlidePage(page) {
     chart: page.chart || null,
     table: page.table || null,
     richText: page.richText || {},
-    elements: currentElements(page, bullets),
+    elements,
+    imageFit,
     notes: page.notes || '',
     primaryVisual: page.primaryVisual || '',
     likelyMultiPptxSlides: page.likelyMultiPptxSlides || false,
     pedagogicalRole: page.pedagogicalRole || '',
     sourcePages: Array.isArray(page.sourcePages) ? page.sourcePages : [],
+    presentationMode: String(page.presentationMode || presentationMode || 'presentation').toLowerCase(),
   };
+}
+
+function hasCustomBoundaryCanvas(slide) {
+  const elements = Array.isArray(slide?.elements) ? slide.elements : [];
+  const systemLabels = new Set([
+    'bài giảng',
+    'lecture',
+    'kết thúc bài giảng',
+    'end of lecture',
+  ]);
+  return elements.some((element) => (
+    element?.type !== 'text'
+    || !['title', 'body', 'custom'].includes(element?.role)
+    || (
+      element?.role === 'custom'
+      && !systemLabels.has(normalizeElementText(element?.content))
+    )
+  ));
+}
+
+export function formatSlideDeck(pages, presentationMode = 'presentation') {
+  const source = Array.isArray(pages) ? pages : [];
+  const slides = source.map((page) => formatSlidePage(page, presentationMode));
+  if (!slides.length) return slides;
+
+  const first = slides[0];
+  slides[0] = {
+    ...first,
+    type: 'title',
+    elements: hasCustomBoundaryCanvas(first) ? first.elements : [],
+  };
+
+  if (slides.length > 1) {
+    const lastIndex = slides.length - 1;
+    const rawLast = source[lastIndex] || {};
+    const last = slides[lastIndex];
+    const rawLayout = String(rawLast.layout || '').toLowerCase();
+    const rawRole = String(rawLast.pedagogicalRole || '').toLowerCase();
+    const closingTitle = String(rawLast.title || last.title || '').toLocaleLowerCase('vi');
+    const isClosing = ['thankyou', 'thank_you'].includes(rawLayout)
+      || (
+        rawRole === 'summary'
+        && /(tổng kết|kết luận|hỏi đáp|cảm ơn|summary|conclusion|thank|q&a)/i.test(closingTitle)
+      );
+    if (isClosing) {
+      slides[lastIndex] = {
+        ...last,
+        type: 'thankyou',
+        elements: hasCustomBoundaryCanvas(last) ? last.elements : [],
+      };
+    }
+  }
+
+  return slides;
 }
 
 export function toSlidePageUpdate(slide) {
@@ -175,6 +270,10 @@ export function toSlidePageUpdate(slide) {
   const semanticBullets = elementBody
     ? String(elementBody.content || '').replace(/<\/li>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').split('\n').map((item) => item.trim()).filter(Boolean)
     : serializeBullets(slide);
+  const richText = {
+    ...(slide.richText || {}),
+    ...(slide.imageFit ? { _imageFit: slide.imageFit } : {}),
+  };
   return {
     id: slide.id,
     title: semanticTitle,
@@ -184,7 +283,7 @@ export function toSlidePageUpdate(slide) {
     layout: frontendLayoutToBackend(slide),
     chart: slide.chart || null,
     table: slide.table || null,
-    richText: slide.richText || {},
+    richText,
     elements: Array.isArray(slide.elements) ? slide.elements : [],
     primaryVisual: slide.table ? 'table' : slide.chart ? 'chart' : slide.primaryVisual || '',
     likelyMultiPptxSlides: slide.likelyMultiPptxSlides || false,

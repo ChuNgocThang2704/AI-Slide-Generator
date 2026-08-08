@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from services.content.slide_pipeline import SlidePipelineMixin
-from services.images.pipeline import _score_slide_for_image_async
+from services.images.pipeline import _score_slide_for_image_async, _titles_share_visual_topic
 
 
 class RevisionPlannerExtractor(SlidePipelineMixin):
@@ -25,6 +25,16 @@ class RevisionPlannerExtractor(SlidePipelineMixin):
 
 
 class RevisionPlannerTest(unittest.IsolatedAsyncioTestCase):
+    def test_duplicate_visual_topic_is_detected_across_concept_and_example(self):
+        self.assertTrue(_titles_share_visual_topic(
+            {"title": "Sơ đồ Ngăn xếp (Stack Diagrams)"},
+            {"title": "Sơ đồ Ngăn xếp: Ví dụ cat_twice"},
+        ))
+        self.assertFalse(_titles_share_visual_topic(
+            {"title": "Định nghĩa Hàm"},
+            {"title": "Tham số và Đối số"},
+        ))
+
     def setUp(self):
         self.deck = {
             "title": "AI",

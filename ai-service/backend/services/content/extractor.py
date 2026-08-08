@@ -40,7 +40,14 @@ from services.content.input_processing import InputProcessingMixin
 from services.content.llm_client import LLMClientMixin
 from services.content.slide_normalizer import SlideNormalizerMixin
 from services.content.slide_pipeline import SlidePipelineMixin
-from services.lecture_quality import detect_lecture_mode, enrich_lecture_deck
+from services.lecture_quality import (
+    build_source_page_index,
+    detect_lecture_mode,
+    enrich_lecture_deck,
+    excerpt_from_source_pages,
+    has_explicit_structural_scope,
+    select_relevant_source_excerpt,
+)
 from services.content.image_extraction import ImageExtractionMixin
 
 
@@ -212,13 +219,18 @@ class ContentExtractor(
             print(
                 f"Using vLLM base URL: {self.vllm_base_url} | model: {model_name}"
             )
+        elif self.gemini_available:
+            print(
+                f"vLLM is not configured; using Gemini fallback | model: {self.gemini_model}"
+            )
         else:
             print(
-                "Warning: VLLM_API_BASE_URL không set — extract slide chỉ dùng heuristic/fallback."
+                "Warning: no LLM backend is configured; slide extraction will use heuristic fallback."
             )
         self._slide_lang_hint: str = "auto"
         self._lecture_mode: bool = False
         self._source_content: str = ""
+        self._focused_source_content: str = ""
         # Tiến độ extract (progress_cb): đếm mỗi lần vLLM trả JSON hợp lệ.
         self._extract_progress: Optional[Dict[str, Any]] = None
 
@@ -321,11 +333,121 @@ class ContentExtractor(
         return "auto"
 
     def _resolve_output_language_hint(self, source_text: str, user_instruction: str = "") -> str:
-        """Explicit output language always takes precedence over source language."""
+        """Resolve output language from explicit request, prompt language, then source."""
         requested = self._detect_requested_output_language(user_instruction)
         if requested in {"vi", "en"}:
             return requested
+        instruction_language = self._detect_output_language_hint(user_instruction)
+        if instruction_language in {"vi", "en"}:
+            return instruction_language
+        instruction_words = set(
+            re.findall(r"[a-z]+", self._fold_language_text(user_instruction))
+        )
+        vi_prompt_words = {
+            "bai", "bang", "chuong", "giang", "hay", "lam", "noi",
+            "slide", "tao", "tieng", "trinh", "trong", "tu", "viet",
+        }
+        en_prompt_words = {
+            "chapter", "create", "deck", "document", "english", "file",
+            "from", "generate", "lecture", "make", "presentation", "slides",
+        }
+        vi_hits = len(instruction_words & vi_prompt_words)
+        en_hits = len(instruction_words & en_prompt_words)
+        if vi_hits >= 2 and vi_hits > en_hits:
+            return "vi"
+        if en_hits >= 2 and en_hits > vi_hits:
+            return "en"
         return self._detect_output_language_hint(source_text)
+
+    async def _focus_document_scope(
+        self,
+        source_text: str,
+        user_instruction: str,
+        *,
+        max_chars: int = 30000,
+    ) -> str:
+        """Select document evidence using structure first and semantic AI when needed."""
+        source = str(source_text or "")
+        instruction = str(user_instruction or "").strip()
+        if not instruction:
+            return source[:max_chars] if len(source) > max_chars else source
+
+        if has_explicit_structural_scope(instruction):
+            return select_relevant_source_excerpt(
+                source,
+                instruction,
+                max_chars=max_chars,
+            )
+
+        if len(source) <= max_chars:
+            return source
+
+        page_index = build_source_page_index(source)
+        if page_index and (self.vllm_available or self.gemini_available):
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You select source pages for a presentation generator. "
+                        "Understand the request semantically even when the request and "
+                        "document use different languages. Select only pages that directly "
+                        "support the requested topic, plus pages needed for context. "
+                        "Do not select pages merely because they share generic words. "
+                        "Return JSON only: "
+                        '{"pages":[1,2],"confidence":0.0,"reason":"brief reason"}.'
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"USER REQUEST:\n{instruction}\n\n"
+                        f"DOCUMENT PAGE INDEX:\n{page_index}\n\n"
+                        "Choose the relevant page numbers."
+                    ),
+                },
+            ]
+            try:
+                response = await self._llm_completion_plain_text(
+                    messages,
+                    max_tokens=500,
+                    temperature=0.0,
+                    json_mode=True,
+                )
+                decision = self._parse_json_response(response) or {}
+                raw_pages = decision.get("pages") or []
+                confidence = float(decision.get("confidence") or 0.0)
+                selected_pages = sorted(
+                    {
+                        int(page)
+                        for page in raw_pages
+                        if str(page).strip().isdigit()
+                    }
+                )
+                if selected_pages and confidence >= 0.55:
+                    focused = excerpt_from_source_pages(
+                        source,
+                        selected_pages,
+                        max_chars=max_chars,
+                        include_neighbors=False,
+                    )
+                    if focused:
+                        print(
+                            "[pipeline] AI semantic scope selected "
+                            f"pages={selected_pages} confidence={confidence:.2f}"
+                        )
+                        return focused
+                print(
+                    "[pipeline] AI semantic scope was uncertain; "
+                    "using lexical fallback"
+                )
+            except Exception as exc:
+                print(f"[pipeline] AI semantic scope failed: {exc}")
+
+        return select_relevant_source_excerpt(
+            source,
+            instruction,
+            max_chars=max_chars,
+        )
 
     @staticmethod
     def _fold_language_text(text: str) -> str:
@@ -484,6 +606,7 @@ class ContentExtractor(
         self._user_instruction = user_instruction or ""
         self._doc_title_hint = doc_title_hint or ""
         self._source_content = raw_content or ""
+        self._focused_source_content = self._source_content
         self._lecture_mode = detect_lecture_mode(self._source_content, self._user_instruction)
         if self._lecture_mode:
             print("[pipeline] lecture mode enabled")
@@ -511,9 +634,7 @@ class ContentExtractor(
         if self._is_document_mode:
             print("[pipeline] document mode: expand will be skipped to preserve technical detail")
             if self._user_instruction:
-                from services.lecture_quality import select_relevant_source_excerpt
-
-                focused_content = select_relevant_source_excerpt(
+                focused_content = await self._focus_document_scope(
                     raw_content,
                     self._user_instruction,
                     max_chars=30000,
@@ -524,6 +645,7 @@ class ContentExtractor(
                         f"{len(raw_content)} -> {len(focused_content)} chars"
                     )
                     raw_content = focused_content
+                    self._focused_source_content = focused_content
 
         if (self.vllm_available or self.gemini_available) and not self._is_document_mode:
             print(f"Detected prompt/outline input. Pre-generating detailed content for {target_slides} slides...")
@@ -545,8 +667,10 @@ class ContentExtractor(
         )
         if self._slide_lang_hint in ("vi", "en"):
             print(f"Slide language hint: {self._slide_lang_hint} (match source)")
-        # Nếu không có vLLM, dùng fallback ngay
-        if not self.vllm_available:
+        # Use deterministic fallback only when no AI provider is available.
+        # Gemini-only deployments still run the complete generation pipeline;
+        # _llm_completion_plain_text() routes every pass to Gemini.
+        if not self.vllm_available and not self.gemini_available:
             structured = self._normalize_structured_content(self._fallback_structure(raw_content))
             if force_exact_slide_count and target_slides_override:
                 structured = await self._force_slide_count_exact(structured, target_slides_override)

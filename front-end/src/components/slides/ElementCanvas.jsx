@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw, ZoomIn, ZoomOut } from 'lucide-react';
 import { createElementsFromSlide, createTextElement } from '../../utils/slideElements';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import EditableSlide, { THEMES } from './EditableSlide';
@@ -8,6 +8,8 @@ import { ChartVisual, TableVisual } from './StructuredVisual';
 import { documentService } from '../../services/documentService';
 import AssetImage from './AssetImage';
 import { BgDecorations } from './SlideRenderer';
+import { fitTextToBox } from '../../utils/textFit';
+import { inferImageFit } from '../../utils/imageFit';
 import './ElementCanvas.css';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -32,6 +34,28 @@ const cloneElement = (element) => ({
   y: clamp((element.y || 0) + 20, 0, 510),
   style: element.style ? { ...element.style } : undefined,
 });
+
+const adaptiveCanvasFontSize = (element) => {
+  const savedSize = Number(element?.style?.fontSize);
+  const content = String(element?.content || '');
+  if (/font-size\s*:/i.test(content)) return savedSize || (element?.role === 'title' ? 34 : 16);
+
+  const isTitle = element?.role === 'title';
+  const itemCount = Math.max(
+    1,
+    (content.match(/<li\b/gi) || []).length
+      || content.split(/<br\s*\/?>|\n/gi).filter(Boolean).length,
+  );
+  return fitTextToBox(content, {
+    width: Number(element?.width) || (isTitle ? 832 : 430),
+    height: Number(element?.height) || (isTitle ? 66 : 344),
+    min: isTitle ? 20 : 10,
+    max: isTitle ? 38 : 24,
+    lineHeight: Number(element?.style?.lineHeight) || (isTitle ? 1.2 : 1.5),
+    itemCount,
+    padding: isTitle ? 0 : 10,
+  });
+};
 
 export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNotify, readonly = false, preserveTemplate = false }) {
   const imageInputRef = useRef(null);
@@ -170,6 +194,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       const dy = (pointerEvent.clientY - start.y) / (element.height * scale) * 100;
       updateElement(element.id, {
         objectFit: 'cover',
+        fitExplicit: true,
         objectPositionX: clamp(start.positionX - dx, 0, 100),
         objectPositionY: clamp(start.positionY - dy, 0, 100),
       });
@@ -199,7 +224,10 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       const src = uploaded?.viewUrl || uploaded?.url;
       if (!src) throw new Error('Máy chủ không trả về URL ảnh');
       if (selectedElement?.type === 'image' && !selectedElement.locked) {
-        updateElement(selectedElement.id, { src, storageUrl: uploaded.url, assetId: uploaded.id });
+        updateElement(selectedElement.id, {
+          src, storageUrl: uploaded.url, assetId: uploaded.id,
+          imageScale: 1, objectPositionX: 50, objectPositionY: 50,
+        });
         onNotify?.('Đã thay ảnh', 'success');
       } else {
         const image = {
@@ -212,6 +240,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
           height: 300,
           rotation: 0,
           objectFit: 'cover',
+          imageScale: 1,
           src,
           storageUrl: uploaded.url,
           assetId: uploaded.id,
@@ -429,7 +458,10 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
         </button>
         <button
           type="button"
-          onClick={() => updateElement(selectedElement.id, { objectFit: selectedElement.objectFit === 'contain' ? 'cover' : 'contain' })}
+          onClick={() => updateElement(selectedElement.id, {
+            objectFit: selectedElement.objectFit === 'contain' ? 'cover' : 'contain',
+            fitExplicit: true,
+          })}
           disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
           title="Chuyển giữa vừa khung và phủ khung"
         >
@@ -443,6 +475,26 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
           title={croppingId === selectedElement?.id ? 'Hoàn tất crop' : 'Crop ảnh'}
         >
           <Crop size={15}/>
+        </button>
+        <button
+          type="button"
+          onClick={() => updateElement(selectedElement.id, {
+            imageScale: clamp(Number(selectedElement.imageScale || 1) - 0.1, 0.5, 4),
+          })}
+          disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
+          title="Thu nhỏ ảnh bên trong khung"
+        >
+          <ZoomOut size={15}/>
+        </button>
+        <button
+          type="button"
+          onClick={() => updateElement(selectedElement.id, {
+            imageScale: clamp(Number(selectedElement.imageScale || 1) + 0.1, 0.5, 4),
+          })}
+          disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
+          title="Phóng to ảnh bên trong khung"
+        >
+          <ZoomIn size={15}/>
         </button>
         <button type="button" onClick={copySelected} disabled={!selectedId} title="Sao chép (Ctrl+C)"><Copy size={15}/></button>
         <button type="button" onClick={pasteElement} disabled={!hasClipboard} title="Dán (Ctrl+V)"><ClipboardPaste size={15}/></button>
@@ -461,7 +513,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       {elements.map((element, index) => (
         <div
           key={element.id}
-          className={`canvas-element role-${element.role || 'custom'} ${selectedId === element.id ? 'selected' : ''} ${editingId === element.id ? 'editing' : ''} ${element.locked ? 'locked' : ''} ${croppingId === element.id ? 'cropping' : ''}`}
+          className={`canvas-element role-${element.role || 'custom'} ${element.type === 'image' && (element.objectFit || inferImageFit(element.src)) === 'contain' ? 'fit-contain' : ''} ${selectedId === element.id ? 'selected' : ''} ${editingId === element.id ? 'editing' : ''} ${element.locked ? 'locked' : ''} ${croppingId === element.id ? 'cropping' : ''}`}
           style={{
             left: element.x,
             top: element.y,
@@ -505,18 +557,22 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
             </button>
           )}
           {element.type === 'image' ? (
-            <AssetImage
-              src={resolveAssetUrl(element.src)}
-              storageUrl={element.storageUrl}
-              assetId={element.assetId}
-              alt=""
-              draggable={false}
-              onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
-              style={{
-                objectFit: element.objectFit || 'cover',
-                objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
-              }}
-            />
+            <div className="canvas-image-viewport">
+              <AssetImage
+                src={resolveAssetUrl(element.src)}
+                storageUrl={element.storageUrl}
+                assetId={element.assetId}
+                alt=""
+                draggable={false}
+                onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
+                style={{
+                  objectFit: element.objectFit || inferImageFit(element.src),
+                  objectPosition: `${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`,
+                  transform: `scale(${element.imageScale || 1})`,
+                  transformOrigin: 'center',
+                }}
+              />
+            </div>
           ) : element.type === 'table' ? (
             <TableVisual
               table={element.data || slide.table}
@@ -548,7 +604,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
               className="canvas-text"
               value={element.content}
               autoFit
-              autoFitBaseFontSize={Number(element.style?.fontSize) || (element.role === 'title' ? 34 : 16)}
+              autoFitBaseFontSize={adaptiveCanvasFontSize(element)}
               minFontSize={element.role === 'title' ? 12 : 8}
               selected={!readonly && selectedId === element.id && !element.locked}
               editable={!readonly && editingId === element.id}

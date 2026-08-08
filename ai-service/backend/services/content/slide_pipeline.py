@@ -1247,27 +1247,138 @@ class SlidePipelineMixin:
 
         lang = str(getattr(self, "_slide_lang_hint", "") or "").lower()
         vietnamese = lang == "vi"
-        deck_title = str(structured.get("title") or "").strip() or (
-            "Bài trình chiếu" if vietnamese else "Presentation"
+        lecture_mode = bool(
+            getattr(self, "_lecture_mode", False)
+            or str(structured.get("presentation_mode") or "").strip().lower() == "lecture"
         )
+        deck_title = str(structured.get("title") or "").strip()
+        generic_titles = {
+            "bai thuyet trinh",
+            "bai trinh chieu",
+            "presentation",
+            "slide presentation",
+            "lecture presentation",
+        }
+        if self._fold_language_text(deck_title) in generic_titles:
+            structural_markers = (
+                "muc tieu",
+                "learning objective",
+                "tong ket",
+                "ket luan",
+                "summary",
+                "conclusion",
+                "bai tap",
+                "thuc hanh",
+                "practice",
+                "exercise",
+                "activity",
+                "quiz",
+            )
+            intro_prefix = re.compile(
+                r"^\s*(?:giới\s+thiệu|gioi\s+thieu|tổng\s+quan|tong\s+quan|"
+                r"introduction|overview)\s*(?:về|ve|to|of)?\s*[:\-–—]?\s*",
+                re.IGNORECASE,
+            )
+            for candidate_slide in slides:
+                if not isinstance(candidate_slide, dict):
+                    continue
+                candidate = str(candidate_slide.get("title") or "").strip()
+                folded_candidate = self._fold_language_text(candidate)
+                if (
+                    not candidate
+                    or folded_candidate in generic_titles
+                    or any(marker in folded_candidate for marker in structural_markers)
+                ):
+                    continue
+                candidate = intro_prefix.sub("", candidate).strip(" :-–—")
+                if len(candidate.split()) >= 3:
+                    deck_title = candidate
+                    break
+        if not deck_title or self._fold_language_text(deck_title) in generic_titles:
+            deck_title = "Bài trình chiếu" if vietnamese else "Presentation"
+        structured["title"] = deck_title
+
+        if vietnamese:
+            cover_fallback = (
+                f"Khám phá {deck_title} qua các khái niệm, ví dụ và nội dung trọng tâm."
+                if lecture_mode
+                else f"Tổng quan về {deck_title} và những điểm đáng chú ý."
+            )
+        else:
+            cover_fallback = (
+                f"Explore the key concepts, examples, and practical ideas in {deck_title}."
+                if lecture_mode
+                else f"An overview of {deck_title} and the ideas that matter most."
+            )
+        if vietnamese:
+            cover_notes = (
+                f"Xin chào mọi người. Trong phần này, chúng ta sẽ cùng tìm hiểu {deck_title}. "
+                + (
+                    "Bài học sẽ đi từ những khái niệm nền tảng đến các ví dụ và cách vận dụng, "
+                    "giúp người học nhận ra mối liên hệ giữa kiến thức và thực hành. "
+                    "Trước khi bắt đầu, hãy thử liên hệ chủ đề này với những điều bạn đã biết; "
+                    "sau đó chúng ta sẽ thống nhất các mục tiêu cần đạt."
+                    if lecture_mode
+                    else
+                    "Phần trình bày tập trung vào bối cảnh, các luận điểm chính và ý nghĩa thực tiễn của chủ đề. "
+                    "Trong quá trình theo dõi, hãy chú ý cách các ý liên kết với nhau và đâu là thông tin quan trọng nhất. "
+                    "Trước hết, chúng ta bắt đầu từ bức tranh tổng quan."
+                )
+            )
+        else:
+            cover_notes = (
+                f"Welcome. In this session, we will explore {deck_title}. "
+                + (
+                    "We will move from the foundational concepts to examples and practical application, "
+                    "so that the relationship between knowledge and practice remains clear. "
+                    "Before we begin, connect this topic with what you already know; "
+                    "then we will establish the learning objectives for the session."
+                    if lecture_mode
+                    else
+                    "The presentation focuses on the context, the central arguments, and the practical meaning of the topic. "
+                    "As we move through it, notice how the ideas connect and which points carry the most significance. "
+                    "Let us begin with the broader picture."
+                )
+            )
         cover = {
             "title": deck_title,
-            "bullets": [
-                "Bài giảng tổng quan và các nội dung trọng tâm."
-                if vietnamese
-                else "Lecture overview and key concepts."
-            ],
-            "notes": "",
+            "bullets": [cover_fallback],
+            "notes": cover_notes,
             "layout": "intro",
             "pedagogical_role": "concept",
             "source_pages": [],
         }
 
-        first_layout = str((slides[0] or {}).get("layout") or "").strip().lower() if isinstance(slides[0], dict) else ""
-        if first_layout not in {"intro", "title"}:
+        intro_index = next(
+            (
+                idx
+                for idx, slide in enumerate(slides)
+                if isinstance(slide, dict)
+                and str(slide.get("layout") or "").strip().lower() in {"intro", "title"}
+            ),
+            None,
+        )
+        if intro_index is None:
             slides.insert(0, cover)
-        elif isinstance(slides[0], dict):
-            slides[0]["title"] = deck_title
+        else:
+            intro_slide = slides.pop(intro_index)
+            intro_slide["title"] = deck_title
+            intro_slide["layout"] = "intro"
+            intro_bullets = [
+                str(item).strip()
+                for item in (intro_slide.get("bullets") or [])
+                if str(item).strip()
+            ]
+            folded_intro = self._fold_language_text(" ".join(intro_bullets))
+            wrong_mode_copy = not lecture_mode and any(
+                marker in folded_intro
+                for marker in ("bai giang", "lecture overview", "lecture introduction")
+            )
+            if not intro_bullets or wrong_mode_copy:
+                intro_slide["bullets"] = [cover_fallback]
+            if not str(intro_slide.get("notes") or "").strip():
+                intro_slide["notes"] = cover_notes
+            slides.insert(0, intro_slide)
 
         # Section generation can occasionally exceed its allocation. Keep both
         # deck boundaries and remove overflow from the end of the content run.
@@ -1291,15 +1402,78 @@ class SlidePipelineMixin:
             for item in (closing.get("bullets") or [])
             if str(item).strip()
         ]
-        if is_existing_closing:
+        content_slides = [
+            slide
+            for slide in slides[1:-1]
+            if isinstance(slide, dict)
+            and str(slide.get("pedagogical_role") or "").strip().lower()
+            not in {"learning_objectives", "practice", "knowledge_check", "summary"}
+        ]
+
+        def semantic_tokens(value: Any) -> set[str]:
+            folded = self._fold_language_text(str(value or ""))
+            ignored = {
+                "and", "the", "for", "with", "from", "this", "that",
+                "va", "voi", "cho", "cua", "cac", "nhung", "trong", "mot",
+                "summary", "conclusion", "tong", "ket", "hoi", "dap",
+                "program", "programs", "result", "results", "value", "values",
+                "content", "contents", "information", "key", "idea", "ideas",
+            }
+            return {
+                token
+                for token in re.sub(r"[^a-z0-9]+", " ", folded).split()
+                if len(token) >= 3 and token not in ignored
+            }
+
+        body_tokens: set[str] = set()
+        for slide in content_slides:
+            body_tokens.update(semantic_tokens(slide.get("title")))
+            body_tokens.update(semantic_tokens(" ".join(str(x) for x in (slide.get("bullets") or []))))
+        closing_tokens = semantic_tokens(" ".join(existing_bullets))
+        closing_overlap = closing_tokens & body_tokens
+        body_title_token_sets = [
+            semantic_tokens(slide.get("title"))
+            for slide in content_slides
+            if semantic_tokens(slide.get("title"))
+        ]
+        aligned_closing_bullets = sum(
+            1
+            for bullet in existing_bullets
+            if any(
+                semantic_tokens(bullet) & title_tokens
+                for title_tokens in body_title_token_sets
+            )
+        )
+        closing_is_aligned = bool(
+            existing_bullets
+            and (
+                len(closing_overlap) >= 3
+                and len(closing_overlap) / max(1, len(closing_tokens)) >= 0.35
+                and aligned_closing_bullets >= min(2, len(existing_bullets))
+            )
+        )
+
+        if is_existing_closing and closing_is_aligned:
             closing_bullets = existing_bullets[:4]
         else:
-            objectives = [
-                str(item).strip()
-                for item in (structured.get("learning_objectives") or [])
-                if str(item).strip()
-            ]
-            closing_bullets = objectives[:2]
+            closing_bullets = []
+            for slide in content_slides:
+                bullets = [
+                    str(item).strip()
+                    for item in (slide.get("bullets") or [])
+                    if str(item).strip()
+                ]
+                if bullets:
+                    closing_bullets.append(bullets[0])
+                if len(closing_bullets) >= 3:
+                    break
+            if not closing_bullets:
+                objectives = [
+                    str(item).strip()
+                    for item in (structured.get("learning_objectives") or [])
+                    if str(item).strip()
+                ]
+                closing_bullets = objectives[:3]
         if not closing_bullets:
             closing_bullets = (
                 [
@@ -1312,17 +1486,55 @@ class SlidePipelineMixin:
                     "Thank you. Questions are welcome.",
                 ]
             )
-        closing["title"] = "Tổng kết và Hỏi đáp" if vietnamese else "Summary and Q&A"
+        existing_closing_title = str(closing.get("title") or "").strip()
+        folded_closing_title = self._fold_language_text(existing_closing_title)
+        closing_title_is_wrong_mode = not lecture_mode and any(
+            marker in folded_closing_title
+            for marker in ("ket thuc bai giang", "end of lecture", "lecture summary")
+        )
+        nearby_body_has_conclusion = any(
+            any(
+                marker in self._fold_language_text(str(slide.get("title") or ""))
+                for marker in ("ket luan", "conclusion", "closing thoughts")
+            )
+            for slide in slides[max(1, len(slides) - 3):-1]
+            if isinstance(slide, dict)
+        )
+        if not is_existing_closing or not existing_closing_title or closing_title_is_wrong_mode:
+            if vietnamese:
+                existing_closing_title = (
+                    "Tổng kết và Hỏi đáp"
+                    if lecture_mode
+                    else f"Kết luận: {deck_title}"
+                )
+            else:
+                existing_closing_title = (
+                    "Summary and Q&A"
+                    if lecture_mode
+                    else f"Closing thoughts: {deck_title}"
+                )
+        if nearby_body_has_conclusion and not lecture_mode:
+            existing_closing_title = "Cảm ơn và Hỏi đáp" if vietnamese else "Thank You and Q&A"
+            closing_bullets = (
+                ["Cảm ơn mọi người đã theo dõi. Mời đặt câu hỏi và trao đổi."]
+                if vietnamese
+                else ["Thank you for your attention. Questions and discussion are welcome."]
+            )
+        closing["title"] = existing_closing_title
         closing["layout"] = "thankyou"
         closing["pedagogical_role"] = "summary"
         closing["bullets"] = closing_bullets
         closing["notes"] = (
             f"Khép lại bài trình bày bằng cách nhắc lại các ý chính về {deck_title}. "
-            "Mời người học nêu câu hỏi, chia sẻ điểm còn chưa rõ và liên hệ nội dung với phần thực hành."
+            "Nhấn mạnh mối liên hệ giữa các luận điểm vừa được phân tích và giá trị thực tiễn mà người nghe có thể ghi nhớ. "
+            "Không cần đọc lại từng gạch đầu dòng; hãy cô đọng thông điệp quan trọng nhất bằng lời của người trình bày. "
+            "Cuối cùng, mời người nghe nêu câu hỏi, chia sẻ điểm còn chưa rõ và liên hệ nội dung với kinh nghiệm hoặc phần thực hành tiếp theo."
             if vietnamese
             else (
                 f"Close the presentation by revisiting the key ideas about {deck_title}. "
-                "Invite questions, clarify remaining uncertainties, and connect the lesson to practice."
+                "Emphasize how the main arguments connect and what practical value the audience should retain. "
+                "Rather than reading each bullet again, restate the central message naturally in your own words. "
+                "Finally, invite questions, clarify any remaining uncertainty, and connect the discussion to experience or the next practical activity."
             )
         )
         slides[-1] = closing

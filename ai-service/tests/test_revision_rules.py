@@ -6,10 +6,12 @@ from services.revision_rules import (
     fallback_table_from_revision_prompt,
     parse_revision_target_indices,
     revision_prompt_add_slide_count,
+    revision_added_slide_indices,
     revision_prompt_delete_slide_indices,
     revision_prompt_mentions_image,
     revision_prompt_preserve_slide_indices,
 )
+from services.slide_charts import _explicit_chart_requests
 
 
 class RevisionRulesTest(unittest.TestCase):
@@ -26,10 +28,27 @@ class RevisionRulesTest(unittest.TestCase):
         self.assertEqual(explicit_visual_targets_from_prompt(prompt, 5), {1: "chart", 3: "table"})
         self.assertEqual(explicit_chart_type_targets_from_prompt(prompt, 5), {1: "line"})
 
+    def test_extracts_year_range_and_separate_chart_values(self):
+        specs = _explicit_chart_requests(
+            "Chuyen slide 5 thanh bieu do cot giai doan 2021-2025 "
+            "voi cac gia tri 13, 16, 20, 25 va 31 ty USD.",
+            9,
+        )
+        self.assertEqual(specs[4]["labels"], ["2021", "2022", "2023", "2024", "2025"])
+        self.assertEqual(specs[4]["values"], [13.0, 16.0, 20.0, 25.0, 31.0])
+
     def test_understands_deck_structure_operations(self):
         self.assertEqual(revision_prompt_add_slide_count("Them 2 slide moi"), 2)
+        self.assertEqual(revision_prompt_add_slide_count("Thêm một slide trước phần kết luận"), 1)
+        self.assertEqual(revision_prompt_add_slide_count("Add one slide before the conclusion"), 1)
+        self.assertEqual(revision_prompt_add_slide_count("Bổ sung ba trang về rủi ro"), 3)
         self.assertEqual(revision_prompt_delete_slide_indices("Xoa slide 3", 5), [2])
         self.assertEqual(revision_prompt_preserve_slide_indices("Giu slide 1 nhu cu", 5), [0])
+        self.assertEqual(
+            revision_added_slide_indices("Thêm một slide trước slide kết luận", 9, 10, 1),
+            [8],
+        )
+        self.assertEqual(revision_added_slide_indices("Add two slides after slide 3", 5, 7, 2), [3, 4])
 
     def test_builds_contract_safe_table_fallback(self):
         table = fallback_table_from_revision_prompt(
