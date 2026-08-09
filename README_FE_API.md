@@ -1,33 +1,23 @@
-# FE Integration README
+# Hướng dẫn nhanh tích hợp FE
 
-Use this file as the quick handoff note for FE.
+Contract đầy đủ:
 
-Detailed API contract:
-
-- [fe_api_spec.md](./fe_api_spec.md)
-- [back-end/document-service/document_api_spec.md](./back-end/document-service/document_api_spec.md)
-
-`fe_api_spec.md` is the source of truth for FE request/response fields. This
-README is only the quick-start checklist.
+- [fe_api_spec.md](./fe_api_spec.md) là nguồn chuẩn cho FE.
+- [back-end/document-service/document_api_spec.md](./back-end/document-service/document_api_spec.md) mô tả chi tiết Document Service.
 
 ## Base URL
 
-Local gateway:
+Gateway local:
 
 ```txt
 http://localhost:8080
 ```
 
-FE calls the Java BE through API Gateway only. FE should not call the Python AI Service directly.
+FE chỉ gọi Java BE qua API Gateway, không gọi Python AI Service trực tiếp. Khi FE và Gateway dùng cùng hostname, để trống `VITE_API_BASE_URL` và đặt `VITE_GATEWAY_PORT=8080`; cách này dùng được cho cả localhost và IP deploy.
 
-Leave `VITE_API_BASE_URL` blank and set `VITE_GATEWAY_PORT=8080` when FE and
-Gateway use the same hostname. This works for both localhost and an IP-based
-deployment and avoids OAuth/API requests being redirected to the developer's
-localhost.
+## Luồng chính
 
-## Main Flow
-
-Create slides:
+Tạo slide:
 
 ```txt
 POST /api/document/projects
@@ -35,7 +25,14 @@ GET  /api/document/projects/{projectId}/progress
 GET  /api/document/projects/{projectId}/pages
 ```
 
-Revise slides:
+Dùng lại tài liệu đã upload:
+
+```txt
+GET  /api/document/source-documents
+POST /api/document/projects với sourceDocId/file metadata và prompt có ý nghĩa
+```
+
+Sửa slide:
 
 ```txt
 POST /api/document/projects/{projectId}/revise
@@ -43,60 +40,35 @@ GET  /api/document/projects/{projectId}/progress
 GET  /api/document/projects/{projectId}/pages
 ```
 
-Reuse an uploaded document:
+## Quy tắc revise
 
-```txt
-GET  /api/document/source-documents
-POST /api/document/projects with sourceDocId/file metadata and a meaningful prompt
-```
+- Gửi `revisionScope="auto"` cho ô prompt tự nhiên.
+- `contextSlideNumber` là slide đang mở (1-based), chỉ đóng vai trò context và không khóa target.
+- AI có thể chọn slide khác, nhiều slide hoặc toàn bộ deck theo `revisionPrompt`.
+- Chỉ dùng `slideNumber`/`slideIndex` cho control chương trình cần khóa cứng target.
+- Sau khi hoàn thành, tải lại toàn bộ `/pages` và thay state local; không merge delta.
+- Nếu revise thất bại, BE khôi phục task của deck thành công trước đó để người dùng sửa tiếp.
 
-AI revise is limited per user per day by subscription: Free `2`, Pro `10`,
-Ultra `30`. When the quota is exhausted, BE returns the existing
-`QUOTA_EXCEEDED` error and does not start an AI task. A failed AI revise is
-automatically refunded. FE can read `MAX_REVISIONS_PER_DAY` from the existing
-subscription quotas endpoint; it must not send or choose the account plan.
+Quota revise mỗi ngày: Free `2`, Pro `10`, Ultra `30`. BE xác định plan từ tài khoản, task thất bại được hoàn quota; FE không tự gửi plan.
 
-For the natural-language editor, send `revisionScope="auto"` and the 1-based
-`contextSlideNumber` of the slide currently open. The selected slide is only
-context: the AI planner may choose another slide, several slides, or the whole
-deck from `revisionPrompt`. Reserve `slideNumber` for a forced programmatic
-target outside the conversational edit flow.
+## Trách nhiệm của FE
 
-## FE Responsibilities
+- Gửi prompt và metadata file cho BE.
+- Với file, yêu cầu người dùng nhập prompt nêu mục đích và phạm vi; không tự tạo câu chung chung như `Tạo slide từ file`.
+- Poll đến khi project hoàn thành rồi tải pages.
+- Render trực tiếp các trường `title`, `bullets`, `notes`, `table`, `chart`, `imageUrl`, `layout`.
+- Autosave chỉnh sửa thủ công qua pages/sync.
+- Refresh access token trước khi coi một phản hồi 401 là lỗi đăng nhập vĩnh viễn.
+- FE sở hữu editor và export PDF/PPTX.
 
-- Send the user's prompt/file data to BE.
-- When a file is selected, require a meaningful prompt that states the purpose and scope. Do not synthesize a fallback such as `Tao slide tu file`; BE returns HTTP 400 for unclear generation instructions.
-- Poll project progress until completed.
-- Render slides from `/pages`.
-- After revise completes, reload `/pages` and replace local slide state.
-- Export PPTX on FE side if the FE export module owns rendering/export.
-- Refresh an expired access token through the existing auth refresh flow before
-  treating a protected request as a permanent 401.
+## FE không nên làm
 
-## FE Should Not Do
+- Không gọi AI Service trực tiếp.
+- Không gửi `generate_images`; AI Service bật ảnh mặc định.
+- Không suy luận bảng/biểu đồ từ bullet; dùng structured fields.
+- Không tự chọn plan thay người dùng đã xác thực.
 
-- Do not call AI Service directly.
-- Do not send `generate_images`; AI Service enables image generation by default.
-- Do not force table/chart/image mode from UI unless product requires it later.
-- Do not infer table/chart from bullet text. Use structured fields only.
-
-## Slide Render Fields
-
-Each page can contain:
-
-```txt
-title
-bullets
-notes
-table
-chart
-imageUrl
-layout
-primaryVisual
-likelyMultiPptxSlides
-```
-
-Render priority:
+## Thứ tự render visual
 
 ```txt
 table != null       -> render table
@@ -105,51 +77,13 @@ else imageUrl set   -> render image
 else                -> render text only
 ```
 
-## AI Revise Examples
+## Hành vi đã kiểm thử
 
-FE can send a single text box value as `revisionPrompt`.
-
-```txt
-Sua rieng slide 1: doi tieu de thanh "Tong quan he thong bai do xe thong minh". Giu nguyen cac slide con lai.
-```
-
-```txt
-Sua rieng slide 2 thanh bang so sanh gom cot Tieu chi, Thu cong, Thong minh, Nhan xet.
-```
-
-```txt
-Sua rieng slide 3: giu bieu do duong va cap nhat so lieu Q1 50%, Q2 62%, Q3 76%, Q4 88%.
-```
-
-```txt
-Sua rieng slide 4: doi anh thanh bai do xe dai hoc co camera ANPR, cam bien IoT va bang dien tu.
-```
-
-```txt
-Them 1 slide cuoi ve loi ich khi trien khai he thong bai do xe thong minh.
-```
-
-```txt
-Xoa slide 3 vi noi dung chua can thiet, giu cac slide con lai.
-```
-
-## Current Tested Behavior
-
-- Generate deck from prompt.
-- Auto-detect table/chart/image slides.
-- Auto-enable image generation.
-- Revise image/table/chart/text.
-- Preserve non-target slides during single-slide revise.
-- Add slide.
-- Delete slide.
-- Apply small literal title edit.
-- Preserve text and visual fields outside the requested scope.
-- Revise multiple slides named in the prompt.
-- Revise a full deck while preserving requested chart data.
-- Return complete non-empty table/chart specs after revise.
-- Restore the last successful AI task when a revision fails, so another revision
-  can still be submitted.
-- Reject unsupported chart data and remove text that promises a chart which is
-  not present in the final JSON.
-- Prevent unsupported statistics, percentages and named study results from being
-  introduced during generic content expansion.
+- Sinh deck từ prompt hoặc tài liệu.
+- Tự nhận diện text, table, chart và image.
+- Sửa title, nội dung, bảng, biểu đồ và ảnh.
+- Giữ nguyên slide ngoài phạm vi.
+- Thêm, xóa, sắp xếp và sửa toàn deck.
+- Hoàn trả bảng/chart đầy đủ sau revise.
+- Loại chart không có dữ liệu hợp lệ và xóa câu hứa hẹn visual không tồn tại.
+- Không cho quá trình mở rộng nội dung tự bịa thống kê hoặc kết quả nghiên cứu.

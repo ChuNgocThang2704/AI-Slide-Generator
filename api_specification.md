@@ -1,18 +1,16 @@
-# LecGen API Documentation Index
+# Mục lục tài liệu API LecGen
 
-Tep nay truoc day mo ta API AI cu, bao gom endpoint sinh PPTX truc tiep va IP deploy co dinh. Luong do khong con la contract cua he thong hien tai.
+File này trước đây mô tả API AI cũ, gồm endpoint sinh PPTX trực tiếp và IP triển khai cố định. Luồng đó không còn là contract của hệ thống hiện tại.
 
-## Tai lieu dung hien nay
+## Frontend -> Java Backend
 
-### Frontend -> Java Backend
+Tài liệu chính:
 
-Doc chinh:
+- [README_FE_API.md](README_FE_API.md): checklist tích hợp nhanh.
+- [fe_api_spec.md](fe_api_spec.md): request/response contract đầy đủ.
+- [back-end/document-service/document_api_spec.md](back-end/document-service/document_api_spec.md): chi tiết Document Service.
 
-- [README_FE_API.md](README_FE_API.md): checklist tich hop nhanh.
-- [fe_api_spec.md](fe_api_spec.md): request/response contract day du.
-- [back-end/document-service/document_api_spec.md](back-end/document-service/document_api_spec.md): chi tiet Document Service.
-
-FE chi goi API Gateway:
+FE chỉ gọi API Gateway:
 
 ```txt
 POST /api/document/projects
@@ -22,14 +20,14 @@ POST /api/document/projects/{projectId}/revise
 POST /api/document/projects/{projectId}/pages/sync
 ```
 
-### Java Backend -> AI Service
+## Java Backend -> AI Service
 
-Doc chinh:
+Tài liệu chính:
 
 - [ai-service/api_specification.md](ai-service/api_specification.md)
 - [ai-service/README.md](ai-service/README.md)
 
-Endpoint noi bo:
+Endpoint nội bộ:
 
 ```txt
 POST /api/generate-slide-spec
@@ -38,15 +36,15 @@ GET  /api/status/{task_id}
 POST /api/cancel/{task_id}
 ```
 
-AI Service tra deck JSON. FE render/editor va xuat PDF/PPTX; AI Service khong con la noi FE yeu cau sinh file PPTX hoan chinh.
+AI Service trả deck JSON. FE chịu trách nhiệm render/editor và xuất PDF/PPTX; FE không yêu cầu AI Service sinh file PPTX hoàn chỉnh.
 
-## Nguyen tac revise
+## Nguyên tắc revise
 
-- FE gui `revisionScope="auto"` va prompt tu nhien.
-- `contextSlideNumber` chi la context; AI co the sua slide khac neu prompt noi ro.
-- Sau khi completed, FE tai lai toan bo `/pages`.
-- BE giu task thanh cong cu neu revision moi that bai.
+- FE gửi `revisionScope="auto"` và prompt tự nhiên.
+- `contextSlideNumber` chỉ là context; AI có thể sửa slide khác nếu prompt chỉ định rõ.
+- Sau khi hoàn thành, FE tải lại toàn bộ `/pages`.
+- BE giữ task thành công cũ nếu revision mới thất bại.
 
 ## Base URL
 
-Khong ghi IP deploy co dinh trong source. Local Gateway mac dinh `http://localhost:8080`; AI Service noi bo mac dinh `http://localhost:8000`. Production lay URL tu `.env`.
+Không ghi IP deploy cố định trong source. Gateway local mặc định là `http://localhost:8080`; AI Service nội bộ mặc định là `http://localhost:8000`. Production lấy URL từ `.env`.
