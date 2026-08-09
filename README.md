@@ -1,8 +1,8 @@
 # LecGen
 
-LecGen la he thong tao, quan ly va chinh sua bai giang/bai thuyet trinh bang AI. Nguoi dung co the nhap prompt, dung lai tai lieu da tai len hoac gui PDF/DOCX/TXT; he thong tra ve deck JSON de giao dien web render, chinh sua va xuat PDF/PPTX.
+LecGen là hệ thống tạo, quản lý và chỉnh sửa bài giảng/bài thuyết trình bằng AI. Người dùng có thể nhập prompt, dùng lại tài liệu đã tải lên hoặc gửi PDF/DOCX/TXT; hệ thống trả về deck JSON để giao diện web render, chỉnh sửa và xuất PDF/PPTX.
 
-## Kien truc hien tai
+## Kiến trúc hiện tại
 
 ```mermaid
 flowchart LR
@@ -16,36 +16,36 @@ flowchart LR
     DOC --> AI[FastAPI AI Service :8000]
     AI --> REDIS[(Redis Queue)]
     REDIS --> WORKER[AI Worker]
-    WORKER --> VLLM[Qwen3-VL-8B via vLLM]
+    WORKER --> VLLM[Qwen3-VL-8B qua vLLM]
     WORKER --> FLUX[FLUX image server]
     WORKER --> STOCK[Pexels/stock fallback]
     WORKER --> GEMINI[Gemini/Vertex fallback]
 ```
 
-- FE chi goi Java BE qua API Gateway; khong goi AI Service truc tiep.
-- Document Service luu project, slide pages va dieu phoi task AI.
-- AI Service sinh deck JSON, bang, bieu do, anh va speaker notes. FE chiu trach nhiem render/editor/export.
-- Qwen3-VL la provider chinh; Gemini/Vertex la fallback va lop review khi cau hinh cho phep.
-- FLUX sinh anh tong quat; anh stock/nguon tai lieu duoc uu tien khi can tinh xac thuc.
-- Redis Queue tach API khoi cac tac vu AI dai.
+- FE chỉ gọi Java BE qua API Gateway, không gọi AI Service trực tiếp.
+- Document Service lưu project, slide pages và điều phối task AI.
+- AI Service sinh deck JSON, bảng, biểu đồ, ảnh và speaker notes. FE chịu trách nhiệm render, editor và export.
+- Qwen3-VL là provider chính; Gemini/Vertex là fallback và lớp review khi được cấu hình.
+- FLUX sinh ảnh tổng quát; ảnh stock hoặc ảnh trong tài liệu được ưu tiên khi cần tính xác thực.
+- Redis Queue tách API khỏi các tác vụ AI chạy lâu.
 
-## Thu muc
+## Thư mục
 
 ```text
 back-end/       Java microservices
 front-end/      React/Vite application
-ai-service/     FastAPI, worker va AI pipeline
-docker/         Database initialization
+ai-service/     FastAPI, worker và AI pipeline
+docker/         Khởi tạo database
 docker-compose.yml
-fe_api_spec.md  Contract FE -> Java BE (source of truth)
+fe_api_spec.md  Contract FE -> Java BE (nguồn chuẩn)
 ai-service/api_specification.md  Contract Java BE -> AI Service
 ```
 
-## Chay local
+## Chạy local
 
-### 1. Java backend va infrastructure
+### 1. Java backend và hạ tầng
 
-Tao `.env` o thu muc goc, sau do:
+Tạo `.env` ở thư mục gốc, sau đó chạy:
 
 ```bash
 docker compose up -d --build
@@ -55,7 +55,7 @@ Gateway: `http://localhost:8080`.
 
 ### 2. AI Service
 
-Tao `ai-service/.env` va `ai-service/backend/.env` theo moi truong cua ban. Cac bien quan trong:
+Tạo `ai-service/.env` và `ai-service/backend/.env` theo môi trường. Các biến quan trọng:
 
 ```env
 REDIS_URL=redis://redis:6379/0
@@ -79,49 +79,49 @@ npm ci
 npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-Mac dinh FE dung hostname hien tai va gateway port `8080`. Chi dat `VITE_API_BASE_URL` neu gateway nam o URL khac.
+Mặc định FE dùng hostname hiện tại và gateway port `8080`. Chỉ đặt `VITE_API_BASE_URL` khi Gateway nằm ở URL khác.
 
-## Luong tao slide
+## Luồng tạo slide
 
-1. FE upload tai lieu neu co.
-2. FE goi `POST /api/document/projects` voi prompt va metadata file.
+1. FE upload tài liệu nếu có.
+2. FE gọi `POST /api/document/projects` với prompt và metadata file.
 3. FE poll `GET /api/document/projects/{projectId}/progress`.
-4. Khi `projectStatus=1` va `aiStatus=completed`, FE lay `/pages` va render deck.
-5. FE autosave thay doi thu cong qua API pages/sync.
-6. FE xuat PDF hoac PPTX tu editor. PPTX editable dung cac object PowerPoint; chi tiet trang tri phuc tap co the duoc flatten de giu hinh anh.
+4. Khi `projectStatus=1` và `aiStatus=completed`, FE lấy `/pages` và render deck.
+5. FE autosave thay đổi thủ công qua API `pages/sync`.
+6. FE xuất PDF hoặc PPTX từ editor. PPTX editable dùng các object PowerPoint; chi tiết trang trí phức tạp có thể được flatten để giữ hình thức.
 
-## Luong sua bang AI
+## Luồng sửa bằng AI
 
-1. FE goi `POST /api/document/projects/{projectId}/revise`.
-2. Gui `revisionScope="auto"`; `contextSlideNumber` chi la slide dang mo, khong khoa target.
-3. AI tu hieu can sua mot slide, nhieu slide, them/xoa slide hay toan deck.
-4. FE poll progress, sau do tai lai toan bo `/pages` thay vi merge delta.
-5. Neu revise that bai, BE khoi phuc `aiTaskId` cua deck thanh cong gan nhat de nguoi dung co the sua tiep.
+1. FE gọi `POST /api/document/projects/{projectId}/revise`.
+2. Gửi `revisionScope="auto"`; `contextSlideNumber` chỉ là slide đang mở, không khóa target.
+3. AI tự hiểu cần sửa một slide, nhiều slide, thêm/xóa slide hay toàn bộ deck.
+4. FE poll progress, sau đó tải lại toàn bộ `/pages` thay vì merge delta.
+5. Nếu revise thất bại, BE khôi phục `aiTaskId` của deck thành công gần nhất để người dùng có thể sửa tiếp.
 
-## Chat luong va an toan du lieu
+## Chất lượng và an toàn dữ liệu
 
-- Table/chart chi duoc tra ve khi co schema day du va du lieu co bang chung.
-- Neu chart bi loai, noi dung khong con hua hen mot bieu do khong ton tai.
-- Pipeline khong duoc tu bia thong ke, ty le, ngay thang, nghien cuu hoac ket qua do luong.
-- Slide khong nam trong pham vi revise duoc giu nguyen theo `slide_id`.
-- File nguon co the duoc tai su dung tu trang Tai lieu, khong can upload lai.
+- Table/chart chỉ được trả về khi schema đầy đủ và dữ liệu có bằng chứng.
+- Nếu chart bị loại, nội dung không còn nhắc tới một biểu đồ không tồn tại.
+- Pipeline không được tự bịa thống kê, tỷ lệ, ngày tháng, nghiên cứu hoặc kết quả đo lường.
+- Slide ngoài phạm vi revise được giữ nguyên theo `slide_id`.
+- Tài liệu nguồn có thể được dùng lại từ trang Tài liệu, không cần upload lại.
 
-## Goi va gioi han AI
+## Gói và giới hạn AI
 
-Gia tri mac dinh trong AI Service (co the doi bang environment):
+Giá trị mặc định trong AI Service, có thể thay đổi bằng environment:
 
-| Plan | Slide toi da | Ky tu toi da | Anh toi da | Ti le slide co anh |
+| Plan | Slide tối đa | Ký tự tối đa | Ảnh tối đa | Tỷ lệ slide có ảnh |
 |---|---:|---:|---:|---:|
-| Free | 10 | 10,000 | 5 | 40% |
-| Pro | 30 | 50,000 | 15 | 60% |
-| Ultra | 50 | 100,000 | 35 | 80% |
+| Free | 10 | 10.000 | 5 | 40% |
+| Pro | 30 | 50.000 | 15 | 60% |
+| Ultra | 50 | 100.000 | 35 | 80% |
 
-Quota nghiep vu va quyen plan duoc Java Subscription Service xac dinh tu tai khoan da dang nhap; FE khong duoc tu gui plan.
+Quota nghiệp vụ và quyền plan do Java Subscription Service xác định từ tài khoản đăng nhập; FE không được tự gửi plan.
 
-## Tai lieu tich hop
+## Tài liệu tích hợp
 
 - [README_FE_API.md](README_FE_API.md): checklist nhanh cho FE.
 - [fe_api_spec.md](fe_api_spec.md): contract FE -> Java BE.
 - [ai-service/api_specification.md](ai-service/api_specification.md): contract Java BE -> AI Service.
-- [back-end/document-service/document_api_spec.md](back-end/document-service/document_api_spec.md): chi tiet Document Service.
-- [ai-service/README.md](ai-service/README.md): van hanh AI/vLLM/FLUX.
+- [back-end/document-service/document_api_spec.md](back-end/document-service/document_api_spec.md): chi tiết Document Service.
+- [ai-service/README.md](ai-service/README.md): vận hành AI/vLLM/FLUX.
