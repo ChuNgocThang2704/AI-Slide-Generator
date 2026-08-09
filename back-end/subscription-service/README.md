@@ -1,7 +1,7 @@
 # Subscription Service - Tier Management & Quota Controller (Quản lý Gói cước & Hạn mức)
 
 ## 1. Giới thiệu
-Subscription Service chịu trách nhiệm quản lý các gói dịch vụ (Free, Pro, Enterprise), kiểm soát quyền lợi, hạn mức sử dụng (Quotas) của khách hàng theo thời gian thực (ví dụ: số lượt sinh slide hàng ngày, lượt tạo ảnh AI). Dịch vụ phối hợp với `payment-service` để gia hạn tự động sau khi giao dịch thành công.
+Subscription Service chịu trách nhiệm quản lý các gói dịch vụ (Free, Pro, Ultra), kiểm soát quyền lợi, hạn mức sử dụng (Quotas) của khách hàng theo thời gian thực (ví dụ: số lượt sinh slide và số lần AI revise mỗi ngày). Dịch vụ phối hợp với `payment-service` để kích hoạt/gia hạn gói sau khi giao dịch thành công.
 
 ---
 
@@ -23,6 +23,7 @@ Subscription Service chịu trách nhiệm quản lý các gói dịch vụ (Fre
   - `checkQuota(userId, featureKey)`: Kiểm tra xem người dùng còn lượt dùng tính năng này hay không.
   - `consumeQuota(userId, featureKey, amount)`: Trừ bớt lượt sử dụng sau khi slide được sinh thành công.
   - `resetQuotas()`: Scheduler chạy ngầm để thiết lập lại số lượt sử dụng về 0 khi bắt đầu ngày mới hoặc chu kỳ gia hạn mới.
+  - Revision dùng feature key `MAX_REVISIONS_PER_DAY`: Free `2`, Pro `10`, Ultra `30`; task revise thất bại được hoàn quota.
 
 ### 3.3. Lắng nghe Sự kiện Thanh toán thành công
 - Lắng nghe message hoàn thành giao dịch từ RabbitMQ để tự động:

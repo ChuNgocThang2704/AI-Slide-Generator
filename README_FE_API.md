@@ -20,6 +20,11 @@ http://localhost:8080
 
 FE calls the Java BE through API Gateway only. FE should not call the Python AI Service directly.
 
+Leave `VITE_API_BASE_URL` blank and set `VITE_GATEWAY_PORT=8080` when FE and
+Gateway use the same hostname. This works for both localhost and an IP-based
+deployment and avoids OAuth/API requests being redirected to the developer's
+localhost.
+
 ## Main Flow
 
 Create slides:
@@ -36,6 +41,13 @@ Revise slides:
 POST /api/document/projects/{projectId}/revise
 GET  /api/document/projects/{projectId}/progress
 GET  /api/document/projects/{projectId}/pages
+```
+
+Reuse an uploaded document:
+
+```txt
+GET  /api/document/source-documents
+POST /api/document/projects with sourceDocId/file metadata and a meaningful prompt
 ```
 
 AI revise is limited per user per day by subscription: Free `2`, Pro `10`,
@@ -58,6 +70,8 @@ target outside the conversational edit flow.
 - Render slides from `/pages`.
 - After revise completes, reload `/pages` and replace local slide state.
 - Export PPTX on FE side if the FE export module owns rendering/export.
+- Refresh an expired access token through the existing auth refresh flow before
+  treating a protected request as a permanent 401.
 
 ## FE Should Not Do
 
@@ -133,3 +147,9 @@ Xoa slide 3 vi noi dung chua can thiet, giu cac slide con lai.
 - Revise multiple slides named in the prompt.
 - Revise a full deck while preserving requested chart data.
 - Return complete non-empty table/chart specs after revise.
+- Restore the last successful AI task when a revision fails, so another revision
+  can still be submitted.
+- Reject unsupported chart data and remove text that promises a chart which is
+  not present in the final JSON.
+- Prevent unsupported statistics, percentages and named study results from being
+  introduced during generic content expansion.

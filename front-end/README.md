@@ -1,81 +1,62 @@
 # LecGen Frontend
 
-Giao diện ứng dụng tạo và chỉnh sửa slide thuyết trình tự động bằng AI (AI Presentation Generator), được xây dựng trên nền tảng **React + Vite** hiện đại, mượt mà và tối ưu trải nghiệm người dùng.
+React + Vite frontend cho luong tao, render, chinh sua va xuat slide LecGen.
 
----
+## Chuc nang hien tai
 
-## ✨ Tính Năng Chính
+- Dang ky, xac minh email, dang nhap thuong/Google, refresh token va quen mat khau.
+- Dashboard co thumbnail that, progress task va phan trang.
+- Tao slide tu prompt, file moi hoac tai lieu da upload.
+- Editor ba panel co resize, trinh chieu, template va AI Assistant.
+- Chinh text, font, mau, list, can le, line spacing, anh, bang va bieu do.
+- Autosave, undo/redo va dong bo slide pages voi BE.
+- AI revise bang mot o prompt; AI tu xac dinh slide/deck can sua.
+- Xuat PDF va PPTX editable theo kha nang mapping cua PowerPoint.
+- Goi Free/Pro/Ultra, quota va thanh toan PayOS/Stripe.
 
-* 🚀 **Tạo Slide bằng AI**: Nhập chủ đề/prompt hoặc tải lên tệp tài liệu (`.pdf`, `.docx`, `.txt`) để AI tự động tổng hợp và thiết kế bài thuyết trình.
-* ✍️ **Trình Chỉnh Sửa Tương Tác**:
-  * Chỉnh sửa trực tiếp tiêu đề, nội dung bullet, ghi chú (Speaker Notes).
-  * Đổi màu sắc chủ đề (Template Themes: *Soft Blue, Royal Purple, Clean White, Modern Dark...*).
-  * Thay đổi emoji, hình ảnh minh họa trên từng slide.
-* 🤖 **AI Assistant (Chỉnh Sửa Slide Bằng AI)**:
-  * Nhập câu lệnh tự nhiên để sửa lại nội dung 1 slide cụ thể hoặc toàn bộ deck.
-  * Tự động cập nhật giao diện mà không cần tải lại trang.
-* 📊 **Xuất File**:
-  * Export trực tiếp ra tệp **PowerPoint (`.pptx`)** vật lý giữ nguyên chuẩn định dạng và hình ảnh.
-  * Xuất tài liệu PDF.
-* 💳 **Nâng Cấp Gói Cước**:
-  * Tích hợp thanh toán Quét mã VietQR qua **PayOS** (VNĐ).
-  * Tích hợp thanh toán Thẻ quốc tế Visa/Mastercard qua **Stripe Checkout** (USD).
-* 🛡️ **Quản Trị Viên (Admin Dashboard)**: Trang quản lý người dùng, gói cước và phân quyền hệ thống.
+## Cai dat
 
----
-
-## 🛠️ Công Nghệ Sử Dụng
-
-* **Core**: React 18, Vite
-* **State Management**: Zustand
-* **Styling**: Vanilla CSS, Responsive Layout, Dark/Light Glassmorphism Mode
-* **Icons & Animations**: Lucide React, Framer Motion
-* **Export**: Custom XML PPTX Generator Engine
-
----
-
-## 🚀 Hướng Dẫn Cài Đặt & Chạy Ứng Dụng
-
-### 1. Yêu Cầu Tiền Trạm
-* **Node.js**: Phiên bản `>= 18.x`
-* **npm** hoặc **yarn** / **pnpm**
-
-### 2. Cài Đặt Thư Viện
-Mở terminal tại thư mục gốc của dự án và chạy:
 ```bash
-npm install
+npm ci
 ```
 
-### 3. Cấu Hình Biến Môi Trường (`.env`)
-Tạo file `.env` tại thư mục gốc (hoặc sao chép từ `.env.example`):
+Tao `.env` tu `.env.example`:
+
 ```env
-VITE_API_BASE_URL=http://localhost:7172/api
+# De trong de dung hostname cua trinh duyet va cong gateway ben duoi.
+VITE_API_BASE_URL=
+VITE_GATEWAY_PORT=8080
 ```
-*(Thay đổi URL API Gateway theo cổng Backend tương ứng của bạn).*
 
-### 4. Chạy Môi Trường Phát Triển (Development)
+Local gateway mac dinh la `http://localhost:8080`. Khi FE truy cap qua IP server, de `VITE_API_BASE_URL` trong giup FE tu dung cung hostname thay vi khoa cung localhost.
+
 ```bash
-npm run dev
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
-Trình duyệt sẽ tự động mở tại địa chỉ: `http://localhost:5173/`
 
-### 5. Đóng Gói Production (Build)
+Production build:
+
 ```bash
 npm run build
 ```
-Thư mục `dist/` sẽ chứa toàn bộ mã nguồn đã được tối ưu hóa sẵn sàng cho việc deployment.
 
----
+## Quy tac tich hop
 
-## 📁 Cấu Trúc Thư Mục
+- FE chi goi Java API Gateway.
+- Contract request/response: [../fe_api_spec.md](../fe_api_spec.md).
+- Tao project: `POST /api/document/projects`.
+- Poll: `GET /api/document/projects/{id}/progress`.
+- Lay deck: `GET /api/document/projects/{id}/pages`.
+- Sua AI: `POST /api/document/projects/{id}/revise` voi `revisionScope="auto"`.
+- Sau revise, tai lai toan bo pages; khong merge delta AI o client.
+- FE khong gui plan tuy y, khong tu bat/tat anh va khong suy luan table/chart tu bullet.
 
-```
-src/
-├── assets/          # Hình ảnh tĩnh và tài nguyên dự án
-├── components/      # Các linh kiện tái sử dụng (Navbar, SlideRenderer, EditableSlide, Toast...)
-├── pages/           # Màn hình chính (Landing, Auth, Dashboard, Generate, Editor, Pricing, Admin...)
-├── services/        # Các hàm gọi API (authService, documentService, pptxExportService, subscriptionService...)
-├── store/           # Quản lý State toàn cục bằng Zustand (authStore, uiStore...)
-├── App.jsx          # Định tuyến (Routing) chính của ứng dụng
-└── main.jsx         # Điểm khởi chạy React app
+## Cau truc
+
+```text
+src/components/   UI va slide renderer/editor
+src/pages/        Auth, Dashboard, Generate, Editor, Pricing, Admin
+src/services/     API clients
+src/store/        Zustand stores
+src/utils/        Slide mapping, text/image fit va export helpers
 ```
