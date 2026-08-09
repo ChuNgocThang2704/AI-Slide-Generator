@@ -1,6 +1,6 @@
 # AI Service API Specification
 
-Tai lieu nay mo ta cac API BE/FE can tich hop voi AI Service de sinh va sua slide dang JSON. BE/FE chi can xu ly data output; toan bo xu ly AI nam trong AI Service.
+Tai lieu nay mo ta API noi bo ma Java Document Service dung de sinh va sua slide dang JSON. FE khong goi AI Service truc tiep; FE dung contract trong `../fe_api_spec.md`.
 
 Base URL vi du:
 
@@ -14,9 +14,9 @@ Trong moi truong deploy, thay bang domain/IP cua AI Service.
 
 Luong chinh:
 
-1. BE/FE gui prompt va file tuy chon den `POST /api/generate-slide-spec`.
+1. Java BE gui prompt va file tuy chon den `POST /api/generate-slide-spec`.
 2. AI Service tra ngay `task_id`.
-3. BE/FE poll `GET /api/status/{task_id}`.
+3. Java BE poll `GET /api/status/{task_id}`.
 4. Khi `status = completed`, doc deck JSON tai `result.deck`.
 5. Neu nguoi dung yeu cau sua, goi `POST /api/revise-slide-spec`.
 6. Poll task revise qua `GET /api/status/{task_id}` va render lai `result.deck`.
@@ -24,7 +24,7 @@ Luong chinh:
 Trang thai task:
 
 ```txt
-pending | processing | completed | error | cancelled
+pending | processing | completed | failed | error | cancelled
 ```
 
 ## 1. Generate Slide Spec
@@ -46,7 +46,7 @@ Luon truyen `text`; `file` la tai lieu nguon tuy chon.
 | `file` | file | No | File nguon. Ho tro `.docx`, `.pdf`, `.txt`. |
 | `plan` | string | No | Goi gioi han tai nguyen: `free`, `pro`, `ultra`. Mac dinh `pro`. |
 | `slide_count` | integer | No | So slide mong muon. Neu khong truyen, AI Service tu uoc luong theo noi dung/prompt. |
-| `generate_images` | string | No | `"true"` hoac `"false"`. Neu prompt co yeu cau anh, service co the tu bat sinh anh. |
+| `generate_images` | string | No | Mac dinh la bat neu co image provider. Chi gui `"false"` khi chu dong tat anh. |
 | `image_limit` | integer | No | So anh toi da muon sinh. Neu khong truyen, service tu tinh theo plan/so slide. |
 
 Yeu cau file chung chung nhu `Tao slide tu file` hoac prompt qua ngan se bi tu choi bang HTTP 400 truoc khi tao task.
@@ -56,8 +56,7 @@ Yeu cau file chung chung nhu `Tao slide tu file` hoac prompt qua ngan se bi tu c
 ```bash
 curl -X POST "http://localhost:8000/api/generate-slide-spec" \
   -F "text=Tao 8 slide tieng Viet ve he thong bai do xe thong minh trong truong dai hoc. Hay co bieu do Q1 45%, Q2 58%, Q3 72%, Q4 81%. Hay co bang so sanh quan ly thu cong va he thong thong minh theo cac tieu chi: toc do xu ly, do chinh xac, chi phi van hanh, trai nghiem sinh vien." \
-  -F "plan=pro" \
-  -F "generate_images=true"
+  -F "plan=pro"
 ```
 
 ### Submit Response
@@ -95,7 +94,7 @@ Content-Type: multipart/form-data
 | `source_task_id` | string | Yes | `task_id` cua deck da completed truoc do. |
 | `revision_prompt` | string | Yes | Yeu cau sua bang ngon ngu tu nhien. |
 | `plan` | string | No | `free`, `pro`, `ultra`. Mac dinh `pro`. |
-| `generate_images` | string | No | Nen gui `"true"` neu muon cho phep sua/sinh anh. |
+| `generate_images` | string | No | Mac dinh bat. Chi gui `"false"` khi chu dong cam sinh/sua anh. |
 | `revision_scope` | string | No | `auto`, `slide`, `deck`. Mac dinh nen de `auto`. |
 | `slide_index` | integer | No | Slide can sua, 0-based. Thuong khong can truyen neu prompt da noi ro. |
 | `slide_number` | integer | No | Slide can sua, 1-based. Thuong khong can truyen neu prompt da noi ro. |
@@ -104,13 +103,12 @@ Content-Type: multipart/form-data
 | `target_slide_numbers` | string | No | Danh sach so slide 1-based, co the la JSON array hoac chuoi cach nhau boi dau phay. |
 | `image_limit` | integer | No | So anh toi da khi yeu cau sua/sinh anh. |
 
-Khuyen nghi BE/FE chi can gui:
+Khuyen nghi Java BE chi can gui:
 
 ```txt
 source_task_id
 revision_prompt
 plan=pro
-generate_images=true
 revision_scope=auto
 context_slide_number=2
 ```
@@ -128,7 +126,7 @@ Contract revise:
 - Xoa slide: cac slide con lai duoc giu nguyen va danh lai `index` lien tuc.
 - Sua table: response tra bang hoan chinh, khong chi tra delta; khong co cell rong.
 - Sua chart: labels, values, unit va `chart_type` nam trong object `chart` cuoi.
-- Sua anh: gui `generate_images=true`; ket qua co image URL/path trong slide dich.
+- Sua anh: image generation duoc bat mac dinh; ket qua co image URL/path trong slide dich.
 
 ### Request Examples
 
@@ -178,7 +176,7 @@ curl -X POST "http://localhost:8000/api/revise-slide-spec" \
 {
   "task_id": "64c7ea2d-2dcd-4768-991e-593736dbc600",
   "source_task_id": "95915ceb-eda2-4890-a954-efff6069c547",
-  "revision_scope": "slide",
+  "revision_scope": "auto",
   "target_slide_indices": [5],
   "status": "processing",
   "message": "Revising JSON Spec via Redis worker...",
@@ -468,9 +466,9 @@ Response:
 
 Luu y: cancel la best-effort. Neu task dang goi model/image server ben ngoai, viec huy co the khong dung ngay lap tuc.
 
-## 9. Integration Notes For BE/FE
+## 9. Integration Notes For Java BE
 
-- BE/FE chi can tich hop async task flow.
+- Java BE chi can tich hop async task flow; FE khong goi cac endpoint nay.
 - Khong goi truc tiep model/LLM/image server.
 - Khong can tu tach table/chart/image tu text.
 - Render theo `primary_visual` va object tuong ung:
@@ -483,9 +481,10 @@ Luu y: cancel la best-effort. Neu task dang goi model/image server ben ngoai, vi
 - De sua deck, FE/BE gui `source_task_id` cua task completed gan nhat.
 - Sau revise, nen dung `task_id` moi lam source cho lan revise tiep theo.
 - Khi UI da biet slide dich, gui target field thay vi chi dua vao prompt:
-  - Mot slide: `revision_scope=slide`, `slide_number=3`.
-  - Nhieu slide: `revision_scope=slide`, `target_slide_numbers=1,4`.
-  - Toan deck: `revision_scope=deck`.
+  - Prompt tu nhien: `revision_scope=auto`, tuy chon `context_slide_number`.
+  - Control khoa cung mot slide: `revision_scope=slide`, `slide_number=3`.
+  - Control khoa cung nhieu slide: `revision_scope=slide`, `target_slide_numbers=1,4`.
+  - Control khoa cung toan deck: `revision_scope=deck`.
 - Sau completed, thay toan bo deck tren FE bang `result.deck`; khong merge delta o client.
 
 ## 10. Minimal FE Render Rule

@@ -1,378 +1,20 @@
-# Hệ thống tạo và quản lý slide tự động sử dụng AI
+# LecGen AI Service
 
-Hệ thống web cho phép người dùng nhập text, upload file (docx, pdf) và tự động tạo slide PowerPoint với ảnh minh họa được sinh bởi AI.
+FastAPI service va Redis worker sinh/sua deck JSON cho LecGen. Service nay khong phai API truc tiep cho FE; Java Document Service la client chinh.
 
-## Tính năng Core
+## Chuc nang
 
-- ✅ Upload file (docx, pdf, txt) hoặc nhập text trực tiếp
-- ✅ Trích xuất và cấu trúc hóa nội dung sử dụng LLM (Ollama/Qwen)
-- ✅ Tạo slide PowerPoint (PPTX) tự động
-- ✅ Sinh ảnh minh họa cho slide sử dụng FLUX
-- ✅ Xem và tải slide đã tạo
-- ✅ Xử lý bất đồng bộ với Redis queue
+- Doc PDF, DOCX va TXT; ho tro chon pham vi/chapter bang prompt da ngon ngu.
+- Tu nhan dien `lecture` va `presentation` nhung van ton trong yeu cau nguoi dung.
+- Sinh title, bullets, speaker notes, layout va pedagogical metadata.
+- Sinh bang va bieu do editable tu du lieu co bang chung.
+- Trich anh tu PDF, tim stock hoac sinh anh bang FLUX.
+- Duyet anh bang Qwen3-VL; Gemini/Vertex la fallback/review tuy cau hinh.
+- Sua deck bang ngon ngu tu nhien, giu nguyen slide ngoai pham vi.
 
-## Công nghệ
+## Provider
 
-### Backend
-- **FastAPI**: Framework web API
-- **Python**: Ngôn ngữ lập trình
-- **Ollama**: LLM để trích xuất nội dung (Qwen, Llama, etc.)
-- **Diffusers**: Sinh ảnh với FLUX
-- **Redis**: Queue bất đồng bộ
-- **python-pptx**: Tạo file PowerPoint
-- **python-docx, pdfplumber**: Xử lý file input
-
-### Frontend
-- **TypeScript + Node.js**: (Sẽ được triển khai)
-
-## Cài đặt
-
-### Yêu cầu
-- Python 3.9+
-- **Core dependencies** (bắt buộc): FastAPI, python-docx, pdfplumber, python-pptx
-- **AI dependencies** (tùy chọn):
-  - Ollama với model Qwen hoặc model LLM khác (cho trích xuất nội dung tốt hơn)
-  - Diffusers + Torch (cho sinh ảnh, cần GPU để chạy nhanh)
-- Redis (optional, có thể chạy không có Redis)
-
-### Bước 1: Cài đặt Python dependencies
-
-**Cài đặt cơ bản (bắt buộc):**
-```bash
-pip install -r requirements.txt
-```
-
-**Cài đặt AI features (tùy chọn):**
-```bash
-# Nếu muốn dùng LLM và Image Generation
-pip install -r requirements-ai.txt
-
-# Hoặc cài từng phần:
-# - Chỉ Image Generation (cần GPU khuyến nghị):
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu  # CPU
-pip install diffusers transformers accelerate safetensors
-```
-
-**Lưu ý**: Hệ thống có thể chạy được ngay chỉ với dependencies cơ bản. AI features sẽ tự động dùng fallback mode nếu không có.
-
-### Bước 2: Cấu hình LLM (vLLM cloud)
-
-Slide text dùng API OpenAI-compatible (`httpx` đã có trong `requirements.txt`). Đặt endpoint server vLLM:
-
-```bash
-set VLLM_API_BASE_URL=https://your-vllm-host:port   # gốc HTTP(S), không thêm /v1 (app tự nối /v1/...)
-set LLM_MODEL=Qwen3-VL-8B   # trùng --served-model-name trên vLLM
-```
-
-Nếu proxy có Basic Auth: `VLLM_BASIC_AUTH_USER`, `VLLM_BASIC_AUTH_PASS`.
-
-### Bước 3: Cài đặt Redis (optional)
-
-```bash
-# Windows: Download từ https://redis.io/download
-# Hoặc sử dụng Docker:
-docker run -d -p 6379:6379 redis:latest
-```
-
-### Bước 4: Cấu hình model sinh ảnh (optional)
-
-Model FLUX sẽ tự động download khi chạy lần đầu:
-
-```python
-# Trong config.py hoặc environment variable
-IMAGE_MODEL_TYPE = "flux"
-```
-
-## Chạy ứng dụng
-
-### 1. Chạy API server
-
-```bash
-cd backend
-python main.py
-```
-
-Hoặc:
-
-```bash
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-API sẽ chạy tại: `http://localhost:8000`
-
-### 2. Chạy worker (để xử lý queue bất đồng bộ)
-
-```bash
-cd backend
-python worker.py
-```
-
-### 3. Xem API documentation
-
-Truy cập: `http://localhost:8000/docs` (Swagger UI)
-
-## API Endpoints
-
-### 1. Upload text
-```
-POST /api/upload-text
-Form data: text=<nội dung>
-```
-
-### 2. Upload file
-```
-POST /api/upload-file
-Form data: file=<file>
-```
-
-### 3. Trích xuất nội dung
-```
-POST /api/extract-content
-Form data: task_id=<task_id>
-```
-
-### 4. Tạo slide
-```
-POST /api/generate-slide
-Form data: 
-  - task_id=<task_id>
-  - content=<nội dung đã cấu trúc> (optional)
-  - plan=free/pro
-  - slide_count=<number> (pro only)
-  - image_limit=<max images> (pro only)
-  - generate_images=true/false
-```
-
-### 5. API tổng hợp (khuyến nghị)
-```
-POST /api/generate-slide-spec
-Form data:
-  - text=<nội dung> (optional)
-  - file=<file> (optional)
-  - plan=free/pro
-  - slide_count=<number> (pro only)
-  - image_limit=<max images> (pro only)
-  - generate_images=true/false
-```
-
-### 6. Xem slide
-```
-GET /api/view-slide/{task_id}
-```
-
-### 7. Kiểm tra trạng thái
-```
-GET /api/status/{task_id}
-```
-
-## Cấu trúc dự án
-
-```
-DemoDoan/
-├── backend/
-│   ├── main.py              # FastAPI app
-│   ├── worker.py            # Worker xử lý queue
-│   ├── config.py            # Cấu hình
-│   └── services/
-│       ├── file_processor.py    # Xử lý file input
-│       ├── content_extractor.py # Trích xuất nội dung với LLM
-│       ├── slide_generator.py   # Tạo slide PPTX
-│       ├── image_generator.py   # Sinh ảnh
-│       └── redis_queue.py       # Quản lý queue
-├── frontend/                # (Sẽ được triển khai)
-├── uploads/                 # Thư mục lưu file upload
-├── outputs/                 # Thư mục lưu slide và ảnh
-├── requirements.txt
-└── README.md
-```
-
-## Lưu ý
-
-1. **Model sinh ảnh**: FLUX cần GPU để chạy nhanh. Nếu không có GPU, có thể bỏ qua phần sinh ảnh (set `generate_images=false`).
-
-   Giới hạn ảnh: `FREE_IMAGE_LIMIT` mặc định 5 ảnh cho gói Free; `PRO_IMAGE_LIMIT_MAX` mặc định 20 ảnh cho gói Pro. Backend vẫn clamp theo `IMAGE_MAX_SLIDES_WITH_IMAGES`.
-
-2. **Ollama**: Đảm bảo Ollama đang chạy và đã pull model trước khi sử dụng.
-
-3. **Redis**: Không bắt buộc. Nếu không có Redis, hệ thống sẽ dùng in-memory queue (không persist).
-
-4. **File size**: Mặc định giới hạn 10MB cho file upload.
-
-## Chạy 2 server (Backend + Image Server)
-
-Phần này giúp bạn dễ đổi sang IP máy GPU khác khi triển khai.
-
-### 1) Chạy backend tạo slide (máy API)
-
-```bash
-cd backend
-python main.py
-```
-
-Backend mặc định chạy ở `http://localhost:8000`.
-
-### 2) Chạy worker queue (máy API)
-
-```bash
-cd backend
-python worker.py
-```
-
-Worker xử lý tác vụ dài: trích xuất nội dung, sinh chart/image, tạo PPTX.
-
-### 3) Chạy image server FLUX (máy GPU)
-
-```bash
-cd scripts
-python flux_api_server.py
-```
-
-Hoặc chỉ định host/port:
-
-Windows:
-
-```bash
-set FLUX_HOST=0.0.0.0
-set FLUX_PORT=8080
-python flux_api_server.py
-```
-
-Linux/macOS:
-
-```bash
-export FLUX_HOST=0.0.0.0
-export FLUX_PORT=8080
-python flux_api_server.py
-```
-
-### 4) Deploy image server lên máy GPU bằng SCP (khuyến nghị)
-
-Nếu server sinh ảnh chạy ở máy GPU từ xa (không chạy local), copy thư mục `scripts` lên máy đó:
-
-Windows PowerShell:
-
-```bash
-scp -r .\scripts <GPU_USER>@<GPU_SERVER_IP>:/home/<GPU_USER>/DemoDoan/
-```
-
-Linux/macOS:
-
-```bash
-scp -r ./scripts <GPU_USER>@<GPU_SERVER_IP>:/home/<GPU_USER>/DemoDoan/
-```
-
-Đăng nhập máy GPU và chạy server:
-
-```bash
-ssh <GPU_USER>@<GPU_SERVER_IP>
-cd /home/<GPU_USER>/DemoDoan/scripts
-export FLUX_HOST=0.0.0.0
-export FLUX_PORT=8080
-python flux_api_server.py
-```
-
-Nếu dùng `screen` để chạy nền:
-
-```bash
-screen -S flux
-cd /home/<GPU_USER>/DemoDoan/scripts
-python flux_api_server.py
-# Ctrl+A, D để detach
-```
-
-### 5) Cấu hình backend gọi image server qua IP khác
-
-Đặt biến môi trường ở máy backend:
-
-```bash
-set IMAGE_GEN_API_BASE_URL=http://<GPU_SERVER_IP>:8080
-set IMAGE_MODEL_TYPE=flux
-```
-
-Ví dụ:
-
-```bash
-set IMAGE_GEN_API_BASE_URL=http://127.0.0.1:8080
-set IMAGE_MODEL_TYPE=flux
-```
-
-Sau khi đổi IP/port, restart `main.py` và `worker.py`.
-
-### 6) Kiểm tra image server trước khi gọi từ backend
-
-```bash
-curl http://<GPU_SERVER_IP>:8080/ping
-curl http://<GPU_SERVER_IP>:8080/health
-```
-
-Windows (tránh proxy):
-
-```bash
-curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/ping
-curl.exe --noproxy "*" http://<GPU_SERVER_IP>:8080/health
-```
-
-### 7) Trình tự chạy khuyến nghị
-
-1. Máy GPU: chạy `scripts/flux_api_server.py`.
-2. Máy backend: set `IMAGE_GEN_API_BASE_URL`.
-3. Chạy `backend/main.py`.
-4. Chạy `backend/worker.py`.
-5. Gọi API với `generate_images=true`.
-
-## Phát triển tiếp
-
-Các chức năng quản lý web sẽ được triển khai sau:
-- Quản lý người dùng
-- Quản lý tài liệu và slide
-- Chức năng dùng thử
-- Thanh toán trả phí
-
-## Cấu hình Gói Dịch Vụ & Giới Hạn (Subscription Tiers & Plan Limits)
-
-Hệ thống quản lý giới hạn tài nguyên (số slide, số ảnh minh họa, số ký tự đầu vào) động dựa trên gói tài khoản (`free`, `pro`, `ultra`) truyền từ API Gateway lên:
-
-### 1. Giới hạn cơ bản của từng gói (Cấu hình trong `.env`)
-- **Gói FREE (`plan=free`)**:
-  - Giới hạn slide tối đa: **10 slide** (`FREE_SLIDE_LIMIT`)
-  - Giới hạn ký tự đầu vào: **10,000 ký tự** (`FREE_CHAR_LIMIT`)
-  - Giới hạn số ảnh tối đa: **5 ảnh** (`FREE_IMAGE_LIMIT`)
-- **Gói PRO (`plan=pro` - Mặc định)**:
-  - Giới hạn slide tối đa: **30 slide** (`PRO_SLIDE_LIMIT_MAX`)
-  - Giới hạn ký tự đầu vào: **50,000 ký tự** (`PRO_CHAR_LIMIT`)
-  - Giới hạn số ảnh tối đa: **15 ảnh** (`PRO_IMAGE_LIMIT_MAX`)
-- **Gói ULTRA (`plan=ultra`)**:
-  - Giới hạn slide tối đa: **50 slide** (`ULTRA_SLIDE_LIMIT_MAX`)
-  - Giới hạn ký tự đầu vào: **100,000 ký tự** (`ULTRA_CHAR_LIMIT`)
-  - Giới hạn số ảnh tối đa: **35 ảnh** (`ULTRA_IMAGE_LIMIT_MAX`)
-
-### 2. Tỉ lệ phân bổ ảnh minh họa tối đa trên tổng số slide
-Để tối ưu hóa tài nguyên GPU và đạt chất lượng bố cục slide chuyên nghiệp nhất, hệ thống tự động tính toán giới hạn ảnh theo tỉ lệ của từng gói:
-- **Gói FREE**: Tối đa **40%** số slide có ảnh (ví dụ: deck 10 slide -> tối đa 4 slide có ảnh).
-- **Gói PRO**: Tối đa **60%** số slide có ảnh (ví dụ: deck 15 slide -> tối đa 9 slide có ảnh).
-- **Gói ULTRA**: Tối đa **80%** số slide có ảnh (ví dụ: deck 20 slide -> tối đa 16 slide có ảnh).
-
-Số lượng ảnh thực tế của mỗi bài thuyết trình sẽ là giá trị nhỏ nhất giữa: `Số slide * Tỉ lệ gói` và `Giới hạn ảnh tối đa của gói`.
-
-## Hướng dẫn tự Host vLLM Server (Text Model)
-
-Nếu tự thuê server GPU để chạy mô hình ngôn ngữ lớn (LLM), bạn có thể dùng lệnh sau để chạy **vLLM** phục vụ cho API trích xuất slide:
-
-```bash
-vllm serve Qwen/Qwen3-VL-8B-Instruct \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --dtype auto \
-  --gpu-memory-utilization 0.90 \
-  --max-model-len 16384 \
-  --max-num-seqs 8 \
-  --served-model-name Qwen3-VL-8B \
-  --enable-prefix-caching
-```
-
-## Hướng dẫn tự Host vLLM Server (Vision-Language Model - Duyệt ảnh offline)
-
-Nếu muốn tự chạy mô hình đa phương thức để kiêm cả khâu sinh slide lẫn tự duyệt ảnh (không cần Gemini API), hãy dùng lệnh sau:
+### vLLM chinh
 
 ```bash
 vllm serve Qwen/Qwen3-VL-8B-Instruct \
@@ -383,35 +25,134 @@ vllm serve Qwen/Qwen3-VL-8B-Instruct \
   --max-model-len 16384 \
   --served-model-name Qwen3-VL-8B \
   --enable-prefix-caching \
-  --limit-mm-per-prompt image=1
+  --limit-mm-per-prompt '{"image":1}'
 ```
-*Đặt `--served-model-name Qwen3-VL-8B` và dùng cùng tên trong `LLM_MODEL` của backend.*
 
-## JSON Spec API For BE/FE
+Backend config:
 
-Create a deck:
+```env
+LLM_MODEL=Qwen3-VL-8B
+VLLM_API_BASE_URL=http://<vllm-host>:<port>
+IMAGE_VLM_JUDGE_MODEL=Qwen3-VL-8B
+```
 
-```text
+Khong them `/v1` vao `VLLM_API_BASE_URL`; client tu noi OpenAI-compatible path.
+
+### FLUX image server
+
+```bash
+cd scripts
+python flux_api_server.py
+```
+
+Bien moi truong khuyen nghi:
+
+```env
+FLUX_HOST=0.0.0.0
+FLUX_PORT=8080
+CLIP_DEVICE=cpu
+```
+
+`CLIP_DEVICE=cpu` tranh CLIP giu VRAM lam request FLUX tiep theo OOM. Server tu gioi han prompt theo tokenizer de tranh vuot 77 token CLIP.
+
+Backend ket noi bang:
+
+```env
+IMAGE_MODEL_TYPE=flux
+IMAGE_GEN_API_BASE_URL=http://<flux-host>:<port>
+```
+
+## Cau hinh fallback
+
+Neu vLLM khong san sang, service co the dung Gemini/Vertex khi credential hop le. Cac bien phu thuoc che do dang cau hinh trong `backend/config.py`, gom Gemini API key hoac Google service account. Khong commit credential va `.env`.
+
+## Chay bang Docker
+
+```bash
+docker compose up -d --build api worker redis
+docker compose logs -f worker
+```
+
+Services:
+
+- API: `http://localhost:8000`
+- Swagger: `http://localhost:8000/docs`
+- Redis noi bo: `redis://redis:6379/0`
+
+`api` va `worker` phai dung cung `.env`, Redis va volume `uploads/outputs`.
+
+## Chay truc tiep
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install -r requirements.txt
+```
+
+Windows PowerShell:
+
+```powershell
+$env:PYTHONPATH="backend"
+.venv\Scripts\python.exe backend\main.py
+.venv\Scripts\python.exe backend\worker.py
+```
+
+Can Redis thi dat `REDIS_URL=redis://localhost:6379/0`. Khi Redis khong kha dung, hanh vi fallback phu thuoc cau hinh queue hien tai; production nen luon chay Redis.
+
+## API chinh
+
+### Tao deck
+
+```http
 POST /api/generate-slide-spec
-multipart/form-data: text or file, plan, slide_count, generate_images, image_limit
+Content-Type: multipart/form-data
 ```
 
-Revise a completed deck:
+Field quan trong: `text`, `file`, `plan`, `slide_count`, `image_limit`. Anh duoc bat mac dinh neu co it nhat mot image provider; client khong can gui `generate_images=true`.
 
-```text
+### Sua deck
+
+```http
 POST /api/revise-slide-spec
-multipart/form-data: source_task_id, revision_prompt, revision_scope,
-slide_number or target_slide_numbers, generate_images, image_limit
+Content-Type: multipart/form-data
 ```
 
-Poll `GET /api/status/{task_id}` until `status=completed`, then replace the FE
-deck with `result.deck`. Do not merge a client-side delta. When the target slide
-is known, send `revision_scope=slide` with `slide_number` (1-based) or
-`target_slide_numbers`. Slides outside the target are preserved. Use the newest
-completed `task_id` as the next `source_task_id`.
+Field bat buoc: `source_task_id`, `revision_prompt`. De `revision_scope=auto` cho o prompt tu nhien; `context_slide_number` chi la goi y. Chi dung `slide_number`/`slide_index` khi mot control chuong trinh muon khoa cung target.
 
-See `api_specification.md` for request fields and JSON schemas.
+### Poll
 
-## License
+```http
+GET /api/status/{task_id}
+```
 
-MIT
+Trang thai: `pending`, `processing`, `completed`, `failed`/`error`, `cancelled`. Khi completed, deck nam trong `result.deck`.
+
+Contract day du: [api_specification.md](api_specification.md).
+
+## Nguyen tac output
+
+- FE/BE thay toan bo deck sau revise, khong merge delta.
+- `slide_id` la dinh danh on dinh; `index` la thu tu hien tai.
+- Bang tra ve `headers` va `rows` day du.
+- Bieu do tra ve labels/categories va values/series day du.
+- Khong tao chart khi khong co it nhat hai diem du lieu co bang chung.
+- Khong bia thong ke/ket qua; du lieu mo phong chi duoc dung khi prompt cho phep va phai gan nhan minh hoa.
+- Neu visual that bai, text khong duoc noi rang visual do dang hien thi.
+
+## Gioi han mac dinh
+
+| Plan | Slide | Ky tu | Anh | Ti le anh |
+|---|---:|---:|---:|---:|
+| Free | 10 | 10,000 | 5 | 40% |
+| Pro | 30 | 50,000 | 15 | 60% |
+| Ultra | 50 | 100,000 | 35 | 80% |
+
+Revision quota (2/10/30 moi ngay) do Java Subscription Service quan ly, khong phai AI Service.
+
+## Test
+
+```powershell
+$env:PYTHONPATH="backend"
+.venv\Scripts\python.exe -m pytest tests -q
+```
+
+Test lien quan revise, visual grounding, lecture mode va image routing nam trong `tests/`.

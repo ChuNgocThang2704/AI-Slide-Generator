@@ -1,7 +1,7 @@
 # Document Service - Project Orchestrator & Document Processor (Quản lý & Điều phối Sinh Slide)
 
 ## 1. Giới thiệu
-Document Service là dịch vụ hạt nhân điều phối toàn bộ nghiệp vụ (Orchestrator) trong hệ thống tạo slide bằng AI. Nó quản lý không gian làm việc của người dùng (Projects), tiếp nhận tài liệu gốc (.pdf, .docx, .txt), phối hợp lưu trữ tập tin trên S3/MinIO và điều phối tiến trình gọi bất đồng bộ sang Python AI Service để tạo slide và render file PowerPoint (.pptx).
+Document Service là dịch vụ hạt nhân điều phối nghiệp vụ tạo slide bằng AI. Nó quản lý project, tài liệu nguồn, slide pages và task AI; gọi bất đồng bộ sang Python AI Service để nhận deck JSON. Frontend render, chỉnh sửa và xuất PDF/PPTX từ dữ liệu này.
 
 ---
 
@@ -9,7 +9,7 @@ Document Service là dịch vụ hạt nhân điều phối toàn bộ nghiệp 
 - **Framework**: Java 21, Spring Boot 3.x, Spring Web.
 - **Giao tiếp nội bộ**: **Spring Cloud OpenFeign** (gọi dịch vụ `subscription-service` để kiểm tra và trừ quota), RestTemplate (gọi API của `ai-service`).
 - **Cơ sở dữ liệu**: **MySQL** (`document_service_db`).
-- **Lưu trữ tập tin**: AWS SDK for Java (S3 / MinIO Integration) dùng để upload tài liệu gốc và tải file `.pptx` kết quả.
+- **Lưu trữ tập tin**: AWS SDK for Java (S3 / MinIO Integration) dùng để lưu tài liệu nguồn và media liên quan.
 - **Hàng đợi thông điệp**: RabbitMQ (báo sự kiện tạo slide hoàn thành).
 
 ---
@@ -20,13 +20,14 @@ Document Service là dịch vụ hạt nhân điều phối toàn bộ nghiệp 
 - Hỗ trợ tải lên file gốc của người dùng lên Object Storage (S3/MinIO).
 - Lưu trữ siêu dữ liệu (metadata) của tài liệu và cấu trúc của từng trang slide chi tiết dưới MySQL.
 
-### 3.2. Điều phối tiến trình AI (Human-In-The-Loop)
+### 3.2. Điều phối tiến trình AI
 Dịch vụ điều phối quy trình sinh slide qua các bước:
 1. **Khởi tạo**: Gửi yêu cầu phân tích tài liệu tới `/api/generate-slide-spec` của FastAPI `ai-service` bằng liên kết file S3. Nhận về mã tác vụ `ai_task_id`.
-2. **Sinh dàn ý Draft**: Worker của Python xử lý file, trích xuất văn bản và dùng LLM sinh cấu trúc slide dưới dạng JSON (tiêu đề, ý chính, mô tả ảnh).
-3. **Đồng bộ & Chỉnh sửa**: Phía Client gọi API `/api/document/projects/{id}/progress` để theo dõi tiến độ. Khi sinh xong dàn ý chữ, người dùng có thể tùy ý sửa chữ, sửa cấu trúc trang, điều chỉnh prompt sinh ảnh trên Frontend và đồng bộ ngược về DB.
-4. **Kết xuất PPTX**: Khi người dùng duyệt (Approve) cấu trúc, service sẽ gọi `ai-service` tiếp tục chạy GPU sinh ảnh khuếch tán (SDXL/FLUX) và render chèn chữ/ảnh vào template slide để xuất file `.pptx`.
-5. **Trừ Hạn mức**: Sau khi file PowerPoint xuất thành công, service thực hiện gọi Feign Client nội bộ để trừ hạn mức quota của người dùng bên `subscription-service`.
+2. **Sinh deck JSON**: Worker trích xuất nội dung, sinh text/notes, bảng, biểu đồ và ảnh rồi trả spec hoàn chỉnh.
+3. **Đồng bộ**: Client poll `/progress`; khi hoàn thành, Document Service lưu `slide_pages` để FE render và autosave chỉnh sửa thủ công.
+4. **AI revise**: `/projects/{id}/revise` gửi prompt tự nhiên cùng task thành công gần nhất. AI tự xác định phạm vi; FE poll rồi tải lại `/pages`.
+5. **Khôi phục an toàn**: Nếu revise thất bại, project giữ lại `aiTaskId` của deck thành công trước đó và hoàn revision quota.
+6. **Xuất file**: FE sở hữu renderer/export PDF và PPTX editable; Document Service lưu dữ liệu trang làm nguồn đồng bộ.
 
 ---
 
@@ -100,9 +101,7 @@ aws:
 | `GET` | `/api/document/projects/{id}/progress` | Có | Lấy tiến độ xử lý và nhật ký chạy tác vụ AI |
 | `GET` | `/api/document/projects/{id}/pages` | Có | Lấy nội dung danh sách slide (dạng nháp hoặc bản cuối) |
 | `POST` | `/api/document/projects/{id}/pages/sync` | Có | Đồng bộ nội dung slide người dùng đã sửa về CSDL |
-| `POST` | `/api/document/projects/{id}/approve` | Có | Phê duyệt dàn bài nháp, kích hoạt sinh ảnh AI và xuất PPTX |
 | `POST` | `/api/document/projects/{id}/revise` | Có | Gửi các yêu cầu/nhận xét chỉnh sửa slide gửi lại AI |
-| `POST` | `/api/document/projects/{id}/export` | Có | Yêu cầu kết xuất file PowerPoint tải về từ S3 |
 
 ---
 
