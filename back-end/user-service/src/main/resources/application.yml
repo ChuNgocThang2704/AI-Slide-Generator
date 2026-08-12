@@ -59,3 +59,5 @@ google:
 app:
   rabbitmq:
     queue: ${RABBIT_QUEUE:notification_queue}
+lec-service:
+  url: https://lecgen.aitc.vn

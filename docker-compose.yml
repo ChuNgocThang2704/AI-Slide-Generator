@@ -100,6 +100,9 @@ services:
       RABBIT_PASS: ${RABBIT_PASS:-ai_password}
       RABBIT_VHOST: ${RABBIT_VHOST:-/}
       RABBIT_SSL_ENABLED: "false"
+      LEC_SERVICE_URL: ${LEC_SERVICE_URL:-https://lecgen.aitc.vn}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
