@@ -10,6 +10,7 @@ composing specialised mixins:
   - ImageExtractionMixin → services.content.image_extraction
 """
 import asyncio
+import copy
 import json
 from typing import Dict, List, Any, Optional, Callable, Awaitable
 import re
@@ -49,6 +50,9 @@ from services.lecture_quality import (
     select_relevant_source_excerpt,
 )
 from services.content.image_extraction import ImageExtractionMixin
+from services.presentation_mode import classify_presentation_mode, lock_presentation_mode
+from services.source_retrieval import retrieve_source_pages
+from services.deck_planner import generate_outline_first_deck
 
 
 try:
@@ -72,6 +76,11 @@ try:
         GEMINI_API_KEY,
         GEMINI_MODEL,
         GEMINI_TIMEOUT_SEC,
+        SOURCE_RETRIEVAL_ENABLED,
+        SOURCE_EMBEDDING_ENABLED,
+        SOURCE_EMBEDDING_MODEL,
+        SOURCE_RETRIEVAL_MIN_CONFIDENCE,
+        SOURCE_RETRIEVAL_MAX_PAGES,
         LLM_FINAL_COMPOSE,
         LLM_FINAL_COMPOSE_ENFORCE_OUTLINE,
         LLM_FINAL_COMPOSE_AUTO,
@@ -110,6 +119,11 @@ except Exception:
     GEMINI_API_KEY = ""
     GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
     GEMINI_TIMEOUT_SEC = 120.0
+    SOURCE_RETRIEVAL_ENABLED = True
+    SOURCE_EMBEDDING_ENABLED = True
+    SOURCE_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    SOURCE_RETRIEVAL_MIN_CONFIDENCE = 0.62
+    SOURCE_RETRIEVAL_MAX_PAGES = 8
     LLM_FINAL_COMPOSE = True
     LLM_FINAL_COMPOSE_ENFORCE_OUTLINE = False
     LLM_FINAL_COMPOSE_AUTO = True
@@ -382,7 +396,45 @@ class ContentExtractor(
         if len(source) <= max_chars:
             return source
 
-        page_index = build_source_page_index(source)
+        retrieval = None
+        retrieval_candidates = ""
+        if SOURCE_RETRIEVAL_ENABLED:
+            try:
+                retrieval = await asyncio.to_thread(
+                    retrieve_source_pages,
+                    source,
+                    instruction,
+                    model_name=SOURCE_EMBEDDING_MODEL,
+                    semantic_enabled=SOURCE_EMBEDDING_ENABLED,
+                    max_pages=SOURCE_RETRIEVAL_MAX_PAGES,
+                )
+                if retrieval.pages:
+                    retrieval_candidates = excerpt_from_source_pages(
+                        source,
+                        retrieval.pages,
+                        max_chars=max(max_chars, 50000),
+                        include_neighbors=False,
+                    )
+                    print(
+                        "[pipeline] source retrieval candidates "
+                        f"pages={retrieval.pages} "
+                        f"confidence={retrieval.confidence:.2f} "
+                        f"method={retrieval.method}"
+                    )
+                    if (
+                        retrieval.confidence >= SOURCE_RETRIEVAL_MIN_CONFIDENCE
+                        and not (self.vllm_available or self.gemini_available)
+                    ):
+                        return excerpt_from_source_pages(
+                            source,
+                            retrieval.pages,
+                            max_chars=max_chars,
+                            include_neighbors=True,
+                        )
+            except Exception as exc:
+                print(f"[pipeline] source retrieval failed: {exc}")
+
+        page_index = build_source_page_index(retrieval_candidates or source)
         if page_index and (self.vllm_available or self.gemini_available):
             messages = [
                 {
@@ -442,6 +494,19 @@ class ContentExtractor(
                 )
             except Exception as exc:
                 print(f"[pipeline] AI semantic scope failed: {exc}")
+
+        if (
+            retrieval is not None
+            and retrieval.pages
+            and retrieval.confidence >= SOURCE_RETRIEVAL_MIN_CONFIDENCE
+        ):
+            print("[pipeline] AI reranker unavailable; using retrieval candidates")
+            return excerpt_from_source_pages(
+                source,
+                retrieval.pages,
+                max_chars=max_chars,
+                include_neighbors=True,
+            )
 
         return select_relevant_source_excerpt(
             source,
@@ -607,7 +672,16 @@ class ContentExtractor(
         self._doc_title_hint = doc_title_hint or ""
         self._source_content = raw_content or ""
         self._focused_source_content = self._source_content
-        self._lecture_mode = detect_lecture_mode(self._source_content, self._user_instruction)
+        self._mode_decision = await classify_presentation_mode(
+            self, self._source_content, self._user_instruction
+        )
+        self._presentation_mode = str(self._mode_decision.get("mode") or "presentation")
+        self._lecture_mode = self._presentation_mode == "lecture"
+        print(
+            "[mode_classifier] "
+            f"mode={self._presentation_mode} confidence={self._mode_decision.get('confidence')} "
+            f"provider={self._mode_decision.get('provider')}"
+        )
         if self._lecture_mode:
             print("[pipeline] lecture mode enabled")
         original_language_hint = self._resolve_output_language_hint(
@@ -627,7 +701,7 @@ class ContentExtractor(
                 structured = await self._force_slide_count_exact(structured, target_slides_override)
             if progress_cb:
                 await progress_cb(1, 1)
-            return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
+            return self._finalize_presentation_mode(structured)
 
         # Nếu đầu vào là câu lệnh ngắn/dàn ý, tự động sinh nội dung chi tiết trước
         self._is_document_mode = not self._is_prompt_input(raw_content)
@@ -672,16 +746,18 @@ class ContentExtractor(
         # _llm_completion_plain_text() routes every pass to Gemini.
         if not self.vllm_available and not self.gemini_available:
             structured = self._normalize_structured_content(self._fallback_structure(raw_content))
-            if force_exact_slide_count and target_slides_override:
+            outline_locked = bool(structured.get("_outline_locked"))
+            if not outline_locked and force_exact_slide_count and target_slides_override:
                 structured = await self._force_slide_count_exact(structured, target_slides_override)
-            structured = await self._ensure_auto_min_slide_count(
-                structured,
-                target_slides_override=target_slides_override,
-                force_exact_slide_count=force_exact_slide_count,
-            )
+            if not outline_locked:
+                structured = await self._ensure_auto_min_slide_count(
+                    structured,
+                    target_slides_override=target_slides_override,
+                    force_exact_slide_count=force_exact_slide_count,
+                )
             if progress_cb:
                 await progress_cb(1, 1)
-            return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
+            return self._finalize_presentation_mode(structured)
 
         if progress_cb:
             self._progress_track_begin(progress_cb)
@@ -711,7 +787,7 @@ class ContentExtractor(
                     raw_content=raw_content,
                     hint=self._doc_title_hint,
                 )
-                return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
+                return self._finalize_presentation_mode(structured)
 
             if should_stop and await should_stop():
                 raise TaskCancelledError("Task cancelled by user")
@@ -735,26 +811,59 @@ class ContentExtractor(
                 )
             target_slides = int(target_slides_override or slide_plan.get("target") or 10)
 
-            structured = await self._expand_group_generate_refine_pipeline(
-                merged_summary, target_slides
-            )
-            if force_exact_slide_count and target_slides_override:
+            try:
+                print(f"[outline_first] planning exact {target_slides}-slide deck")
+                planned = await generate_outline_first_deck(
+                    self,
+                    source_text=merged_summary["content"],
+                    user_instruction=self._user_instruction,
+                    target_slides=target_slides,
+                    presentation_mode=self._presentation_mode,
+                    language=getattr(self, "_slide_lang_hint", "auto") or "auto",
+                )
+                # The outline author already satisfies the locked schema. The legacy
+                # normalizer may discard a short cover/closing slide, which breaks the
+                # exact-count contract before semantic review can run.
+                structured = copy.deepcopy(planned)
+                structured["requirement_spec"] = planned.get("requirement_spec") or []
+                structured["locked_outline"] = planned.get("locked_outline") or []
+                structured["_outline_locked"] = True
+                print("[outline_first] outline locked and deck authored")
+            except Exception as outline_error:
+                print(f"[outline_first] fallback to legacy pipeline: {outline_error}")
+                structured = await self._expand_group_generate_refine_pipeline(
+                    merged_summary, target_slides
+                )
+            outline_locked = bool(structured.get("_outline_locked"))
+            if not outline_locked and force_exact_slide_count and target_slides_override:
                 structured = await self._force_slide_count_exact(structured, target_slides_override)
-            structured = await self._ensure_auto_min_slide_count(
-                structured,
-                target_slides_override=target_slides_override,
-                force_exact_slide_count=force_exact_slide_count,
-            )
+            if not outline_locked:
+                structured = await self._ensure_auto_min_slide_count(
+                    structured,
+                    target_slides_override=target_slides_override,
+                    force_exact_slide_count=force_exact_slide_count,
+                )
             structured["title"] = self._resolve_deck_title(
                 candidate=structured.get("title"),
                 raw_content=raw_content,
                 hint=self._doc_title_hint,
             )
-            return enrich_lecture_deck(structured, self._source_content, self._user_instruction)
+            return self._finalize_presentation_mode(structured)
         finally:
             if progress_cb:
                 await self._progress_track_finalize()
                 self._progress_track_clear()
+
+    def _finalize_presentation_mode(self, structured: Dict[str, Any]) -> Dict[str, Any]:
+        deck = lock_presentation_mode(structured, getattr(self, "_mode_decision", None))
+        if deck.get("_outline_locked"):
+            return deck
+        return enrich_lecture_deck(
+            deck,
+            self._source_content,
+            self._user_instruction,
+            locked_mode=getattr(self, "_presentation_mode", ""),
+        )
 
     def _resolve_deck_title(
         self,
@@ -1339,6 +1448,7 @@ class ContentExtractor(
             "- Omit lecture-only fields or use presentation_mode='presentation' unless LECTURE MODE is active.\n"
             f"3. Each bullet: complete sentence, min ~10 words and ~45 chars, target ~10–18 words, hard max {MAX_WORDS_PER_BULLET} words, ends with a period; keep names, numbers, technical terms, function names exactly as in source; if an idea is long, use two bullets.\n"
             f"4. Each slide: 3–{MAX_BULLETS_PER_SLIDE} bullets (prefer 3–4 when tight on length); use {MAX_BULLETS_PER_SLIDE} only when every bullet stays short and complete.\n"
+            "   Exception: code, formulas, commands, and exact input/output examples may be short and need no final period. Keep them as separate bullet strings and preserve their executable syntax.\n"
             f"5. The source has about {section_count} major sections.\n"
             f"6. {expansion_rule}"
             "7. Paraphrase—do not copy verbatim; stay concise but complete; preserve technical vocabulary.\n"

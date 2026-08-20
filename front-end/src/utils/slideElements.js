@@ -21,26 +21,42 @@ const textElement = (role, content, x, y, width, height, style = {}) => ({
   style: { fontFamily: 'Inter, sans-serif', fontSize: 22, color: '#1a1a1a', textAlign: 'left', fontWeight: 400, ...style },
 });
 
-const CODE_LINE = /^\s*(?:>>>|\.\.\.|def\s+|class\s+|return\b|import\s+|from\s+\S+\s+import\s+|print\s*\(|if\s+.+:|for\s+.+:|while\s+.+:|[A-Za-z_]\w*\s*=)/;
+const CODE_LINE = /^\s*(?:>>>.*|\.\.\..*|def\s+.*|class\s+.*|return\b.*|import\s+.*|from\s+\S+\s+import\s+.*|print\s*\(.*|if\s+.+:|for\s+.+:|while\s+.+:|[A-Za-z_]\w*\s*=.*|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*\([^()\n]*\)\s*)$/;
+const CODE_PREFIX = /^\s*(?:(?:v[ií]\s+d[uụ](?:\s+m[aã])?|c[uú]\s+ph[aá]p|m[aã](?:\s+python)?|code|syntax|example)\s*:\s*)/i;
 const LANGUAGE_MARKER = /^\s*(?:python|py|javascript|typescript|java|c\+\+|cpp)\s*$/i;
 const escapeHtml = (value) => String(value || '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const bodyHtmlFromBullets = (bullets) => {
+const richBulletHtml = (item) => {
+  const value = String(item || '').trim();
+  if (/^[^:]{2,38}:$/.test(value)) {
+    return `<li class="slide-section-label">${escapeHtml(value.slice(0, -1))}</li>`;
+  }
+  const labelled = value.match(/^([^:]{2,32}):\s+(.+)$/);
+  if (labelled) {
+    return `<li><strong>${escapeHtml(labelled[1])}:</strong> ${escapeHtml(labelled[2])}</li>`;
+  }
+  return `<li>${escapeHtml(value)}</li>`;
+};
+const contentPartsFromBullets = (bullets) => {
   const normal = [];
   const code = [];
   (bullets || []).forEach((item) => {
-    const value = String(item || '').trim();
-    if (!value || LANGUAGE_MARKER.test(value)) return;
-    if (CODE_LINE.test(value)) code.push(value);
-    else normal.push(value);
+    const lines = String(item || '').split(/\r?\n/).filter((line) => line.trim());
+    lines.forEach((rawValue) => {
+      const value = rawValue.trim();
+      if (LANGUAGE_MARKER.test(value)) return;
+      const withoutPrefix = value.replace(CODE_PREFIX, '').trim();
+      if (CODE_LINE.test(value)) code.push(rawValue);
+      else if (withoutPrefix !== value && CODE_LINE.test(withoutPrefix)) code.push(withoutPrefix);
+      else normal.push(value.replace(/^\*\*(.+)\*\*$/, '$1'));
+    });
   });
-  const list = normal.length
-    ? `<ul>${normal.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
-    : '';
-  const codeBlock = code.length
-    ? `<pre class="slide-code-block"><code>${escapeHtml(code.join('\n'))}</code></pre>`
-    : '';
-  return `${list}${codeBlock}`;
+  const list = normal.length === 1 && code.length
+    ? `<p class="slide-lead">${escapeHtml(normal[0])}</p>`
+    : normal.length
+      ? `<ul class="slide-content-flow">${normal.map(richBulletHtml).join('')}</ul>`
+      : '';
+  return { body: list, code: code.join('\n'), normal, codeLines: code };
 };
 
 const isVietnameseSlide = (slide) => {
@@ -52,17 +68,17 @@ const isVietnameseSlide = (slide) => {
     || /\b(bài giảng|tổng kết|mục tiêu|nội dung|cảm ơn)\b/i.test(text);
 };
 
-const contentTextMetrics = (slide) => {
+const contentTextMetrics = (slide, options = {}) => {
   const bullets = Array.isArray(slide?.bullets) ? slide.bullets.filter(Boolean) : [];
   const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
-  const width = slide?.imageUrl ? 430 : 832;
+  const width = slide?.imageUrl ? 452 : 832;
   const x = slide?.imageUrl ? 64 : bullets.length <= 4 ? 84 : 64;
   const adjustedWidth = slide?.imageUrl ? width : bullets.length <= 4 ? 792 : width;
   const lineHeight = bullets.length <= 4 ? 1.6 : 1.5;
   const fontSize = fitTextToBox(bullets.join('\n'), {
     width: adjustedWidth,
-    height: 344,
-    min: hasVisual ? 12 : 13,
+    height: options.height || 344,
+    min: hasVisual ? 14 : 15,
     max: hasVisual ? 22 : 24,
     lineHeight,
     itemCount: bullets.length,
@@ -170,8 +186,21 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     return elements;
   }
 
-  const contentMetrics = contentTextMetrics(slide);
-  const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
+  const sourceBullets = Array.isArray(slide?.bullets) ? slide.bullets.filter(Boolean) : [];
+  const sourceTextLength = sourceBullets.join(' ').length;
+  const contentParts = sourceBullets.length
+    ? contentPartsFromBullets(sourceBullets)
+    : { body: slide?.text || slide?.subtitle || slide?.richText?.bullets || slide?.richText?.text || '', code: '', normal: [] };
+  const body = contentParts.body;
+  const hasCode = Boolean(contentParts.code);
+  // Dense teaching slides are clearer as full-width text. A decorative image
+  // should not force the lesson itself into an undersized column. Code already
+  // provides the visual anchor, so code and decorative imagery never compete.
+  const showImage = Boolean(slide?.imageUrl)
+    && !hasCode
+    && sourceBullets.length <= 7
+    && sourceTextLength <= 760;
+  const hasVisual = Boolean(showImage || slide?.table || slide?.chart);
   const titleFontSize = fitTextToBox(slide?.title || slide?.richText?.title, {
     width: 832,
     height: 66,
@@ -184,27 +213,63 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     fontFamily: colors.title, fontSize: titleFontSize, color: colors.text, fontWeight: 700, lineHeight: 1.2,
   }));
 
-  const body = Array.isArray(slide?.bullets) && slide.bullets.length
-    ? bodyHtmlFromBullets(slide.bullets)
-    : slide?.text || slide?.subtitle || slide?.richText?.bullets || slide?.richText?.text || '';
+  const normalTextLength = contentParts.normal.join(' ').length;
+  const codeBodyHeight = body
+    ? Math.min(150, Math.max(
+      78,
+      (contentParts.normal.length * 24) + (Math.ceil(normalTextLength / 90) * 14),
+    ))
+    : 0;
+  const bodyHeight = hasCode ? codeBodyHeight : 344;
+  const bodyMetrics = contentTextMetrics(
+    { ...slide, imageUrl: showImage ? slide?.imageUrl : '', bullets: contentParts.normal },
+    { height: bodyHeight },
+  );
   if (body && !slide?.table && !slide?.chart) elements.push(textElement(
     'body',
     body,
-    contentMetrics.x,
+    bodyMetrics.x,
     126,
-    contentMetrics.width,
-    344,
+    bodyMetrics.width,
+    bodyHeight,
     {
       fontFamily: colors.body,
-      fontSize: contentMetrics.fontSize,
+      fontSize: bodyMetrics.fontSize,
       color: colors.sub,
-      lineHeight: contentMetrics.lineHeight,
+      lineHeight: bodyMetrics.lineHeight,
     },
   ));
-  if (slide?.imageUrl) {
+  if (hasCode && !slide?.table && !slide?.chart) {
+    const codeY = body ? 126 + bodyHeight + 12 : 126;
+    const codeHeight = 470 - codeY;
+    const codeWidth = 832;
+    const codeSize = fitTextToBox(contentParts.code, {
+      width: codeWidth - 28,
+      height: codeHeight - 24,
+      min: 13,
+      max: 20,
+      lineHeight: 1.42,
+      padding: 0,
+    });
+    elements.push(textElement(
+      'code',
+      `<pre class="slide-code-block"><code>${escapeHtml(contentParts.code)}</code></pre>`,
+      64,
+      codeY,
+      codeWidth,
+      codeHeight,
+      {
+        fontFamily: "'JetBrains Mono','Cascadia Code',Consolas,monospace",
+        fontSize: codeSize,
+        color: '#e2e8f0',
+        lineHeight: 1.42,
+      },
+    ));
+  }
+  if (showImage) {
     elements.push({
-      id: id(), type: 'image', role: 'image', x: 540, y: 135,
-      width: 350, height: 300, rotation: 0, src: slide.imageUrl,
+      id: id(), type: 'image', role: 'image', x: 550, y: 140,
+      width: 330, height: 290, rotation: 0, src: slide.imageUrl,
       objectFit: inferImageFit(slide),
     });
   }

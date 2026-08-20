@@ -20,11 +20,22 @@ from config import (
 
 def _has_explicit_slide_outline(text: str) -> bool:
     """Detect orchestration intent without interpreting domain content."""
+    raw_text = str(text or "")
     numbers = {
         int(value)
-        for value in re.findall(r"\b(?:slide|trang)\s*(?:so|thu|số|thứ)?\s*(\d+)\b", str(text or ""), re.IGNORECASE)
+        for value in re.findall(r"\b(?:slide|trang)\s*(?:so|thu|số|thứ)?\s*(\d+)\b", raw_text, re.IGNORECASE)
     }
-    return len(numbers) >= 2
+    if len(numbers) >= 2:
+        return True
+    if not re.search(r"(?:slide|trang|bài\s+trình\s+chiếu)", raw_text, re.IGNORECASE):
+        return False
+    numbered = sorted({
+        int(match.group(1))
+        for match in re.finditer(r"(?m)^\s*(\d{1,2})[.)]\s+\S.+$", raw_text)
+    })
+    return len(numbered) >= 4 and numbered == list(range(1, numbered[-1] + 1))
+
+
 def _resolve_plan_image_limit(
     plan: Optional[str],
     slide_count: Optional[int],
@@ -446,7 +457,11 @@ class RedisQueue:
             )
             user_instruction = str(task_data.get("user_instruction") or "").strip()
             instruction_text = user_instruction or str(raw_content or "")
-            if user_instruction and _has_explicit_slide_outline(user_instruction):
+            if (
+                user_instruction
+                and not structured_content.get("_outline_locked")
+                and _has_explicit_slide_outline(user_instruction)
+            ):
                 structured_content = await content_extractor.revise_slide_deck(
                     structured_content,
                     "Follow this numbered slide outline exactly. Preserve the requested slide order, count, visual type, labels, values, columns, and rows. "
@@ -460,22 +475,25 @@ class RedisQueue:
             # ── Text quality pass ─────────────────────────────────────
             from services.slide_text_quality import improve_slide_text_quality
             from services.slide_quality import build_visual_plan, improve_deck_source_grounding
-            structured_content = await improve_slide_text_quality(
-                content_extractor,
-                structured_content,
-                task_id=task_id,
-                max_refines=8,
-                source_language=(
-                    content_extractor._detect_output_language_hint(raw_content or "")
-                    if raw_content
-                    else getattr(content_extractor, "_slide_lang_hint", "auto")
-                ),
-            )
-            if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+            if not structured_content.get("_outline_locked"):
+                structured_content = await improve_slide_text_quality(
+                    content_extractor,
+                    structured_content,
+                    task_id=task_id,
+                    max_refines=8,
+                    source_language=(
+                        content_extractor._detect_output_language_hint(raw_content or "")
+                        if raw_content
+                        else getattr(content_extractor, "_slide_lang_hint", "auto")
+                    ),
+                )
+            if (not structured_content.get("_outline_locked") and force_exact_slide_count
+                    and target_slides_override and isinstance(structured_content, dict)):
                 structured_content = await content_extractor._force_slide_count_exact(
                     structured_content, int(target_slides_override)
                 )
-            if not structured_content.get("_explicit_slide_mode"):
+            if (not structured_content.get("_explicit_slide_mode")
+                    and not structured_content.get("_outline_locked")):
                 structured_content = await improve_deck_source_grounding(
                     content_extractor,
                     structured_content,
@@ -770,6 +788,11 @@ class RedisQueue:
             raw_content = task_data.get("raw_content") or ""
             instruction_text = str(task_data.get("user_instruction") or raw_content or "")
 
+            # Both branches below perform substantial AI work. Previously only
+            # the raw-content branch advanced to 20%, so pre-structured tasks
+            # appeared frozen at 10% until the visual stage (58%).
+            await self.update_task_status(task_id, "processing", progress=20)
+
             if structured_content:
                 # Nếu đã có content structured sẵn
                 if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
@@ -786,8 +809,6 @@ class RedisQueue:
                         structured_content, int(target_slides_override)
                     )
             else:
-                await self.update_task_status(task_id, "processing", progress=20)
-                
                 async def on_chunk(done: int, total: int):
                     if total <= 0:
                         return
@@ -806,23 +827,28 @@ class RedisQueue:
                     user_instruction=task_data.get("user_instruction"),
                 )
 
-                structured_content = await improve_slide_text_quality(
-                    content_extractor,
-                    structured_content,
-                    task_id=task_id,
-                    max_refines=8,
-                    source_language=(
-                        content_extractor._detect_output_language_hint(raw_content or "")
-                        if raw_content
-                        else getattr(content_extractor, "_slide_lang_hint", "auto")
-                    ),
-                )
-                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
+                if not structured_content.get("_outline_locked"):
+                    structured_content = await improve_slide_text_quality(
+                        content_extractor,
+                        structured_content,
+                        task_id=task_id,
+                        max_refines=8,
+                        source_language=(
+                            content_extractor._detect_output_language_hint(raw_content or "")
+                            if raw_content
+                            else getattr(content_extractor, "_slide_lang_hint", "auto")
+                        ),
+                    )
+                if (not structured_content.get("_outline_locked") and force_exact_slide_count
+                        and target_slides_override and isinstance(structured_content, dict)):
                     structured_content = await content_extractor._force_slide_count_exact(
                         structured_content, int(target_slides_override)
                     )
 
-            if not structured_content.get("_explicit_slide_mode"):
+            await self.update_task_status(task_id, "processing", progress=55)
+
+            if (not structured_content.get("_explicit_slide_mode")
+                    and not structured_content.get("_outline_locked")):
                 structured_content = await improve_deck_source_grounding(
                     content_extractor,
                     structured_content,

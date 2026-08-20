@@ -216,7 +216,13 @@ class SlidePipelineMixin:
             "2) SLIDE DENSITY:\n"
             "- Each slide MUST have 3–4 bullets.\n"
             "- Never fewer than 3 bullets.\n"
-            "- If the section is thin, invent substantive expansion (still faithful to the topic).\n\n"
+            "- Keep visible slide copy near 500 characters; never exceed roughly 760 characters on a slide that "
+            "uses an image. Put secondary explanation in speaker notes instead of shrinking the slide text.\n"
+            "- If the section is thin, expand with stable conceptual explanation, definitions, relationships, "
+            "or clearly framed teaching examples that remain faithful to the topic.\n"
+            "- Never invent statistics, percentages, dates, named studies, measured outcomes, quotations, "
+            "or document-specific claims. Use a numeric example only when the user explicitly allows "
+            "illustrative/sample/simulated data, and label it as illustrative.\n\n"
             "3) BULLET QUALITY:\n"
             f"- Each bullet MUST be a detailed, rich, complete sentence of {BULLET_WORD_RANGE} words (Vietnamese/English).\n"
             "- Do NOT write short, fragmented bullet points or labels (e.g. write a full sentence, not just a keyword phrase).\n"
@@ -246,6 +252,10 @@ class SlidePipelineMixin:
             "- End with a short, natural bridge to the next idea when appropriate; do not mention slide numbers.\n\n"
             "5) STRUCTURE:\n"
             "- Group related points on the same slide.\n"
+            "- When content naturally contains categories, stages, criteria, or techniques, expose hierarchy with "
+            "2-4 bullets in 'Short label: complete explanation' form. Do not force labels onto a simple narrative.\n"
+            "- Never present a long flat list of equally weighted details; retain the main ideas visibly and move "
+            "supporting detail to speaker notes.\n"
             "- No \"(continued)\" / \"(tiếp)\" slides.\n\n"
             "5b) SLIDE TITLES:\n"
             "- Each slide title must be specific, descriptive, and meaningful (3-8 words).\n"
@@ -443,6 +453,7 @@ class SlidePipelineMixin:
             "- Each bullet: context + explanation + impact or significance—in rich wording.\n"
             f"- Rewrite shallow/short bullets into clear complete statements of {BULLET_WORD_RANGE} words; fix vague bullets with concrete detail.\n"
             "- Ensure each bullet carries meaningful information—not filler or labels.\n"
+            "- Code, formulas, commands, and exact input/output lines are exempt from prose length rules. Keep them exact and in separate bullet strings; never expand executable syntax into prose.\n"
             "- Fix thin or broken bullets; do not only fix spelling.\n"
             "- Merge slides with fewer than 2 bullets into the previous slide.\n"
             "- Each slide should have 3–4 bullets.\n"
@@ -1139,6 +1150,72 @@ class SlidePipelineMixin:
         )
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
+    @staticmethod
+    def _slide_density_metrics(slide: Dict[str, Any]) -> Dict[str, Any]:
+        bullets = slide.get("bullets") or []
+        if not isinstance(bullets, list):
+            bullets = []
+        clean = [re.sub(r"\s+", " ", str(item or "")).strip() for item in bullets]
+        clean = [item for item in clean if item]
+        visible_chars = sum(len(item) for item in clean)
+        layout = str(slide.get("layout") or "").strip().lower()
+        role = str(slide.get("pedagogical_role") or "").strip().lower()
+        joined = "\n".join(clean)
+        has_structured_visual = bool(
+            slide.get("table")
+            or slide.get("chart")
+            or layout in {"text_table", "table", "text_chart", "chart"}
+        )
+        has_code = bool(
+            layout in {"code", "text_code"}
+            or re.search(r"```|^\s*(?:def|class|function)\s+\w+|^\s*(?:for|while|if)\s+.+:", joined, re.M)
+        )
+        boundary = layout in {"intro", "title", "cover", "thankyou", "thank_you", "closing"}
+        max_bullets = 8 if role in {"knowledge_check", "practice", "exercise"} else 6
+        overloaded = not (has_structured_visual or has_code or boundary) and (
+            len(clean) > max_bullets
+            or visible_chars > 760
+            or (len(clean) >= 6 and visible_chars > 620)
+            or any(len(item) > 190 for item in clean)
+        )
+        return {
+            "bullets": clean,
+            "visible_chars": visible_chars,
+            "max_bullets": max_bullets,
+            "exempt": has_structured_visual or has_code or boundary,
+            "overloaded": overloaded,
+        }
+
+    def _build_reduce_density_messages(
+        self,
+        deck_title: str,
+        slide: Dict[str, Any],
+        metrics: Dict[str, Any],
+    ) -> List[Dict[str, str]]:
+        payload = {
+            "title": str(slide.get("title") or ""),
+            "bullets": metrics["bullets"],
+            "notes": str(slide.get("notes") or slide.get("script") or ""),
+        }
+        system_msg = self._llm_system_prefix() + (
+            "You are the final presentation-density editor. Reduce only the visible copy of one overloaded slide.\n\n"
+            "RULES:\n"
+            "- Preserve the exact topic, meaning, factual claims, numbers, names, and language.\n"
+            "- Return 3-6 complete, presentation-ready bullets, at most 650 visible characters in total.\n"
+            "- Merge closely related points using short semantic labels when natural.\n"
+            "- Move supporting explanation omitted from the visible bullets into speaker notes.\n"
+            "- Do not invent facts, remove a distinct primary idea, change the title, or mention this editing task.\n"
+            "- Notes must remain useful narration, not a dump of fragments.\n"
+            "Return ONLY JSON: {\"bullets\":[\"...\"],\"notes\":\"...\"}\n"
+        )
+        user_msg = (
+            f"Deck title: {deck_title}\n"
+            f"Overloaded slide JSON: {json.dumps(payload, ensure_ascii=False)}\n"
+            "Rewrite its visible bullets and notes now."
+            + self._user_lang_reminder()
+        )
+        return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
+
     async def _run_final_density_gate(self, structured: Dict[str, Any]) -> Dict[str, Any]:
         """Đảm bảo mỗi slide có ít nhất mật độ gạch đầu dòng đã cấu hình."""
         if not isinstance(structured, dict):
@@ -1162,7 +1239,9 @@ class SlidePipelineMixin:
                 s["title"] = self._strip_continued_suffix(str(s.get("title") or "Nội dung"))
 
         # 2) Mượn tạm gạch đầu dòng từ các slide lân cận trước khi gọi LLM.
-        for i, s in enumerate(slides):
+        # Normalize locally; never borrow bullets from neighbouring slides because
+        # doing so can satisfy a count while corrupting the requested scope.
+        for s in slides:
             if not isinstance(s, dict):
                 continue
             role = str(s.get("pedagogical_role") or "").strip().lower()
@@ -1175,21 +1254,7 @@ class SlidePipelineMixin:
             bs = s.get("bullets") or []
             if not isinstance(bs, list):
                 bs = []
-            while len(bs) < min_b:
-                moved = False
-                if i - 1 >= 0 and isinstance(slides[i - 1], dict):
-                    prev = slides[i - 1].get("bullets") or []
-                    if isinstance(prev, list) and len(prev) > min_b:
-                        bs.insert(0, prev.pop())
-                        moved = True
-                if not moved and i + 1 < len(slides) and isinstance(slides[i + 1], dict):
-                    nxt = slides[i + 1].get("bullets") or []
-                    if isinstance(nxt, list) and len(nxt) > min_b:
-                        bs.append(nxt.pop(0))
-                        moved = True
-                if not moved:
-                    break
-            s["bullets"] = bs[:MAX_BULLETS_PER_SLIDE]
+            s["bullets"] = [str(item or "").strip() for item in bs if str(item or "").strip()]
 
         # 3) Sử dụng LLM để tăng mật độ gạch đầu dòng chỉ cho các slide còn quá mỏng.
         for s in slides:
@@ -1230,6 +1295,53 @@ class SlidePipelineMixin:
                         rewrites += 1
             except Exception as e:
                 print(f"Final density gate failed ({title!r}): {e}")
+
+        # Reduce overloaded ordinary slides. Tables, charts, code and deck
+        # boundaries use dedicated renderers and are deliberately left intact.
+        for s in slides:
+            if rewrites >= max_rw:
+                break
+            if not isinstance(s, dict):
+                continue
+            metrics = self._slide_density_metrics(s)
+            if not metrics["overloaded"]:
+                continue
+            original_notes = str(s.get("notes") or s.get("script") or "").strip()
+            try:
+                data = await self._request_json_dict(
+                    self._build_reduce_density_messages(deck_title, s, metrics),
+                    target_slides=1,
+                    fast_mode=False,
+                    compose_mode=False,
+                    structured_output="slide_density",
+                )
+                candidate = data.get("bullets") if isinstance(data, dict) else None
+                if not isinstance(candidate, list):
+                    continue
+                candidate = [
+                    self._repair_incomplete_tail(str(item or "").strip())
+                    for item in candidate
+                    if str(item or "").strip()
+                ]
+                candidate_chars = sum(len(item) for item in candidate)
+                candidate_notes = str(data.get("notes") or "").strip()
+                improved = (
+                    3 <= len(candidate) <= 6
+                    and candidate_chars <= 700
+                    and candidate_chars < metrics["visible_chars"]
+                    and sum(1 for item in candidate if self._bullet_needs_final_fix(item)) <= 1
+                )
+                if improved:
+                    s["bullets"] = candidate
+                    s["notes"] = candidate_notes or original_notes
+                    rewrites += 1
+                    print(
+                        f"[slide_pipeline] density reduced: {s.get('title')!r} "
+                        f"{len(metrics['bullets'])}/{metrics['visible_chars']} -> "
+                        f"{len(candidate)}/{candidate_chars}"
+                    )
+            except Exception as e:
+                print(f"Final density reduction failed ({s.get('title')!r}): {e}")
 
         return structured
 
@@ -1693,6 +1805,12 @@ class SlidePipelineMixin:
             + "CRITICAL QUALITY RULES:\n"
             "1. NO TRUNCATION: Fix any bullet point that is cut off or incomplete. Vietnamese bullets MUST NOT end with a preposition/conjunction/function word followed by a period (e.g., 'của.', 'cho.', 'với.', 'để.', 'gồm.', 'và.', 'hoặc.'). Complete the sentence or rewrite it.\n"
             f"2. BULLET LENGTH & STRUCTURE: Each bullet must be a single complete sentence, containing roughly {BULLET_WORD_RANGE} words (hard max {MAX_WORDS_PER_BULLET} words). No bullet should be a single phrase/label or a huge paragraph.\n"
+            "2b. VISUAL DENSITY: Keep ordinary slides at 3-6 visible bullets and near 500 characters. A slide intended "
+            "for an image must remain below roughly 760 visible characters. Preserve central ideas on-slide and move "
+            "secondary explanation to notes; never solve crowding by producing tiny text. When natural semantic groups "
+            "exist, use 'Short label: complete explanation' bullets instead of a flat list.\n"
+            "Practice and knowledge-check slides must show at most 6 primary prompts; place optional variants and "
+            "answer guidance in speaker notes.\n"
             "3. SLIDE TITLES: Sửa các slide title chung chung hoặc là placeholder ('Nội dung', 'Slide 1', 'Tiếp theo') bằng một tiêu đề cụ thể, mô tả chính xác nội dung các bullet của slide đó. Độ dài tiêu đề slide từ 3-8 từ.\n"
             "4. NO DUPLICATIONS: Xóa bỏ các slide hoặc bullet bị lặp ý hoàn toàn. Nếu slide quá mỏng (< 2 bullets), hãy mượn hoặc ghép nó vào slide hợp lý trước đó.\n"
             "5. PRESERVE TECHNICAL DETAILS: Giữ nguyên các thuật ngữ chuyên ngành, tên hàm, số liệu kỹ thuật, tên thuật toán từ slide gốc.\n\n"

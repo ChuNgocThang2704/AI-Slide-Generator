@@ -39,3 +39,23 @@ def plain_slide_text(value: Any) -> str:
     # valid programming syntax and must survive API payload serialization.
     t = re.sub(r"\s{2,}", " ", t)
     return t.strip()
+
+
+def plain_slide_block(value: Any) -> str:
+    """Clean visible text while preserving code-block newlines and indentation."""
+    raw = str(value or "")
+    if "\n" not in raw and "\r" not in raw:
+        return plain_slide_text(raw)
+    lines: List[str] = []
+    for source_line in raw.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if not source_line.strip():
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        leading = len(source_line) - len(source_line.lstrip(" "))
+        cleaned = plain_slide_text(source_line.strip())
+        if cleaned:
+            lines.append(f"{' ' * leading}{cleaned}")
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)

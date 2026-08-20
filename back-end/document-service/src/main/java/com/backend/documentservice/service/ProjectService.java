@@ -343,15 +343,20 @@ public class ProjectService {
                 Project proj = projectRepository.findById(projectId).orElse(project);
                 
                 String deckTitle = parsedResponse.path("deck").path("title").asText("");
-                if (!deckTitle.isEmpty()) {
-                    proj.setName(deckTitle);
-                }
                 applyDeckMetadata(proj, parsedResponse.path("deck"));
 
                 // Cập nhật cả 2 task log sang SUCCESS khi hoàn thành
                 updateAiTaskLogsFromProgress(proj.getId(), "completed", null);
 
                 JsonNode generatedSlides = parsedResponse.path("deck").path("slides");
+                String coverTitle = generatedSlides.isArray() && !generatedSlides.isEmpty()
+                        ? generatedSlides.get(0).path("title").asText("").trim()
+                        : "";
+                if (isUsableGeneratedProjectName(coverTitle)) {
+                    proj.setName(coverTitle);
+                } else if (isUsableGeneratedProjectName(deckTitle)) {
+                    proj.setName(deckTitle.trim());
+                }
                 log.info("[document-service] AI sinh thành công {} slide cho project ID: {}", generatedSlides.size(), proj.getId());
 
                 ObjectMapper mapper = new ObjectMapper();
@@ -1400,6 +1405,11 @@ public class ProjectService {
     }
 
     private String generateProjectName(String prompt, String fileName) {
+        String conciseName = buildConciseProjectName(prompt, fileName);
+        if (conciseName != null) {
+            return conciseName;
+        }
+
         if (prompt != null && !prompt.isBlank()) {
             String name = prompt.trim().replaceAll("\\s+", " ");
             
@@ -1438,6 +1448,64 @@ public class ProjectService {
         }
 
         return "Dự án slide mới (" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM HH:mm")) + ")";
+    }
+
+    static String buildConciseProjectName(String prompt, String fileName) {
+        String name = prompt == null ? "" : prompt.trim().replaceAll("\\s+", " ");
+        if (!name.isBlank()) {
+            name = name
+                    .replaceFirst("(?iu)^(?:(?:bạn|you)\\s+(?:là|are)\\s+.*?[.!?;:]\\s*)", "")
+                    .replaceFirst("(?iu)^(?:hãy\\s+)?(?:tạo|làm|soạn|viết|thiết kế|create|make|prepare|generate)\\s+(?:đúng\\s+|exactly\\s+)?(?:\\d+\\s+)?(?:slide|slides|trang chiếu|bài thuyết trình|bài giảng|presentation|lecture)\\s*", "")
+                    .replaceFirst("(?iu)^(?:bằng|in)\\s+(?:tiếng\\s+)?(?:việt|anh|vietnamese|english)\\s*", "")
+                    .replaceFirst("(?iu)^(?:về|on|about|chủ đề|topic)\\s+", "");
+
+            String[] instructionMarkers = {
+                    "(?iu)[.!?;]\\s*(?=(?:bạn|you)\\s+(?:là|are)\\b)",
+                    "(?iu)[.!?;]\\s*(?=(?:yêu cầu|requirements?|hãy|please|đối tượng|audience|phong cách|style|mục tiêu|goal)\\b)",
+                    "(?iu)\\s+(?=(?:bạn|you)\\s+(?:là|are)\\s+(?:một\\s+)?(?:chuyên gia|expert)\\b)",
+                    "(?iu)\\s+(?=(?:yêu cầu|requirements?|đối tượng|audience|phong cách|style)\\s*:)"
+            };
+            for (String marker : instructionMarkers) {
+                name = name.split(marker, 2)[0].trim();
+            }
+
+            name = name
+                    .replaceFirst("(?iu)\\s+(?:bằng|in)\\s+(?:tiếng\\s+)?(?:việt|anh|vietnamese|english)\\b.*$", "")
+                    .replaceFirst("(?iu)[,;:]?\\s+(?:gồm|bao gồm|with|including)\\s+\\d+\\s+(?:slide|slides|trang).*$", "")
+                    .replaceAll("^[\\s:,.\\-–—]+|[\\s:,.\\-–—]+$", "")
+                    .trim();
+
+            if (!name.isBlank() && !name.matches("(?iu)^(?:slide|slides|presentation|bài giảng|bài thuyết trình)$")) {
+                name = Character.toUpperCase(name.charAt(0)) + name.substring(1);
+                if (name.length() > 64) {
+                    int lastSpace = name.lastIndexOf(' ', 61);
+                    name = (lastSpace > 20 ? name.substring(0, lastSpace) : name.substring(0, 61)) + "...";
+                }
+                return name;
+            }
+        }
+
+        if (fileName != null && !fileName.isBlank()) {
+            String cleanFileName = fileName
+                    .replaceFirst("(?i)\\.(pdf|docx?|pptx?|txt)$", "")
+                    .replaceAll("[_-]+", " ")
+                    .replaceAll("\\s+", " ")
+                    .trim();
+            if (!cleanFileName.isBlank()) {
+                return Character.toUpperCase(cleanFileName.charAt(0)) + cleanFileName.substring(1);
+            }
+        }
+        return null;
+    }
+
+    private static boolean isUsableGeneratedProjectName(String value) {
+        String title = value == null ? "" : value.trim();
+        if (title.length() < 3 || title.length() > 100) {
+            return false;
+        }
+        return !title.matches(
+                "(?iu)^(?:slide|slides|presentation|bài giảng|bài thuyết trình|nội dung|untitled)(?:\\s+\\d+)?$"
+        );
     }
 
     private Integer determineFileType(String fileName) {

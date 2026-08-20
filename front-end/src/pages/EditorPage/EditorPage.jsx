@@ -158,6 +158,7 @@ export default function EditorPage() {
   const presentationRef = useRef(null);
   const editVersionRef = useRef(0);
   const slidesRef = useRef([]);
+  const loadedProjectIdRef = useRef(null);
   const hasUnsavedChangesRef = useRef(false);
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
@@ -172,15 +173,25 @@ export default function EditorPage() {
 
   // ── Effects ──
   useEffect(() => {
+    let cancelled = false;
+    loadedProjectIdRef.current = null;
+    slidesRef.current = [];
+    setSlides([]);
+    setActiveIdx(0);
+    setSelectedSlideIndexes(new Set());
+    setLoadingSlides(true);
+
     const fetchSlides = async () => {
-      setLoadingSlides(true);
       try {
         const project = await projectService.getById(id);
+        if (cancelled) return;
         setProjects([project, ...projects.filter((item) => item.id !== project.id)]);
         const pages = await projectService.getSlidePages(id);
+        if (cancelled) return;
         if (pages && pages.length > 0) {
           const formattedSlides = formatSlideDeck(pages, project.presentationMode);
           slidesRef.current = formattedSlides;
+          loadedProjectIdRef.current = id;
           undoStackRef.current = [];
           redoStackRef.current = [];
           setHistoryVersion((version) => version + 1);
@@ -194,20 +205,25 @@ export default function EditorPage() {
           }
         } else {
           slidesRef.current = [];
+          loadedProjectIdRef.current = id;
           hasUnsavedChangesRef.current = false;
           setSlides([]);
         }
       } catch (err) {
+        if (cancelled) return;
         console.error('Không thể tải slides từ API:', err);
         setSlides([]);
         addToast('Không thể mở project: ' + err.message, 'error');
         navigate('/dashboard');
       } finally {
-        setLoadingSlides(false);
+        if (!cancelled) setLoadingSlides(false);
       }
     };
 
     fetchSlides();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   useEffect(() => {
@@ -896,6 +912,10 @@ export default function EditorPage() {
   }, []);
 
   const handleExportPPTX = async () => {
+    if (loadingSlides || loadedProjectIdRef.current !== id || !slidesRef.current.length) {
+      addToast('Slide chưa tải xong, vui lòng chờ trong giây lát', 'warning');
+      return;
+    }
     setShowPptxMenu(false);
     setExporting(true);
     addToast('Đang lưu slides trước khi xuất...', 'info');
@@ -927,6 +947,10 @@ export default function EditorPage() {
   };
 
   const handleExportEditablePPTX = async () => {
+    if (loadingSlides || loadedProjectIdRef.current !== id || !slidesRef.current.length) {
+      addToast('Slide chưa tải xong, vui lòng chờ trong giây lát', 'warning');
+      return;
+    }
     setShowPptxMenu(false);
     setExporting(true);
     addToast('Đang tạo PPTX có thể chỉnh sửa...', 'info');
@@ -950,6 +974,10 @@ export default function EditorPage() {
   };
 
   const handleExportPDF = async () => {
+    if (loadingSlides || loadedProjectIdRef.current !== id || !slidesRef.current.length) {
+      addToast('Slide chưa tải xong, vui lòng chờ trong giây lát', 'warning');
+      return;
+    }
     setExporting(true);
     addToast('Đang tạo file PDF...', 'info');
     try {
@@ -1083,7 +1111,7 @@ export default function EditorPage() {
             id="export-pptx-btn" 
             className="btn btn-primary btn-sm flex items-center gap-1" 
             onClick={() => setShowPptxMenu((open) => !open)}
-            disabled={exporting || slides.length === 0} 
+            disabled={exporting || loadingSlides || loadedProjectIdRef.current !== id || slides.length === 0}
             style={{ background: '#27ae60', border: '1px solid #219653', color: 'white', height: 32 }}
           >
             {exporting ? <><Loader2 size={14} className="spin"/> Đang xuất...</> : <><Download size={14}/> Xuất PPTX</>}
@@ -1100,7 +1128,7 @@ export default function EditorPage() {
               </button>
             </div>
           )}
-          <button className="btn btn-ghost btn-sm" onClick={handleExportPDF} disabled={exporting || slides.length === 0}>
+          <button className="btn btn-ghost btn-sm" onClick={handleExportPDF} disabled={exporting || loadingSlides || loadedProjectIdRef.current !== id || slides.length === 0}>
             <FileText size={14}/> Xuất PDF
           </button>
         </div>

@@ -20,6 +20,15 @@ services:
       - IMAGE_GEN_API_BASE_URL=${IMAGE_GEN_API_BASE_URL:-http://host.docker.internal:8080}
       - IMAGE_SENSITIVE_ALLOW_FLUX=${IMAGE_SENSITIVE_ALLOW_FLUX:-true}
       - LLM_MODEL=${LLM_MODEL:-Qwen3-VL-8B}
+      - VLLM_API_BASE_URL=${VLLM_API_BASE_URL:-}
+      - VLLM_BASIC_AUTH_USER=${VLLM_BASIC_AUTH_USER:-}
+      - VLLM_BASIC_AUTH_PASS=${VLLM_BASIC_AUTH_PASS:-}
+      - SOURCE_RETRIEVAL_ENABLED=${SOURCE_RETRIEVAL_ENABLED:-true}
+      - SOURCE_EMBEDDING_ENABLED=${SOURCE_EMBEDDING_ENABLED:-true}
+      - SOURCE_EMBEDDING_MODEL=${SOURCE_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+      - SOURCE_RETRIEVAL_MIN_CONFIDENCE=${SOURCE_RETRIEVAL_MIN_CONFIDENCE:-0.62}
+      - SOURCE_RETRIEVAL_MAX_PAGES=${SOURCE_RETRIEVAL_MAX_PAGES:-8}
+      - SOURCE_EMBEDDING_CACHE_DIR=/app/.cache/fastembed
       - IMAGE_VLM_JUDGE_MODEL=${IMAGE_VLM_JUDGE_MODEL:-Qwen3-VL-8B}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -27,6 +36,7 @@ services:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
       - ./backend/service-account.json:/app/service-account.json:ro
+      - embedding-cache:/app/.cache/fastembed
     depends_on:
       - redis
 
@@ -63,6 +73,15 @@ services:
       - IMAGE_GEN_API_BASE_URL=${IMAGE_GEN_API_BASE_URL:-http://host.docker.internal:8080}
       - IMAGE_SENSITIVE_ALLOW_FLUX=${IMAGE_SENSITIVE_ALLOW_FLUX:-true}
       - LLM_MODEL=${LLM_MODEL:-Qwen3-VL-8B}
+      - VLLM_API_BASE_URL=${VLLM_API_BASE_URL:-}
+      - VLLM_BASIC_AUTH_USER=${VLLM_BASIC_AUTH_USER:-}
+      - VLLM_BASIC_AUTH_PASS=${VLLM_BASIC_AUTH_PASS:-}
+      - SOURCE_RETRIEVAL_ENABLED=${SOURCE_RETRIEVAL_ENABLED:-true}
+      - SOURCE_EMBEDDING_ENABLED=${SOURCE_EMBEDDING_ENABLED:-true}
+      - SOURCE_EMBEDDING_MODEL=${SOURCE_EMBEDDING_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+      - SOURCE_RETRIEVAL_MIN_CONFIDENCE=${SOURCE_RETRIEVAL_MIN_CONFIDENCE:-0.62}
+      - SOURCE_RETRIEVAL_MAX_PAGES=${SOURCE_RETRIEVAL_MAX_PAGES:-8}
+      - SOURCE_EMBEDDING_CACHE_DIR=/app/.cache/fastembed
       - IMAGE_VLM_JUDGE_MODEL=${IMAGE_VLM_JUDGE_MODEL:-Qwen3-VL-8B}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -70,6 +89,7 @@ services:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
       - ./backend/service-account.json:/app/service-account.json:ro
+      - embedding-cache:/app/.cache/fastembed
     depends_on:
       - redis
 
@@ -85,3 +105,4 @@ services:
 volumes:
   redis-data:
   frontend-node-modules:
+  embedding-cache:

@@ -398,6 +398,13 @@ def _extract_semantic(slide: Dict[str, Any]) -> Dict[str, Any]:
         "entities": [],
         "visual_objects": [],
         "visual_intent": "",
+        "visual_source": "either",
+        "requires_exact_identity": False,
+        "requires_exact_location": False,
+        "requires_exact_event": False,
+        "requires_scientific_accuracy": False,
+        "must_show": [],
+        "must_avoid": [],
         "stock_queries": [],
         "confidence": 0.0,
     }
@@ -410,6 +417,12 @@ def _semantic_list(value: Any) -> List[str]:
     if isinstance(value, str):
         return [x.strip() for x in value.split(",") if x.strip()]
     return []
+
+
+def _semantic_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
 
 
 
@@ -434,6 +447,9 @@ def _normalize_llm_semantic(raw: Dict[str, Any], fallback: Dict[str, Any]) -> Di
     object_label = ", ".join(objects) if objects else "default"
 
     stock_queries = _semantic_list(raw.get("stock_queries"))[:4]
+    visual_source = str(raw.get("visual_source") or "either").strip().lower()
+    if visual_source not in {"generated", "stock", "scientific_reference", "either"}:
+        visual_source = "either"
 
     normalized = dict(fallback)
     normalized.update(
@@ -451,6 +467,13 @@ def _normalize_llm_semantic(raw: Dict[str, Any], fallback: Dict[str, Any]) -> Di
             "entities": _semantic_list(raw.get("entities"))[:3],
             "visual_objects": visual_objects,
             "visual_intent": str(raw.get("visual_intent") or "").strip()[:160],
+            "visual_source": visual_source,
+            "requires_exact_identity": _semantic_bool(raw.get("requires_exact_identity")),
+            "requires_exact_location": _semantic_bool(raw.get("requires_exact_location")),
+            "requires_exact_event": _semantic_bool(raw.get("requires_exact_event")),
+            "requires_scientific_accuracy": _semantic_bool(raw.get("requires_scientific_accuracy")),
+            "must_show": _semantic_list(raw.get("must_show"))[:3],
+            "must_avoid": _semantic_list(raw.get("must_avoid"))[:3],
             "stock_queries": stock_queries,
             "confidence": confidence,
         }
@@ -1184,7 +1207,7 @@ _RELIGIOUS_KEYWORDS = [
     "chúa giê", "chua gie", "hồi giáo", "hoi giao", "islam", "muslim", "allah", "quran",
     "kinh quran", "ấn độ giáo", "an do giao", "hindu", "hinduism", "do thái giáo",
     "do thai giao", "judaism", "jewish", "đạo giáo", "dao giao", "taoism", "khổng giáo",
-    "khong giao", "confucianism", "thiền", "zen", "meditation", "thánh", "thanh", "saint",
+    "khong giao", "confucianism", "thiền", "zen", "meditation", "saint",
     "deity", "divine", "sacred", "tâm linh", "tam linh", "spirituality", "spiritual",
     "nhà thờ", "nha tho", "church", "cathedral", "đền chùa", "den chua", "temple",
     "pagoda", "mosque", "synagogue",
@@ -1203,8 +1226,7 @@ _MEDICAL_DIAGRAM_KEYWORDS = [
     "giải phẫu", "giai phau", "anatomy", "anatomical", "cấu trúc cơ thể", "cau truc co the",
     "body structure", "dna", "rna", "tế bào", "te bao", "cell structure", "phân tử",
     "phan tu", "molecule", "công thức hóa học", "cong thuc hoa hoc", "mạch máu", "mach mau",
-    "blood vessel", "neuron", "synapse", "bệnh án", "benh an", "patient case", "chẩn đoán",
-    "chan doan",
+    "blood vessel", "neuron", "synapse",
 ]
 
 _POLITICAL_KEYWORDS = [
@@ -1260,7 +1282,9 @@ _MAP_SYMBOL_KEYWORDS = [
 _HIGH_TRUST_FINANCE_KEYWORDS = [
     "investment advice", "financial advice", "stock recommendation", "crypto",
     "cryptocurrency", "loan", "debt", "insurance claim", "tax", "bankruptcy",
-    "đầu tư", "dau tu", "tài chính cá nhân", "tai chinh ca nhan", "tiền số",
+    "tư vấn đầu tư", "tu van dau tu", "khuyến nghị đầu tư", "khuyen nghi dau tu",
+    "chứng khoán", "chung khoan", "cổ phiếu", "co phieu",
+    "tài chính cá nhân", "tai chinh ca nhan", "tiền số",
     "tien so", "vay nợ", "vay no", "bảo hiểm", "bao hiem", "thuế", "thue",
 ]
 

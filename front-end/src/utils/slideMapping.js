@@ -204,7 +204,9 @@ export function formatSlidePage(page, presentationMode = 'presentation') {
     likelyMultiPptxSlides: page.likelyMultiPptxSlides || false,
     pedagogicalRole: page.pedagogicalRole || '',
     sourcePages: Array.isArray(page.sourcePages) ? page.sourcePages : [],
-    presentationMode: String(page.presentationMode || presentationMode || 'presentation').toLowerCase(),
+    presentationMode: String(
+      page.presentationMode || page.presentation_mode || presentationMode || 'presentation'
+    ).toLowerCase(),
   };
 }
 
@@ -226,9 +228,20 @@ function hasCustomBoundaryCanvas(slide) {
   ));
 }
 
-export function formatSlideDeck(pages, presentationMode = 'presentation') {
+export function formatSlideDeck(pages, presentationMode = '') {
   const source = Array.isArray(pages) ? pages : [];
-  const slides = source.map((page) => formatSlidePage(page, presentationMode));
+  const explicitMode = String(presentationMode || '').trim().toLowerCase();
+  const pageMode = source
+    .map((page) => String(page?.presentationMode || page?.presentation_mode || '').trim().toLowerCase())
+    .find((mode) => mode === 'lecture' || mode === 'presentation');
+  const hasLectureMetadata = source.some((page) => (
+    Boolean(page?.pedagogicalRole || page?.pedagogical_role)
+    || (Array.isArray(page?.sourcePages || page?.source_pages) && (page.sourcePages || page.source_pages).length > 0)
+  ));
+  const effectiveMode = explicitMode === 'lecture' || explicitMode === 'presentation'
+    ? explicitMode
+    : pageMode || (hasLectureMetadata ? 'lecture' : 'presentation');
+  const slides = source.map((page) => formatSlidePage(page, effectiveMode));
   if (!slides.length) return slides;
 
   const first = slides[0];

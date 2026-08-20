@@ -51,7 +51,7 @@ class LLMClientMixin:
                 json_mode=json_mode,
             )
         model_name = self.model_name
-        if self.vllm_available and provider in {"auto", "vllm"}:
+        if self.vllm_available and provider in {"auto", "vllm", "vllm_only"}:
             nothink_msgs = list(messages)
 
             def _strip_think(text: str) -> str:
@@ -113,7 +113,7 @@ class LLMClientMixin:
                 temperature=temperature,
                 json_mode=json_mode,
             )
-        if provider == "vllm":
+        if provider in {"vllm", "vllm_only"}:
             raise RuntimeError("vLLM is not available for the requested review pass.")
         if self.gemini_available:
             return await self._gemini_completion_plain_text(

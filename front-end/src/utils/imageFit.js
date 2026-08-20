@@ -21,6 +21,9 @@ export function inferImageFit(slideOrUrl) {
   // Source-document visuals often contain labels, axes, or multiple panels.
   // Showing the complete figure is more important than filling a decorative mask.
   if (normalizedUrl.includes('/outputs/images/source/')) return 'contain';
+  // External PNG/WebP assets are commonly diagrams, plots, charts or document
+  // figures with transparent/white margins. Cropping them can remove labels.
+  if (/_external\.(?:png|webp)(?:$|[?#])/.test(normalizedUrl)) return 'contain';
   if (DIAGRAM_HINTS.some((hint) => semanticText.includes(hint))) return 'contain';
   return 'cover';
 }

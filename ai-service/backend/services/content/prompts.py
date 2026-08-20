@@ -46,6 +46,13 @@ Return ONLY valid JSON with this exact shape:
   "context": "business|education|technology|community|historical|default",
   "entities": ["0-3 named people, events, places, years, or concepts"],
   "visual_intent": "one short concrete visual direction",
+  "visual_source": "generated|stock|scientific_reference|either",
+  "requires_exact_identity": false,
+  "requires_exact_location": false,
+  "requires_exact_event": false,
+  "requires_scientific_accuracy": false,
+  "must_show": ["1-3 objects or facts that must be visible"],
+  "must_avoid": ["0-3 misleading visual elements"],
   "stock_queries": ["2-4 English search queries optimized for Pexels and Wikimedia Commons, sorted from specific to generic"],
   "confidence": 0.0
 }
@@ -71,6 +78,10 @@ Other rules:
 - Prefer concrete visual meaning over keywords.
 - For history, put real event/person/place/year in entities when present.
 - For data-heavy slides, use content_type "data".
+- Use visual_source "generated" for generic illustrative scenes that do not need a real identity or exact place.
+- Use visual_source "stock" only when a real person, named location, real event, or identifiable institution must be shown accurately.
+- Use visual_source "scientific_reference" only for anatomy, scientific structures, maps, or diagrams where visual accuracy is essential.
+- Set exactness flags from meaning, not isolated words. Generic hospitals, teachers, investment, records, and software do not require exact identity/location.
 - entities can keep the slide's original language (proper nouns).
 - main_topic: short English phrase.
 - No markdown, no explanation."""

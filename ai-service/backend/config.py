@@ -66,6 +66,27 @@ VLLM_BASIC_AUTH_PASS = os.getenv("VLLM_BASIC_AUTH_PASS", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview").strip()
 GEMINI_TIMEOUT_SEC = float(os.getenv("GEMINI_TIMEOUT_SEC", "120"))
+
+# Retrieval for long, document-backed requests. The embedding model is
+# pretrained and runs inference only; no project-specific training is needed.
+SOURCE_RETRIEVAL_ENABLED = os.getenv(
+    "SOURCE_RETRIEVAL_ENABLED", "true"
+).lower() in ("1", "true", "yes")
+SOURCE_EMBEDDING_ENABLED = os.getenv(
+    "SOURCE_EMBEDDING_ENABLED", "true"
+).lower() in ("1", "true", "yes")
+SOURCE_EMBEDDING_MODEL = os.getenv(
+    "SOURCE_EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+).strip()
+SOURCE_RETRIEVAL_MIN_CONFIDENCE = float(
+    os.getenv("SOURCE_RETRIEVAL_MIN_CONFIDENCE", "0.62")
+)
+SOURCE_RETRIEVAL_MAX_PAGES = max(
+    2, int(os.getenv("SOURCE_RETRIEVAL_MAX_PAGES", "8"))
+)
+SOURCE_EMBEDDING_CACHE_DIR = os.getenv(
+    "SOURCE_EMBEDDING_CACHE_DIR", str(BASE_DIR / ".cache" / "fastembed")
+).strip()
 # Ngữ cảnh / sampling (legacy tên biến; server vLLM có thể bỏ qua nếu không map vào API).
 LLM_NUM_CTX = int(os.getenv("LLM_NUM_CTX", "8192"))
 LLM_REPEAT_PENALTY = float(os.getenv("LLM_REPEAT_PENALTY", "1.08"))

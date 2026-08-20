@@ -194,7 +194,7 @@ class ImageExtractionMixin:
     async def extract_image_semantic(self, slide_content: Dict[str, Any]) -> Dict[str, Any]:
         """Trích xuất JSON ngữ nghĩa thu gọn để phục vụ phân loại ảnh và tạo prompt."""
         return await self._extract_json_from_slide(
-            slide_content, _IMAGE_SEMANTIC_SYSTEM, 180, "extract_image_semantic"
+            slide_content, _IMAGE_SEMANTIC_SYSTEM, 320, "extract_image_semantic"
         )
 
     async def extract_chart_spec(self, slide_content: Dict[str, Any]) -> Dict[str, Any]:

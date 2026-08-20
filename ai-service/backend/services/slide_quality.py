@@ -39,6 +39,23 @@ def _slide_text(slide: Dict[str, Any], max_chars: int = 900) -> str:
     return "\n".join([title] + parts + ([notes] if notes else []))[:max_chars]
 
 
+def _is_dense_for_image(slide: Dict[str, Any]) -> bool:
+    """Return whether an image would make the visible content unreadably tight."""
+    bullets = slide.get("bullets") or slide.get("content") or []
+    if isinstance(bullets, str):
+        items = [line.strip() for line in bullets.splitlines() if line.strip()]
+    else:
+        items = [str(item).strip() for item in bullets if str(item).strip()]
+    visible_chars = sum(len(item) for item in items)
+    longest_item = max((len(item) for item in items), default=0)
+    return (
+        len(items) > 7
+        or visible_chars > 760
+        or (len(items) >= 6 and visible_chars > 560)
+        or (len(items) >= 5 and longest_item > 190)
+    )
+
+
 def _clean_json_text(text: str) -> str:
     t = (text or "").strip()
     if t.startswith("```"):
@@ -221,6 +238,10 @@ async def improve_deck_source_grounding(
 
 
 def _heuristic_visual(slide: Dict[str, Any], *, want_images: bool) -> str:
+    from services.technical_quality import slide_has_code_content
+
+    if slide_has_code_content(slide):
+        return "none"
     layout = str(slide.get("layout") or "").strip().lower()
     # Slide đã có object table/chart thật sự → luôn ưu tiên
     if isinstance(slide.get("table"), dict) or "table" in layout:
@@ -238,6 +259,8 @@ def _heuristic_visual(slide: Dict[str, Any], *, want_images: bool) -> str:
         return "chart"
     if _TABLE_HINT_RE.search(text) and (text.count(":") >= 2 or len(numbers) >= 1):
         return "table"
+    if _is_dense_for_image(slide):
+        return "none"
     if want_images:
         return "image"
     return "none"
@@ -295,6 +318,8 @@ async def build_visual_plan(
                 "- table: for comparisons, before/after, pros/cons, options, criteria, status, or repeated key-value structure.\n"
                 "- image: for conceptual/story/domain slides when images are requested and chart/table is not better.\n"
                 "- none: for title, conclusion, thin, or abstract slides where a visual would add little value.\n"
+                "- none: also for dense slides with over 7 bullets or roughly over 760 visible characters; "
+                "readability is more important than decorative image coverage.\n"
                 "- When want_images=true, route at least 30% of the deck to image unless chart/table already "
                 "provides the visual. Avoid an overly text-only deck.\n"
                 "- Do not choose chart/table from prose if the data structure is weak.\n"
@@ -324,10 +349,16 @@ async def build_visual_plan(
                 continue
             visual = str(item.get("visual") or "").strip().lower()
             if idx in plan and visual in _VISUAL_VALUES:
+                from services.technical_quality import slide_has_code_content
+                if slide_has_code_content(slides[idx]):
+                    plan[idx] = "none"
+                    continue
                 declared = _declared_visual(slides[idx]) if isinstance(slides[idx], dict) else None
                 if declared in {"chart", "table"} and visual != declared:
                     continue
                 if visual == "image" and not want_images:
+                    visual = "none"
+                if visual == "image" and _is_dense_for_image(slides[idx]):
                     visual = "none"
                 plan[idx] = visual
         if want_images:

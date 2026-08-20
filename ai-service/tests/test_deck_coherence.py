@@ -2,7 +2,7 @@ import copy
 import json
 import unittest
 
-from services.deck_coherence import improve_deck_coherence
+from services.deck_coherence import improve_deck_coherence, improve_locked_outline_deck
 
 
 class FakeExtractor:
@@ -44,6 +44,95 @@ def sample_deck():
 
 
 class DeckCoherenceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_locked_rubric_runs_one_bounded_second_repair_below_eight(self):
+        deck = {
+            "title": "Topic",
+            "presentation_mode": "presentation",
+            "locked_outline": [
+                {"title": "Topic", "purpose": "Open", "layout_hint": "intro"},
+                {"title": "Evidence", "purpose": "Explain evidence", "layout_hint": "text_only"},
+                {"title": "Close", "purpose": "Conclude", "layout_hint": "thankyou", "pedagogical_role": "summary"},
+            ],
+            "slides": [
+                {"title": "Topic", "layout": "intro", "bullets": ["Opening."]},
+                {"title": "Evidence", "layout": "text_only", "bullets": ["Weak claim."]},
+                {"title": "Close", "layout": "thankyou", "bullets": ["Closing."]},
+            ],
+        }
+        extractor = FakeExtractor([
+            {"score": 6.0, "issues": [{"index": 1, "type": "weak_support", "severity": "high", "instruction": "Add evidence."}]},
+            {"slides": [{"index": 1, "title": "Evidence", "bullets": ["First repair."], "notes": "Explain."}]},
+            {"score": 7.0, "issues": [{"index": 1, "type": "incomplete_coverage", "severity": "medium", "instruction": "Complete the evidence chain."}]},
+            {"slides": [{"index": 1, "title": "Evidence", "bullets": ["Complete evidence chain."], "notes": "Explain the result."}]},
+            {"score": 9.0, "issues": []},
+        ])
+
+        result = await improve_locked_outline_deck(extractor, deck)
+
+        self.assertEqual(result["slides"][1]["bullets"], ["Complete evidence chain."])
+        self.assertEqual(extractor.calls, 5)
+
+    async def test_locked_rubric_repairs_role_content_instead_of_trusting_label(self):
+        deck = {
+            "title": "Functions",
+            "presentation_mode": "lecture",
+            "requirement_spec": [{
+                "id": "r1",
+                "description": "Check understanding",
+                "required_components": ["answerable questions"],
+                "assigned_slide_indices": [3],
+            }],
+            "locked_outline": [
+                {"index": 1, "title": "Functions", "purpose": "Introduce the lesson", "pedagogical_role": "concept"},
+                {"index": 2, "title": "Definition", "purpose": "Explain functions", "pedagogical_role": "concept"},
+                {"index": 3, "title": "Check", "purpose": "Check understanding", "pedagogical_role": "knowledge_check"},
+                {"index": 4, "title": "Summary", "purpose": "Synthesize", "pedagogical_role": "summary"},
+            ],
+            "slides": [
+                {"title": "Functions", "layout": "intro", "bullets": ["Lesson overview."], "pedagogical_role": "concept"},
+                {"title": "Definition", "layout": "text_only", "bullets": ["A function groups reusable behavior."], "pedagogical_role": "concept"},
+                {"title": "Function review", "layout": "text_only", "bullets": ["Functions improve reuse."], "pedagogical_role": "knowledge_check"},
+                {"title": "Summary", "layout": "thankyou", "bullets": ["Functions organize behavior."], "pedagogical_role": "summary"},
+            ],
+        }
+        extractor = FakeExtractor([
+            {
+                "score": 7.0,
+                "issues": [{
+                    "index": 2,
+                    "type": "role_mismatch",
+                    "severity": "high",
+                    "instruction": "Replace the statement with two answerable knowledge-check questions.",
+                }],
+            },
+            {"slides": [{
+                "index": 2,
+                "title": "Check your understanding",
+                "bullets": [
+                    "What problem does a reusable function solve?",
+                    "When should a value be returned from a function?",
+                ],
+                "notes": "Invite learners to justify each answer.",
+                "pedagogical_role": "knowledge_check",
+            }]},
+            {"score": 9.0, "issues": []},
+        ])
+
+        result = await improve_locked_outline_deck(extractor, deck)
+
+        self.assertEqual(result["slides"][2]["title"], "Check your understanding")
+        self.assertTrue(all(item.endswith("?") for item in result["slides"][2]["bullets"]))
+        self.assertEqual(result["slides"][2]["layout"], "text_only")
+        self.assertEqual(len(result["slides"]), 4)
+        self.assertEqual(extractor.calls, 3)
+        self.assertIn("Judge the actual title and bullets", extractor.messages[0][0]["content"])
+        evaluator_payload = json.loads(extractor.messages[0][1]["content"])
+        self.assertEqual(evaluator_payload["locked_outline"][0]["index"], 0)
+        self.assertEqual(
+            evaluator_payload["locked_requirement_spec"][0]["assigned_slide_indices"],
+            [2],
+        )
+
     async def test_judge_receives_late_source_results(self):
         deck = sample_deck()
         extractor = FakeExtractor([{"score": 9.0, "issues": []}])
