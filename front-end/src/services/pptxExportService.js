@@ -495,7 +495,7 @@ function createZip(files) {
   return zip;
 }
 
-export async function exportSlidesToPptx({ slides, theme = 'clean-white', fileName = 'presentation', slideSnapshots = [] }) {
+export async function exportSlidesToPptx({ slides, theme = 'clean-white', fileName = 'presentation', slideSnapshots = [], download = true }) {
   const media = [];
   const hasNotes = slides.some((slide) => String(slide.notes || slide.script || '').trim());
   const noteSlideIndexes = [];
@@ -558,12 +558,16 @@ export async function exportSlidesToPptx({ slides, theme = 'clean-white', fileNa
     type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   });
 
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `${safeFileName(fileName)}.pptx`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  window.URL.revokeObjectURL(url);
+  if (download) {
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${safeFileName(fileName)}.pptx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  }
+
+  return blob;
 }

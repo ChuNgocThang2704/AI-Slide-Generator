@@ -2,14 +2,17 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
 import ElementCanvas from '../../components/slides/ElementCanvas';
+import VideoGenerationModal from '../../components/video/VideoGenerationModal';
+import VideoLibraryModal from '../../components/video/VideoLibraryModal';
 import { projectService } from '../../services/documentService';
 import { exportSlidesToPptx } from '../../services/pptxExportService';
+import { captureSlides, exportSnapshotsToPdf } from '../../services/visualExportService';
 import { formatSlideDeck, toSlidePageUpdate } from '../../utils/slideMapping';
 import {
   ChevronLeft, ChevronRight, Download, ArrowLeft,
   LayoutTemplate, Check, Loader2, Maximize2, Minimize2,
   Info, Palette, Save, Sparkles, X, FileText, Play, Presentation, Cloud, CloudOff,
-  Undo2, Redo2, Copy, Trash2, GripVertical, Plus, ZoomIn, ZoomOut
+  Undo2, Redo2, Copy, Trash2, GripVertical, Plus, ZoomIn, ZoomOut, Clapperboard, Library
 } from 'lucide-react';
 import './EditorPage.css';
 
@@ -125,6 +128,8 @@ export default function EditorPage() {
   const [selectedSlideIndexes, setSelectedSlideIndexes] = useState(() => new Set([0]));
   const [exporting, setExporting] = useState(false);
   const [showPptxMenu, setShowPptxMenu] = useState(false);
+  const [showVideoModal, setShowVideoModal] = useState(false);
+  const [showVideoLibrary, setShowVideoLibrary] = useState(false);
   const [saving, setSaving] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [saveState, setSaveState] = useState('saved');
@@ -908,7 +913,6 @@ export default function EditorPage() {
       addToast('Đang tạo file PPTX có thể chỉnh sửa...', 'info');
 
       const projectName = projects.find((p) => p.id === id)?.name || 'presentation';
-      const { captureSlides } = await import('../../services/visualExportService');
       const slideSnapshots = await captureSlides(exportStageRef.current, { projectId: id });
       await exportSlidesToPptx({
         slides: slidesRef.current,
@@ -924,6 +928,30 @@ export default function EditorPage() {
     } finally {
       setExporting(false);
     }
+  };
+
+  const preparePresentationForVideo = async () => {
+    const currentSlides = slidesRef.current;
+    if (!currentSlides.length) throw new Error('Bài trình chiếu chưa có slide');
+
+    await projectService.syncSlidePages(id, currentSlides.map(toSlidePageUpdate));
+    const projectName = projects.find((item) => item.id === id)?.name || 'presentation';
+    const slideSnapshots = await captureSlides(exportStageRef.current, { projectId: id });
+    const blob = await exportSlidesToPptx({
+      slides: currentSlides,
+      theme: projects.find((item) => item.id === id)?.templateId || 'soft-blue',
+      fileName: projectName,
+      slideSnapshots,
+      download: false,
+    });
+    const textBlob = await exportSlidesToPptx({
+      slides: currentSlides,
+      theme: projects.find((item) => item.id === id)?.templateId || 'soft-blue',
+      fileName: `${projectName}-content`,
+      download: false,
+    });
+
+    return { blob, textBlob, fileName: projectName };
   };
 
   const handleExportEditablePPTX = async () => {
@@ -955,7 +983,6 @@ export default function EditorPage() {
     try {
       await projectService.syncSlidePages(id, slidesRef.current.map(toSlidePageUpdate));
       const projectName = projects.find((p) => p.id === id)?.name || 'presentation';
-      const { captureSlides, exportSnapshotsToPdf } = await import('../../services/visualExportService');
       const slideSnapshots = await captureSlides(exportStageRef.current, { projectId: id });
       await exportSnapshotsToPdf(slideSnapshots, projectName);
       addToast('Xuất PDF thành công!', 'success');
@@ -1075,6 +1102,21 @@ export default function EditorPage() {
           </button>
           <button className="btn btn-ghost btn-sm" onClick={startPresentation} disabled={!slides.length}>
             <Play size={14}/> Trình chiếu
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm e2-video-action"
+            onClick={() => setShowVideoModal(true)}
+            disabled={!slides.length}
+          >
+            <Clapperboard size={14}/> Sinh video
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setShowVideoLibrary(true)}
+          >
+            <Library size={14}/> Video của tôi
           </button>
           <button className="btn btn-ghost btn-sm" onClick={handleSave} disabled={saving || slides.length === 0 || !hasUnsavedChanges}>
             {saving ? <><Loader2 size={14} className="spin"/> Đang lưu...</> : <><Save size={14}/> Lưu thay đổi</>}
@@ -1456,6 +1498,20 @@ export default function EditorPage() {
           </div>
         </div>
       </div>
+      <VideoGenerationModal
+        open={showVideoModal}
+        onClose={() => setShowVideoModal(false)}
+        slides={slides}
+        projectName={title}
+        onPreparePresentation={preparePresentationForVideo}
+        onNotify={addToast}
+      />
+      <VideoLibraryModal
+        open={showVideoLibrary}
+        onClose={() => setShowVideoLibrary(false)}
+        onNotify={addToast}
+      />
+
       <div ref={exportStageRef} className="e2-export-stage" aria-hidden="true" style={{ position: 'fixed', left: -12000, top: 0, width: 960, pointerEvents: 'none' }}>
         {slides.map((slide, index) => (
           <div key={slide.id || index} data-export-slide style={{ width: 960, height: 540, overflow: 'hidden' }}>

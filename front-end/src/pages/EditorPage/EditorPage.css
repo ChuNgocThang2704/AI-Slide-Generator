@@ -22,6 +22,16 @@
 .e2-top-left  { display:flex; align-items:center; gap:12px; min-width:0; }
 .e2-top-right { display:flex; align-items:center; gap:10px; flex-shrink:0; }
 .e2-top-right { position:relative; }
+.e2-video-action {
+  color: #d8d5ff;
+  border-color: rgba(108, 99, 255, 0.34);
+  background: rgba(108, 99, 255, 0.09);
+}
+.e2-video-action:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(108, 99, 255, 0.65);
+  background: rgba(108, 99, 255, 0.18);
+}
 .e2-export-menu {
   position:absolute;
   z-index:120;
