@@ -136,6 +136,7 @@ services:
       PAYMENT_SERVICE_URL: http://payment-service:8085/api/payment
       PAYOS_RETURN_URL: ${PAYOS_RETURN_URL:-http://localhost:5173/success}
       PAYOS_CANCEL_URL: ${PAYOS_CANCEL_URL:-http://localhost:5173/cancel}
+      JWT_SIGNER_KEY: ${JWT_SIGNER_KEY}
     depends_on:
       postgres:
         condition: service_healthy
