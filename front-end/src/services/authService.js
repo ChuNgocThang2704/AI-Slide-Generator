@@ -114,7 +114,7 @@ export const authService = {
     const mappedUser = mapUser(meData);
 
     // 🚀 TỰ ĐỘNG ĐỒNG BỘ ĐẮNG NHẬP / ĐẮNG KÝ VỚI LECGEN SERVER KHI ĐÃ ĐĂNG NHẬP THÀNH CÔNG
-    syncLecgenSession(email, password);
+    // syncLecgenSession(email, password);
 
     return {
       user: mappedUser,
@@ -156,9 +156,9 @@ export const authService = {
     const mappedUser = mapUser(meData);
 
     // 🚀 TỰ ĐỘNG ĐỒNG BỘ ĐĂNG NHẬP GOOGLE SANG LECGEN SERVER (Username = Email, Password = 123456)
-    if (mappedUser?.email) {
-      syncLecgenSession(mappedUser.email, '123456');
-    }
+    // if (mappedUser?.email) {
+    //   syncLecgenSession(mappedUser.email, '123456');
+    // }
 
     return {
       user: mappedUser,

@@ -25,4 +25,4 @@ jwt:
 
 app:
   subscription-service:
-    url: ${SUBSCRIPTION_SERVICE_URL:http://localhost:8084/api/subscription}
+    url: ${APP_SUBSCRIPTION_SERVICE_URL:http://localhost:8084/api/subscription}
