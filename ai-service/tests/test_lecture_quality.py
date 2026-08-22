@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from routes.api import (
     _build_slide_spec_payload,
@@ -14,6 +15,10 @@ from services.lecture_quality import (
     build_source_page_index,
     detect_lecture_mode,
     enrich_lecture_deck,
+    enforce_instructional_requirements,
+    instructional_requirements,
+    missing_instructional_requirements,
+    order_lecture_assessment_slides,
     excerpt_from_source_pages,
     has_explicit_structural_scope,
     lecture_prompt_block,
@@ -26,6 +31,76 @@ from services.text_utils import plain_slide_text
 
 
 class LectureQualityTests(unittest.TestCase):
+    def test_instructional_requirements_detect_vi_and_en_requests(self):
+        self.assertEqual(
+            instructional_requirements(
+                "Có ví dụ, lỗi thường gặp và câu hỏi kiểm tra cuối bài."
+            ),
+            ["worked_example", "common_mistakes", "knowledge_check"],
+        )
+        self.assertEqual(
+            instructional_requirements("Include a worked example, common mistakes, and a quiz."),
+            ["worked_example", "common_mistakes", "knowledge_check"],
+        )
+
+    def test_final_contract_preserves_count_and_adds_real_knowledge_questions(self):
+        deck = {
+            "title": "Hàm trong Python",
+            "presentation_mode": "lecture",
+            "slides": [
+                {"title": "Hàm trong Python", "layout": "intro", "bullets": ["Tổng quan."]},
+                {"title": "Định nghĩa hàm", "pedagogical_role": "concept", "bullets": ["Hàm gom logic tái sử dụng."]},
+                {"title": "Tham số", "pedagogical_role": "concept", "bullets": ["Tham số nhận dữ liệu đầu vào."]},
+                {"title": "Giá trị trả về", "pedagogical_role": "concept", "bullets": ["return gửi kết quả về nơi gọi."]},
+                {"title": "Tổng kết", "layout": "thankyou", "pedagogical_role": "summary", "bullets": ["Ôn tập."]},
+            ],
+        }
+        result = enforce_instructional_requirements(
+            deck,
+            "Tạo bài giảng có ví dụ và câu hỏi kiểm tra cuối bài.",
+        )
+        self.assertEqual(len(result["slides"]), len(deck["slides"]))
+        check = next(slide for slide in result["slides"] if slide.get("pedagogical_role") == "knowledge_check")
+        self.assertTrue(all("?" in bullet for bullet in check["bullets"]))
+        self.assertTrue(any(slide.get("pedagogical_role") == "worked_example" for slide in result["slides"]))
+
+    def test_one_combined_slide_does_not_satisfy_two_distinct_requirements(self):
+        deck = {"slides": [{
+            "title": "Lỗi thường gặp và ví dụ",
+            "pedagogical_role": "worked_example",
+            "bullets": ["Ví dụ minh họa một lỗi phổ biến."],
+        }]}
+        missing = missing_instructional_requirements(
+            deck, "Có một ví dụ và một slide lỗi thường gặp."
+        )
+        self.assertEqual(len(missing), 1)
+
+    def test_assessment_is_moved_after_instruction_without_changing_count(self):
+        deck = {
+            "presentation_mode": "lecture",
+            "slides": [
+                {"title": "Intro", "layout": "intro"},
+                {"title": "Questions", "pedagogical_role": "knowledge_check"},
+                {"title": "Objectives", "pedagogical_role": "learning_objectives"},
+                {"title": "Concept", "pedagogical_role": "concept"},
+                {"title": "Example", "pedagogical_role": "worked_example"},
+                {"title": "Closing", "layout": "thankyou"},
+            ],
+        }
+        result = order_lecture_assessment_slides(deck)
+        self.assertEqual(len(result["slides"]), len(deck["slides"]))
+        self.assertEqual(
+            [slide["title"] for slide in result["slides"]],
+            ["Intro", "Objectives", "Concept", "Example", "Questions", "Closing"],
+        )
+
+    def test_locked_presentation_is_not_reclassified_from_textbook(self):
+        deck = {"presentation_mode": "presentation", "slides": [{"title": "Results", "bullets": ["Finding"]}]}
+        source = "Chapter 3 Functions. Learning objectives. Exercise 3.1."
+        result = enrich_lecture_deck(deck, source, locked_mode="presentation")
+        self.assertEqual(result["presentation_mode"], "presentation")
+        self.assertNotIn("learning_objectives", result)
+
     def test_generic_document_deck_receives_source_page_provenance(self):
         source = (
             "[[SOURCE_PAGE:1]]\nCloud infrastructure overview and deployment context.\n"
@@ -63,7 +138,25 @@ class LectureQualityTests(unittest.TestCase):
             )
         )
 
-    def test_explicit_presentation_request_overrides_textbook_source(self):
+    def test_generic_slide_wording_does_not_override_textbook_source(self):
+        textbook = (
+            "Chapter 2 Variables and Statements. Learning objectives and exercises. "
+            "This lesson is part of a programming course curriculum."
+        )
+        self.assertTrue(
+            detect_lecture_mode(
+                textbook,
+                "Create 8 English presentation slides introducing the key ideas.",
+            )
+        )
+        self.assertTrue(
+            detect_lecture_mode(
+                textbook,
+                "Tao 8 slide tieng Viet gioi thieu cac kien thuc quan trong.",
+            )
+        )
+
+    def test_explicit_non_lecture_request_overrides_textbook_source(self):
         textbook = (
             "Chapter 2 Variables and Statements. Learning objectives and exercises. "
             "This lesson is part of a programming course curriculum."
@@ -71,13 +164,7 @@ class LectureQualityTests(unittest.TestCase):
         self.assertFalse(
             detect_lecture_mode(
                 textbook,
-                "Create 8 English presentation slides introducing the key ideas.",
-            )
-        )
-        self.assertFalse(
-            detect_lecture_mode(
-                textbook,
-                "Tao 8 slide tieng Viet gioi thieu cac kien thuc quan trong.",
+                "Create 8 presentation slides, not a lecture.",
             )
         )
 
@@ -426,11 +513,13 @@ class LectureQualityTests(unittest.TestCase):
         )
         slide = payload["deck"]["slides"][0]
         self.assertEqual(payload["deck"]["presentation_mode"], "lecture")
+        self.assertEqual(slide["presentation_mode"], "lecture")
         self.assertEqual(slide["pedagogical_role"], "concept")
         self.assertEqual(slide["source_pages"], [4])
 
         restored = _structured_content_from_spec_payload(payload)
         self.assertEqual(restored["presentation_mode"], "lecture")
+        self.assertEqual(restored["slides"][0]["presentation_mode"], "lecture")
         self.assertEqual(restored["slides"][0]["source_pages"], [4])
 
     def test_lecture_prompt_requires_pedagogy_without_inventing_sources(self):
@@ -522,13 +611,14 @@ class LectureQualityTests(unittest.TestCase):
             return '{"pages":[2,3],"confidence":0.91,"reason":"semantic match"}'
 
         extractor._llm_completion_plain_text = fake_completion
-        excerpt = asyncio.run(
-            extractor._focus_document_scope(
-                source,
-                "Chỉ trình bày hàm trả về kết quả và phạm vi biến.",
-                max_chars=900,
+        with patch("services.content.extractor.SOURCE_RETRIEVAL_ENABLED", False):
+            excerpt = asyncio.run(
+                extractor._focus_document_scope(
+                    source,
+                    "Chỉ trình bày hàm trả về kết quả và phạm vi biến.",
+                    max_chars=900,
+                )
             )
-        )
         self.assertIn("Fruitful functions", excerpt)
         self.assertIn("Local variables", excerpt)
         self.assertNotIn("Network deployment", excerpt)

@@ -22,9 +22,13 @@ _LECTURE_REQUEST_TERMS = (
     "learning objective", "lecture", "lesson", "course", "curriculum", "tutorial",
 )
 _PRESENTATION_REQUEST_TERMS = (
-    "presentation", "slide deck", "pitch deck", "business presentation",
-    "gioi thieu", "thuyet trinh", "trinh bay", "tong quan",
-    "introduction", "introduce", "overview", "showcase", "pitch",
+    "pitch deck", "business presentation", "sales presentation",
+    "investor presentation", "executive report", "bao cao kinh doanh",
+    "bao cao dieu hanh", "showcase", "pitch",
+)
+_NON_LECTURE_REQUEST_TERMS = (
+    "khong phai bai giang", "khong theo dang bai giang", "khong can bai giang",
+    "not a lecture", "non-lecture", "without lecture structure",
 )
 _EDUCATIONAL_SOURCE_PATTERNS = (
     r"\bchapter\s+\d+\b",
@@ -49,6 +53,33 @@ LECTURE_ROLES = {
     "summary",
 }
 
+_PEDAGOGICAL_REQUIREMENT_TERMS = {
+    "worked_example": (
+        "vi du", "minh hoa", "tinh huong", "worked example", "example", "case study",
+    ),
+    "common_mistakes": (
+        "loi thuong gap", "sai lam thuong gap", "loi pho bien", "common mistake",
+        "common error", "pitfall", "debugging error",
+    ),
+    "knowledge_check": (
+        "cau hoi kiem tra", "cau hoi cuoi bai", "kiem tra cuoi bai", "kiem tra kien thuc",
+        "knowledge check", "review question", "quiz", "question at the end",
+    ),
+    "practice": (
+        "bai tap", "thuc hanh", "luyen tap", "practice", "exercise", "activity",
+    ),
+}
+
+
+def instructional_requirements(user_instruction: str) -> List[str]:
+    """Return requested teaching devices without interpreting the subject matter."""
+    folded = _fold(user_instruction)
+    return [
+        requirement
+        for requirement, terms in _PEDAGOGICAL_REQUIREMENT_TERMS.items()
+        if any(term in folded for term in terms)
+    ]
+
 
 def detect_lecture_mode(source_text: str, user_instruction: str = "") -> bool:
     """Detect teaching-oriented requests and textbook-like source material."""
@@ -57,6 +88,8 @@ def detect_lecture_mode(source_text: str, user_instruction: str = "") -> bool:
     # Explicit user intent outranks the shape of an uploaded textbook or the
     # educational vocabulary produced while expanding a prompt. A source can
     # provide presentation content without turning the deck into a lesson.
+    if any(term in instruction for term in _NON_LECTURE_REQUEST_TERMS):
+        return False
     if any(term in instruction for term in _LECTURE_REQUEST_TERMS):
         return True
     if any(term in instruction for term in _PRESENTATION_REQUEST_TERMS):
@@ -79,6 +112,9 @@ def lecture_prompt_block() -> str:
         "- Every abstract or technical concept must be made teachable with a concrete, source-grounded example "
         "on that slide or the immediately following slide. For programming, prefer valid code or an exact "
         "input/output trace; for mathematics, prefer a worked expression; for processes, prefer numbered steps.\n"
+        "- Put source-grounded programming examples in separate bullet strings, one executable statement per "
+        "string when practical. Code, formulas, commands, and exact input/output lines are exempt from prose "
+        "minimum-word and sentence-ending rules; never rewrite them as explanatory prose.\n"
         "- Do not replace a useful technical example, code sample, formula, or diagram with a generic stock-photo idea.\n"
         "- Avoid unsupported absolutes such as 'always', 'never', 'unlimited', or 'only' unless the source states "
         "the precise rule. Preserve exceptions and scope conditions.\n"
@@ -99,11 +135,21 @@ def enrich_lecture_deck(
     structured_content: Dict[str, Any],
     source_text: str,
     user_instruction: str = "",
+    locked_mode: str = "",
+    enforce_requirements: bool = False,
 ) -> Dict[str, Any]:
     """Attach reliable lecture metadata without rewriting AI-authored slide content."""
     if not isinstance(structured_content, dict):
         return structured_content
+    locked = str(locked_mode or "").strip().lower()
+    if locked == "presentation":
+        deck = copy.deepcopy(structured_content)
+        deck["presentation_mode"] = "presentation"
+        deck.pop("learning_objectives", None)
+        return deck
     if (
+        locked != "lecture"
+        and
         str(structured_content.get("presentation_mode") or "").strip().lower() != "lecture"
         and not detect_lecture_mode(source_text, user_instruction)
     ):
@@ -115,6 +161,8 @@ def enrich_lecture_deck(
         return deck
 
     pages = _split_source_pages(source_text)
+    requirements = instructional_requirements(user_instruction)
+    deck["pedagogical_requirements"] = requirements
     objectives: List[str] = []
     for idx, slide in enumerate(slides):
         if not isinstance(slide, dict):
@@ -144,7 +192,7 @@ def enrich_lecture_deck(
             re.IGNORECASE,
         )
     )
-    if len(objectives) < 2:
+    if len(objectives) < 2 or not _objectives_are_specific(objectives, slides):
         objectives = _fallback_learning_objectives(
             deck,
             [slide for slide in slides if isinstance(slide, dict)],
@@ -208,11 +256,7 @@ def enrich_lecture_deck(
         )
         slides.insert(1 if has_intro else 0, objective_slide)
 
-    folded_instruction = _fold(user_instruction)
-    wants_practice = any(
-        term in folded_instruction
-        for term in ("bai tap", "thuc hanh", "luyen tap", "practice", "exercise", "activity")
-    )
+    wants_practice = "practice" in requirements
     has_practice = any(
         isinstance(slide, dict)
         and (
@@ -272,10 +316,142 @@ def enrich_lecture_deck(
                     "Check the result against the lesson and identify one common mistake.",
                 ]
 
+    if enforce_requirements:
+        _ensure_requested_teaching_devices(slides, requirements, vietnamese=vietnamese)
+
     deck["presentation_mode"] = "lecture"
     deck["learning_objectives"] = objectives
     _clean_fragmented_bullets(slides)
     return deck
+
+
+def enforce_instructional_requirements(
+    structured_content: Dict[str, Any],
+    user_instruction: str,
+) -> Dict[str, Any]:
+    """Guarantee explicit teaching devices after all AI and count-repair passes."""
+    if not isinstance(structured_content, dict):
+        return structured_content
+    if str(structured_content.get("presentation_mode") or "").strip().lower() != "lecture":
+        return structured_content
+    deck = copy.deepcopy(structured_content)
+    slides = deck.get("slides") or []
+    requirements = instructional_requirements(user_instruction)
+    deck["pedagogical_requirements"] = requirements
+    language_text = " ".join(
+        [str(deck.get("title") or ""), str(user_instruction or "")]
+        + [str(slide.get("title") or "") for slide in slides if isinstance(slide, dict)]
+    )
+    vietnamese = bool(re.search(r"[ăâđêôơưàáạảãèéẹẻẽìíịỉĩòóọỏõùúụủũỳýỵỷỹ]", language_text, re.I))
+    _ensure_requested_teaching_devices(slides, requirements, vietnamese=vietnamese)
+    return deck
+
+
+def order_lecture_assessment_slides(structured_content: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep assessment after instruction while preserving all other narrative order."""
+    if not isinstance(structured_content, dict):
+        return structured_content
+    if str(structured_content.get("presentation_mode") or "").strip().lower() != "lecture":
+        return structured_content
+    deck = copy.deepcopy(structured_content)
+    slides = deck.get("slides") or []
+    if len(slides) < 3:
+        return deck
+    first, body, last = slides[0], slides[1:-1], slides[-1]
+    objectives = [
+        slide for slide in body if isinstance(slide, dict)
+        and str(slide.get("pedagogical_role") or "").strip().lower() == "learning_objectives"
+    ]
+    assessments = [
+        slide for slide in body if isinstance(slide, dict)
+        and str(slide.get("pedagogical_role") or "").strip().lower() in {"practice", "knowledge_check"}
+    ]
+    middle = [slide for slide in body if slide not in objectives and slide not in assessments]
+    deck["slides"] = [first, *objectives, *middle, *assessments, last]
+    return deck
+
+
+def _slide_fulfills_requirement(slide: Dict[str, Any], requirement: str) -> bool:
+    role = str(slide.get("pedagogical_role") or "").strip().lower()
+    text = _fold(" ".join(
+        [str(slide.get("title") or "")]
+        + [str(item) for item in (slide.get("bullets") or [])]
+    ))
+    terms = _PEDAGOGICAL_REQUIREMENT_TERMS.get(requirement, ())
+    if requirement == "worked_example" and role in {"worked_example", "demonstration"}:
+        return True
+    if requirement == "knowledge_check" and role == "knowledge_check":
+        return "?" in str(slide.get("title") or "") or any(
+            "?" in str(item) for item in (slide.get("bullets") or [])
+        ) or any(term in text for term in terms)
+    if requirement == "practice" and role == "practice":
+        return True
+    return any(term in text for term in terms)
+
+
+def missing_instructional_requirements(
+    structured_content: Dict[str, Any],
+    user_instruction: str,
+) -> List[str]:
+    """Return unsatisfied requirements, assigning at most one device per slide."""
+    slides = [slide for slide in (structured_content.get("slides") or []) if isinstance(slide, dict)]
+    used: set[int] = set()
+    missing: List[str] = []
+    for requirement in instructional_requirements(user_instruction):
+        match = next((
+            index for index, slide in enumerate(slides)
+            if index not in used and _slide_fulfills_requirement(slide, requirement)
+        ), None)
+        if match is None:
+            missing.append(requirement)
+        else:
+            used.add(match)
+    return missing
+
+
+def _ensure_requested_teaching_devices(
+    slides: List[Any],
+    requirements: Sequence[str],
+    *,
+    vietnamese: bool,
+) -> None:
+    """Apply conservative fallbacks after AI review while preserving slide count."""
+    missing = missing_instructional_requirements(
+        {"slides": slides},
+        " ".join(_PEDAGOGICAL_REQUIREMENT_TERMS[item][0] for item in requirements),
+    )
+    reserved: set[int] = set()
+    for requirement in missing:
+        candidate_index = next((
+            index
+            for index in range(len(slides) - 2, 0, -1)
+            if index not in reserved
+            and isinstance(slides[index], dict)
+            and str(slides[index].get("pedagogical_role") or "").strip().lower()
+            not in {"learning_objectives", "summary", "practice", "knowledge_check"}
+            and str(slides[index].get("layout") or "").strip().lower()
+            not in {"intro", "title", "thankyou", "thank_you"}
+        ), None)
+        if candidate_index is None:
+            continue
+        reserved.add(candidate_index)
+        slide = slides[candidate_index]
+        topic = str(slide.get("title") or "").strip()
+        if requirement == "knowledge_check":
+            slide["pedagogical_role"] = "knowledge_check"
+            slide["title"] = "Câu hỏi kiểm tra cuối bài" if vietnamese else "Knowledge Check"
+            slide["bullets"] = [
+                f"Hãy giải thích ý chính của {topic.lower()}?" if vietnamese
+                else f"What is the key idea behind {topic.lower()}?",
+                f"Bạn sẽ vận dụng {topic.lower()} trong tình huống nào?" if vietnamese
+                else f"When would you apply {topic.lower()}?",
+            ]
+        elif requirement == "worked_example":
+            slide["pedagogical_role"] = "worked_example"
+            slide["title"] = f"Ví dụ: {topic}" if vietnamese else f"Worked Example: {topic}"
+        elif requirement == "common_mistakes":
+            slide["pedagogical_role"] = "demonstration"
+            slide["title"] = f"Lỗi thường gặp: {topic}" if vietnamese else f"Common Mistakes: {topic}"
 
 
 def attach_source_page_provenance(
@@ -640,3 +816,20 @@ def _fallback_learning_objectives(
         for index, topic in enumerate(topics[:3])
         if topic
     ]
+
+
+def _objectives_are_specific(objectives: Sequence[str], slides: Sequence[Dict[str, Any]]) -> bool:
+    """Require objectives to name at least one real body-slide concept."""
+    objective_tokens = _tokens(" ".join(str(item) for item in objectives))
+    topic_tokens: set[str] = set()
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+        role = str(slide.get("pedagogical_role") or "").strip().lower()
+        layout = str(slide.get("layout") or "").strip().lower()
+        if role in {"learning_objectives", "summary", "knowledge_check", "practice"}:
+            continue
+        if layout in {"intro", "title", "thankyou", "thank_you"}:
+            continue
+        topic_tokens.update(_tokens(str(slide.get("title") or "")))
+    return bool(objective_tokens & topic_tokens) if topic_tokens else len(objectives) >= 2

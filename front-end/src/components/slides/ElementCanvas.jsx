@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
 import { createElementsFromSlide, createTextElement } from '../../utils/slideElements';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import EditableSlide, { THEMES } from './EditableSlide';
@@ -205,6 +205,28 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
+  };
+
+  const handleImageLoaded = (event, element) => {
+    const image = event.currentTarget;
+    const naturalWidth = Number(image.naturalWidth || 0);
+    const naturalHeight = Number(image.naturalHeight || 0);
+    if (!naturalWidth || !naturalHeight) return;
+    const ratio = naturalWidth / naturalHeight;
+    const shouldContain = ratio >= 1.8 || ratio <= 0.62;
+    const currentFit = element.objectFit || 'cover';
+    const nextFit = element.fitExplicit
+      ? currentFit
+      : (shouldContain ? 'contain' : inferImageFit(element.src));
+    const currentScale = Number(element.imageScale || 1);
+    const normalizedScale = nextFit === 'contain' ? Math.max(1, currentScale) : currentScale;
+    if (currentFit === nextFit && currentScale === normalizedScale) return;
+    updateElement(element.id, {
+      objectFit: nextFit,
+      imageScale: currentFit === nextFit ? normalizedScale : 1,
+      objectPositionX: currentFit === nextFit ? Number(element.objectPositionX ?? 50) : 50,
+      objectPositionY: currentFit === nextFit ? Number(element.objectPositionY ?? 50) : 50,
+    });
   };
 
   const uploadImageFile = async (file) => {
@@ -479,7 +501,11 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
         <button
           type="button"
           onClick={() => updateElement(selectedElement.id, {
-            imageScale: clamp(Number(selectedElement.imageScale || 1) - 0.1, 0.5, 4),
+            imageScale: clamp(
+              Number(selectedElement.imageScale || 1) - 0.1,
+              selectedElement.objectFit === 'contain' ? 1 : 0.5,
+              4,
+            ),
           })}
           disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
           title="Thu nhỏ ảnh bên trong khung"
@@ -495,6 +521,18 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
           title="Phóng to ảnh bên trong khung"
         >
           <ZoomIn size={15}/>
+        </button>
+        <button
+          type="button"
+          onClick={() => updateElement(selectedElement.id, {
+            imageScale: 1,
+            objectPositionX: 50,
+            objectPositionY: 50,
+          })}
+          disabled={selectedElement?.type !== 'image' || selectedElement?.locked}
+          title="Đặt lại vị trí và độ phóng ảnh"
+        >
+          <RotateCcw size={15}/>
         </button>
         <button type="button" onClick={copySelected} disabled={!selectedId} title="Sao chép (Ctrl+C)"><Copy size={15}/></button>
         <button type="button" onClick={pasteElement} disabled={!hasClipboard} title="Dán (Ctrl+V)"><ClipboardPaste size={15}/></button>
@@ -530,10 +568,15 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
             startPointerAction(event, element, 'move', true);
           }}
           onDoubleClick={readonly ? undefined : (event) => {
-            if (element.type !== 'text' || element.locked) return;
+            if (element.locked) return;
             event.stopPropagation();
             setSelectedId(element.id);
-            setEditingId(element.id);
+            if (element.type === 'image') {
+              setEditingId(null);
+              setCroppingId(element.id);
+              return;
+            }
+            if (element.type === 'text') setEditingId(element.id);
           }}
         >
           {selectedId === element.id && !element.locked && croppingId !== element.id && (
@@ -564,6 +607,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
                 assetId={element.assetId}
                 alt=""
                 draggable={false}
+                onLoad={(event) => handleImageLoaded(event, element)}
                 onPointerDown={croppingId === element.id ? (event) => startImageCrop(event, element) : undefined}
                 style={{
                   objectFit: element.objectFit || inferImageFit(element.src),

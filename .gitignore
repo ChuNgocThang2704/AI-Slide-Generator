@@ -91,6 +91,8 @@ logs/
 .env
 .env.local
 .env.*
+flux-server.env
+**/flux-server.env
 !.env.example
 !**/.env.example
 back-end/**/.env
@@ -112,3 +114,4 @@ service-account.json
 .coverage
 coverage/
 htmlcov/
+.codex-review/

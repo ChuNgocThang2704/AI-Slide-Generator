@@ -34,6 +34,7 @@ from services.plan_limits import (
     validate_generation_instruction as _validate_generation_instruction,
     validate_plan_limits as _validate_plan_limits,
 )
+from services.text_utils import plain_slide_block as _plain_slide_block
 from services.text_utils import plain_slide_text as _plain_slide_text
 from services.revision_rules import (
     apply_explicit_chart_type_targets as _apply_explicit_chart_type_targets,
@@ -258,6 +259,32 @@ def _clean_visual_schema_bullets(
         else "The available data is insufficient to build a reliable trend chart."
     ]
 
+
+_ABSENT_CHART_REFERENCE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:"
+    r"bieu\s+do\s+(?:minh\s+hoa|cho\s+thay|the\s+hien|so\s+sanh)|"
+    r"(?:the\s+)?chart\s+(?:illustrates?|shows?|presents?|compares?)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _remove_absent_chart_references(
+    bullets: List[str],
+    *,
+    has_chart: bool,
+) -> List[str]:
+    """Drop prose that promises a chart after its unsupported spec was rejected."""
+    if has_chart:
+        return bullets
+    return [
+        bullet
+        for bullet in bullets
+        if not _ABSENT_CHART_REFERENCE_RE.match(
+            _fold_revision_text(str(bullet or "").strip())
+        )
+    ]
+
 def _build_slide_spec_payload(
     *,
     task_id: str,
@@ -280,7 +307,7 @@ def _build_slide_spec_payload(
             "index": idx,
             "slide_id": str(slide.get("slide_id") or f"slide-{idx + 1:03d}"),
             "title": _plain_slide_text(slide.get("title") or ""),
-            "bullets": [_plain_slide_text(x) for x in (slide.get("bullets") or slide.get("content") or []) if _plain_slide_text(x)],
+            "bullets": [_plain_slide_block(x) for x in (slide.get("bullets") or slide.get("content") or []) if _plain_slide_block(x)],
             "notes": _plain_slide_text(slide.get("notes") or slide.get("script") or ""),
             "chart": None,
             "table": None,
@@ -300,6 +327,10 @@ def _build_slide_spec_payload(
         row["bullets"] = _clean_visual_schema_bullets(
             row["bullets"],
             title=row["title"],
+            has_chart=bool(row["chart"]),
+        )
+        row["bullets"] = _remove_absent_chart_references(
+            row["bullets"],
             has_chart=bool(row["chart"]),
         )
         if idx in unique_tables:
@@ -324,6 +355,11 @@ def _build_slide_spec_payload(
         layout, primary = _infer_slide_layout(row.get("chart"), row.get("image"), row.get("table"), slide_spec=slide)
         row["layout"] = layout
         row["primary_visual"] = primary
+        row["presentation_mode"] = str(
+            slide.get("presentation_mode")
+            or structured_content.get("presentation_mode")
+            or "presentation"
+        ).strip().lower()
         n_bullets = len(row["bullets"])
         row["likely_multi_pptx_slides"] = bool(n_bullets > _MAX_BULLETS_BEFORE_PPTX_SPLIT)
         out_slides.append(row)
@@ -376,6 +412,8 @@ def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[
         }
         if slide.get("pedagogical_role"):
             row["pedagogical_role"] = _plain_slide_text(slide.get("pedagogical_role"))
+        if slide.get("presentation_mode"):
+            row["presentation_mode"] = _plain_slide_text(slide.get("presentation_mode")).lower()
         if isinstance(slide.get("source_pages"), list):
             row["source_pages"] = [
                 int(page)
@@ -686,6 +724,24 @@ async def _build_revised_slide_spec_payload(
     target_slide_indices: Optional[List[int]] = None,
     context_slide_number: Optional[int] = None,
 ) -> Dict[str, Any]:
+    from services.presentation_mode import lock_presentation_mode
+
+    existing_mode = str(
+        previous_structured_content.get("presentation_mode") or "presentation"
+    ).strip().lower()
+    if existing_mode not in {"lecture", "presentation"}:
+        existing_mode = "presentation"
+    existing_decision = previous_structured_content.get("mode_decision")
+    if not isinstance(existing_decision, dict):
+        existing_decision = {
+            "mode": existing_mode,
+            "confidence": 1.0,
+            "provider": "existing_deck",
+            "reason": "Preserved from the deck being revised.",
+        }
+    content_extractor._presentation_mode = existing_mode
+    content_extractor._lecture_mode = existing_mode == "lecture"
+    content_extractor._mode_decision = existing_decision
     old_slides = previous_structured_content.get("slides") or []
     explicit_add_count = _revision_prompt_add_slide_count(revision_prompt)
     explicit_visual_targets = _explicit_visual_targets_from_prompt(
@@ -777,6 +833,8 @@ async def _build_revised_slide_spec_payload(
             "title": previous_structured_content.get("title") or "Bài thuyết trình",
             "slides": [dict(s) for s in (previous_structured_content.get("slides") or []) if isinstance(s, dict)],
         }
+
+    revised = lock_presentation_mode(revised, existing_decision)
 
     if wants_deck_restructure and old_slides:
         revised_slides = [
@@ -1015,12 +1073,17 @@ async def _build_revised_slide_spec_payload(
         )
     if wants_text_revision and not wants_deck_restructure:
         from services.deck_coherence import improve_deck_coherence
+        from services.technical_quality import validate_technical_content
+        revised, technical_issues = validate_technical_content(revised)
         revised = await improve_deck_coherence(
             content_extractor,
             revised,
             task_id=task_id,
             allowed_indices=plan_targets or None,
+            precomputed_issues=technical_issues,
         )
+
+    revised = lock_presentation_mode(revised, existing_decision)
 
     from services.deck_contract import (
         assert_deck_structure_locked,
@@ -1485,7 +1548,8 @@ async def generate_slide_spec(
                     structured = structured_content_bg
                     if force_exact_slide_count and target_slides_override and isinstance(structured, dict):
                         structured = await content_extractor._force_slide_count_exact(structured, int(target_slides_override))
-                    if not structured.get("_explicit_slide_mode"):
+                    if (not structured.get("_explicit_slide_mode")
+                            and not structured.get("_outline_locked")):
                         structured = await improve_slide_text_quality(
                             content_extractor,
                             structured,
@@ -1525,7 +1589,8 @@ async def generate_slide_spec(
                     if await should_stop():
                         return
 
-                    if not structured.get("_explicit_slide_mode"):
+                    if (not structured.get("_explicit_slide_mode")
+                            and not structured.get("_outline_locked")):
                         structured = await improve_slide_text_quality(
                             content_extractor,
                             structured,
@@ -1542,7 +1607,8 @@ async def generate_slide_spec(
                                 structured, int(target_slides_override)
                             )
 
-                if not structured.get("_explicit_slide_mode"):
+                if (not structured.get("_explicit_slide_mode")
+                        and not structured.get("_outline_locked")):
                     structured = await improve_deck_source_grounding(
                         content_extractor,
                         structured,

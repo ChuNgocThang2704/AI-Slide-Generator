@@ -23,6 +23,7 @@ Model mặc định: black-forest-labs/FLUX.1-schnell.
 import base64
 import io
 import os
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -80,6 +81,7 @@ def _clip_token_len(pipe, text: str) -> int:
             truncation=False,
             add_special_tokens=True,
             return_attention_mask=False,
+            verbose=False,
         )["input_ids"]
         lengths.append(len(ids))
     return max(lengths) if lengths else len(text.split())
@@ -135,8 +137,13 @@ def _get_clip():
     model_id = os.getenv("CLIP_MODEL_ID", "openai/clip-vit-base-patch32").strip() or "openai/clip-vit-base-patch32"
     _clip_processor = CLIPProcessor.from_pretrained(model_id)
     _clip_model = CLIPModel.from_pretrained(model_id)
-    if torch.cuda.is_available():
+    clip_device = os.getenv("CLIP_DEVICE", "cpu").strip().lower()
+    if clip_device == "cuda" and torch.cuda.is_available():
         _clip_model = _clip_model.to("cuda")
+    else:
+        clip_device = "cpu"
+        _clip_model = _clip_model.to("cpu")
+    print(f"[clip] loaded {model_id} on {clip_device}")
     _clip_model.eval()
     return _clip_model, _clip_processor
 
@@ -216,7 +223,12 @@ async def generate(body: GenerateBody) -> Any:
         gen.manual_seed(int(body.seed))
 
     try:
-        prompt = body.prompt
+        prompt = _truncate_to_clip_budget(pipe, body.prompt, budget=75)
+        if prompt != " ".join(body.prompt.split()).strip():
+            print(
+                f"[generate] prompt truncated to CLIP budget: "
+                f"{_clip_token_len(pipe, prompt)} tokens"
+            )
         steps = body.steps
         guidance_scale = body.guidance_scale
         model_id = os.getenv("FLUX_MODEL_ID", "black-forest-labs/FLUX.1-schnell").lower()
@@ -234,7 +246,11 @@ async def generate(body: GenerateBody) -> Any:
         }
         out = pipe(**kwargs)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[generate] failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
     image = out.images[0]
     buf = io.BytesIO()
@@ -277,8 +293,8 @@ async def clip_score(body: ClipScoreBody) -> Any:
         truncation=True,
         max_length=77,
     )
-    if torch.cuda.is_available():
-        inputs = {k: v.to("cuda") for k, v in inputs.items()}
+    model_device = next(model.parameters()).device
+    inputs = {k: v.to(model_device) for k, v in inputs.items()}
     with torch.no_grad():
         out = model(**inputs)
         img_emb = out.image_embeds

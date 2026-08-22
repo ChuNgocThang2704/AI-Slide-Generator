@@ -1,5 +1,29 @@
 # LecGen AI Service
 
+## Truy xuất nguồn cho tài liệu dài
+
+Với PDF/DOCX dài và yêu cầu chỉ lấy một chủ đề, service kết hợp BM25 với
+embedding đa ngôn ngữ để chọn đúng trang trước khi sinh slide. Model embedding
+đã được huấn luyện sẵn; hệ thống chỉ chạy inference, không cần train hay chuẩn
+bị dataset riêng. Bộ chọn bằng LLM và lexical cũ vẫn được giữ làm fallback.
+
+```env
+SOURCE_RETRIEVAL_ENABLED=true
+SOURCE_EMBEDDING_ENABLED=true
+SOURCE_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+SOURCE_RETRIEVAL_MIN_CONFIDENCE=0.62
+SOURCE_RETRIEVAL_MAX_PAGES=8
+SOURCE_EMBEDDING_CACHE_DIR=.cache/fastembed
+```
+
+Model được tải ở lần chạy đầu. Đặt `SOURCE_EMBEDDING_ENABLED=false` nếu môi
+trường không thể tải model; khi đó hệ thống tiếp tục dùng BM25 và fallback cũ.
+Docker dùng volume `embedding-cache`, vì vậy model không bị tải lại sau mỗi lần
+build container.
+
+Máy embedding riêng có thể đổi sang `intfloat/multilingual-e5-large` để ưu tiên
+độ chính xác, nhưng model này chậm đáng kể khi chạy CPU.
+
 FastAPI service và Redis worker sinh/sửa deck JSON cho LecGen. Đây là API nội bộ dành cho Java Document Service; FE không gọi AI Service trực tiếp.
 
 ## Chức năng

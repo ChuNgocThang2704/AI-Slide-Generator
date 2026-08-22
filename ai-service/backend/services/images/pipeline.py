@@ -112,18 +112,12 @@ def _normalize_slide_content(slide: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
-# Premium quality prompt suffix for Ultra tier
-_ULTRA_PROMPT_SUFFIX = ", exceptionally detailed, masterpiece, highly realistic, cinematic lighting, 8k resolution"
+# Keep the quality hint short: FLUX's CLIP encoder truncates prompts after 77 tokens.
+_ULTRA_PROMPT_SUFFIX = ", professional detail, coherent lighting"
 
-_SENSITIVE_CONTENT_TYPES = frozenset({
+_FACTUAL_CONTENT_TYPES = frozenset({"historical", "medical_diagram"})
+_FACTUAL_RISK_TAGS = frozenset({
     "historical",
-    "cultural",
-    "religious",
-    "medical_diagram",
-})
-_SENSITIVE_RISK_TAGS = frozenset({
-    "historical",
-    "cultural",
     "religious",
     "medical_diagram",
     "person_protected",
@@ -133,11 +127,40 @@ _SENSITIVE_RISK_TAGS = frozenset({
     "identity_sensitive",
     "child_sensitive",
     "map_symbol_sensitive",
-    "finance_sensitive",
 })
 
-def _is_sensitive_visual_route(content_type: str, risk: Optional[str]) -> bool:
-    return str(content_type or "").lower() in _SENSITIVE_CONTENT_TYPES or str(risk or "").lower() in _SENSITIVE_RISK_TAGS
+def _requires_factual_visual_source(
+    semantic: Dict[str, Any],
+    content_type: str,
+    risk: Optional[str],
+) -> bool:
+    """Route by factual requirements instead of broad topic keywords."""
+    source = str(semantic.get("visual_source") or "either").strip().lower()
+    if source in {"stock", "scientific_reference"}:
+        return True
+    if any(bool(semantic.get(flag)) for flag in (
+        "requires_exact_identity",
+        "requires_exact_location",
+        "requires_exact_event",
+        "requires_scientific_accuracy",
+    )):
+        return True
+    return (
+        str(content_type or "").lower() in _FACTUAL_CONTENT_TYPES
+        or str(risk or "").lower() in _FACTUAL_RISK_TAGS
+    )
+
+
+def _allows_generated_factual_fallback(semantic: Dict[str, Any]) -> bool:
+    """Never fabricate visuals that explicitly require an exact real-world reference."""
+    if str(semantic.get("visual_source") or "").lower() == "scientific_reference":
+        return False
+    return not any(bool(semantic.get(flag)) for flag in (
+        "requires_exact_identity",
+        "requires_exact_location",
+        "requires_exact_event",
+        "requires_scientific_accuracy",
+    ))
 
 async def _process_single_slide(
     idx: int,
@@ -209,20 +232,12 @@ async def _process_single_slide(
         }
         return None, rec
 
-    # Slide type / semantic / data skip
+    # Slide type / semantic analysis. A data-heavy slide may still need a
+    # contextual image when the visual plan explicitly selected one. Concrete
+    # chart/table specs above remain authoritative and already skip images.
     slide_type = _detect_slide_type(slide)
     semantic = await _get_image_semantic(content_extractor, slide)
     content_type = str(semantic.get("content_type") or "normal")
-    if content_type == "data" and not force_requested:
-        print(f"[slide_images] skip image for data slide {idx}")
-        rec = {
-            "slide_index": idx,
-            "title": str(slide.get("title") or ""),
-            "status": "skipped_data_chart_route",
-            "content_type": content_type,
-            "semantic": semantic,
-        }
-        return None, rec
 
     # Keyword risk detection is advisory. Semantic/VLM validation below owns the
     # decision because hard keyword blocks can misclassify ordinary domain text.
@@ -286,11 +301,11 @@ async def _process_single_slide(
                 is_stock_photo=True,
             )
             vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
-                "relevance_score": 0.65,
-                "artifact_score": 0.20,
-                "style_match_score": 0.65,
-                "reasons": ["VLM judge unavailable; stock photo accepted with default scores"],
-                "pass": True,
+                "relevance_score": 0.0,
+                "artifact_score": 1.0,
+                "style_match_score": 0.0,
+                "reasons": ["VLM judge unavailable; candidate left unverified"],
+                "pass": False,
                 "severe_failure": False,
             }
             meta["vlm_judge"] = vlm_judge_dict
@@ -467,15 +482,18 @@ async def _process_single_slide(
         "return_base64": False,
     }
 
-    sensitive_route = _is_sensitive_visual_route(content_type, risk)
+    sensitive_route = _requires_factual_visual_source(semantic, content_type, risk)
+    allow_generated_fallback = bool(
+        IMAGE_SENSITIVE_ALLOW_FLUX and _allows_generated_factual_fallback(semantic)
+    )
     saved = False
     last_error: Optional[str] = None
     image_path: Optional[str] = None
 
     if sensitive_route:
-        debug_record["priority_route"] = "sensitive_stock_then_flux_then_secondary_ai"
-        debug_record["sensitive_allow_generated_model"] = bool(IMAGE_SENSITIVE_ALLOW_FLUX)
-        print(f"[slide_images] slide {idx} sensitive route -> try stock before generated AI")
+        debug_record["priority_route"] = "factual_source_then_validated_generation"
+        debug_record["sensitive_allow_generated_model"] = allow_generated_fallback
+        print(f"[slide_images] slide {idx} factual route -> try verified source before generated AI")
 
         async def _priority_external_vlm_validate(img_bytes: bytes, meta: Dict[str, Any]) -> bool:
             vlm_judge_res = await _vlm_judge_image(
@@ -488,11 +506,11 @@ async def _process_single_slide(
                 is_stock_photo=True,
             )
             vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
-                "relevance_score": 0.65,
-                "artifact_score": 0.20,
-                "style_match_score": 0.65,
-                "reasons": ["VLM judge unavailable; stock photo accepted with default scores"],
-                "pass": True,
+                "relevance_score": 0.0,
+                "artifact_score": 1.0,
+                "style_match_score": 0.0,
+                "reasons": ["VLM judge unavailable; candidate left unverified"],
+                "pass": False,
                 "severe_failure": False,
             }
             meta["vlm_judge"] = vlm_judge_dict
@@ -556,7 +574,7 @@ async def _process_single_slide(
             debug_record["secondary_ai_route"] = "deferred_until_after_flux"
             print(f"[slide_images] slide {idx} sensitive route -> try FLUX before secondary AI")
 
-        if not saved and not IMAGE_SENSITIVE_ALLOW_FLUX:
+        if not saved and not allow_generated_fallback:
             debug_record["status"] = "sensitive_flux_skipped"
             debug_record["error"] = "sensitive topic failed stock validation; FLUX fallback disabled"
             print(
@@ -572,6 +590,17 @@ async def _process_single_slide(
             "negative": slide_negative,
         },
     ]
+    retry_prompt = alternate_prompt or _simplify_prompt_for_retry(
+        semantic,
+        slide,
+        content_type,
+    )
+    if retry_prompt and retry_prompt.strip() != full_prompt.strip():
+        attempts_plan.append({
+            "label": "semantic_retry",
+            "prompt": retry_prompt,
+            "negative": slide_negative,
+        })
     debug_record["attempts"] = []
 
     dest = IMAGE_DIR / f"{task_id}_{idx}.png"
@@ -863,11 +892,11 @@ async def _process_single_slide(
                 is_stock_photo=True,
             )
             vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
-                "relevance_score": 0.65,
-                "artifact_score": 0.20,
-                "style_match_score": 0.65,
-                "reasons": ["VLM judge unavailable; stock photo accepted with default scores"],
-                "pass": True,
+                "relevance_score": 0.0,
+                "artifact_score": 1.0,
+                "style_match_score": 0.0,
+                "reasons": ["VLM judge unavailable; candidate left unverified"],
+                "pass": False,
                 "severe_failure": False,
             }
             meta["vlm_judge"] = vlm_judge_dict

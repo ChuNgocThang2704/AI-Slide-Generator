@@ -706,6 +706,15 @@ async def build_table_specs_for_slides(
             break
         if not isinstance(slide, dict):
             continue
+        from services.technical_quality import slide_has_code_content
+        if slide_has_code_content(slide):
+            debug_records.append({
+                "slide_index": idx,
+                "title": str(slide.get("title") or ""),
+                "source": "technical_quality",
+                "status": "skipped_code_content",
+            })
+            continue
         if idx in assigned_raw:
             continue
         planned_visual = str(
