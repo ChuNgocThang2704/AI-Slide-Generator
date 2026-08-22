@@ -164,7 +164,7 @@ services:
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       STRIPE_CURRENCY: ${STRIPE_CURRENCY:-usd}
       JWT_SIGNER_KEY: ${JWT_SIGNER_KEY}
-      SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084/api/subscription
+      SUBSCRIPTION_SERVICE_URL: ${SUBSCRIPTION_SERVICE_URL_DOCKER:-http://subscription-service:8084/api/subscription}
     depends_on:
       subscription-service:
         condition: service_started
@@ -183,9 +183,9 @@ services:
     environment:
       STATISTIC_SERVICE_PORT: 8086
       JWT_SIGNER_KEY: ${JWT_SIGNER_KEY}
-      USER_SERVICE_URL: http://user-service:8081
-      SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084
-      DOCUMENT_SERVICE_URL: http://document-service:8082
+      USER_SERVICE_URL: ${USER_SERVICE_URL_DOCKER:-http://user-service:8081}
+      SUBSCRIPTION_SERVICE_URL: ${SUBSCRIPTION_SERVICE_URL_DOCKER:-http://subscription-service:8084}
+      DOCUMENT_SERVICE_URL: ${DOCUMENT_SERVICE_URL_DOCKER:-http://document-service:8082}
     depends_on:
       user-service:
         condition: service_started
@@ -217,7 +217,7 @@ services:
       RABBIT_VHOST: ${RABBIT_VHOST:-/}
       RABBIT_SSL_ENABLED: "false"
       AI_URL: ${AI_URL_DOCKER:-http://host.docker.internal:8000}
-      APP_SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084/api/subscription
+      APP_SUBSCRIPTION_SERVICE_URL: ${APP_SUBSCRIPTION_SERVICE_URL_DOCKER:-http://subscription-service:8084/api/subscription}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -282,12 +282,12 @@ services:
     env_file:
       - .env
     environment:
-      USER_SERVICE_URL: http://user-service:8081
-      DOCUMENT_SERVICE_URL: http://document-service:8082
-      TEMPLATE_SERVICE_URL: http://template-service:8083
-      SUBSCRIPTION_SERVICE_URL: http://subscription-service:8084
-      PAYMENT_SERVICE_URL: http://payment-service:8085
-      STATISTIC_SERVICE_URL: http://statistic-service:8086
+      USER_SERVICE_URL: ${USER_SERVICE_URL_DOCKER:-http://user-service:8081}
+      DOCUMENT_SERVICE_URL: ${DOCUMENT_SERVICE_URL_DOCKER:-http://document-service:8082}
+      TEMPLATE_SERVICE_URL: ${TEMPLATE_SERVICE_URL_DOCKER:-http://template-service:8083}
+      SUBSCRIPTION_SERVICE_URL: ${SUBSCRIPTION_SERVICE_URL_DOCKER:-http://subscription-service:8084}
+      PAYMENT_SERVICE_URL: ${PAYMENT_SERVICE_URL_DOCKER:-http://payment-service:8085}
+      STATISTIC_SERVICE_URL: ${STATISTIC_SERVICE_URL_DOCKER:-http://statistic-service:8086}
       REDIS_URL: redis://redis:6379
       REDIS_SSL_ENABLED: "false"
     depends_on:
