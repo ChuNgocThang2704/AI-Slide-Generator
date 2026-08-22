@@ -1,5 +1,6 @@
 import apiClient from './apiClient';
 import { useAuthStore } from '../store';
+import { lecgenService } from './lecgenService';
 
 const normalizeApiResponse = (response) => {
   if (!response) {
@@ -50,6 +51,41 @@ const mapUser = (userResponse) => {
   };
 };
 
+/**
+ * Hàm tự động đồng bộ Đăng nhập / Đăng ký song song với LecGen Server khi đã Đăng nhập thành công
+ * Quy tắc: username = email, password = password
+ */
+const syncLecgenSession = async (email, password) => {
+  if (!email || !password) return;
+
+  try {
+    console.log('🔄 [Dual Sync] Đang đồng bộ tài khoản với LecGen Server cho Email:', email);
+    // 1. Thử đăng nhập LecGen trước
+    try {
+      await lecgenService.loginLecgen(email, password);
+      console.log('🎉 [Dual Sync] Đăng nhập LecGen thành công!');
+    } catch (loginErr) {
+      // 2. Nếu chưa có tài khoản bên LecGen (vừa mới xác thực OTP xong), tự động Đăng ký mới song song
+      console.log('⚡ Tài khoản chưa tạo ở LecGen, đang tự động Đăng ký & Đăng nhập mới...');
+      try {
+        await lecgenService.registerLecgen(email, password);
+        await lecgenService.loginLecgen(email, password);
+        console.log('🎉 [Dual Sync] Đăng ký Kép & Đăng nhập LecGen THÀNH CÔNG!');
+      } catch (regErr) {
+        console.warn('⚠️ [Dual Sync] Đăng ký Kép thất bại:', regErr.response?.data || regErr.message);
+      }
+    }
+
+    // 3. Kiểm tra gọi thử API /users/me của LecGen Server
+    if (localStorage.getItem('lecgen_token')) {
+      const lecgenMe = await lecgenService.getUsersMe();
+      console.log('✅ [LecGen Server /users/me]:', lecgenMe);
+    }
+  } catch (err) {
+    console.warn('⚠️ [Dual Sync Error]:', err.message);
+  }
+};
+
 export const authService = {
   async getMe() {
     const response = await apiClient.get('/users/my-info');
@@ -75,15 +111,65 @@ export const authService = {
       },
     });
     const meData = normalizeApiResponse(meResponse.data);
+    const mappedUser = mapUser(meData);
+
+    // 🚀 TỰ ĐỘNG ĐỒNG BỘ ĐẮNG NHẬP / ĐẮNG KÝ VỚI LECGEN SERVER KHI ĐÃ ĐĂNG NHẬP THÀNH CÔNG
+    syncLecgenSession(email, password);
 
     return {
-      user: mapUser(meData),
+      user: mappedUser,
+      token: authData.token,
+      refreshToken: authData.refreshToken,
+    };
+  },
+
+  async getGoogleAuthUrl() {
+    try {
+      const response = await apiClient.get('/auth/google/login');
+      return normalizeApiResponse(response.data);
+    } catch (err) {
+      try {
+        const fallback = await apiClient.get('/auth/google/url');
+        return normalizeApiResponse(fallback.data);
+      } catch (e) {
+        console.warn('Google Auth URL endpoint failed:', e.message);
+        return { url: '#' };
+      }
+    }
+  },
+
+  async loginWithGoogle(code) {
+    let response;
+    try {
+      response = await apiClient.post('/auth/google/redirect', { code });
+    } catch (err) {
+      response = await apiClient.post('/auth/google/callback', { code });
+    }
+    const authData = normalizeApiResponse(response.data);
+    if (!authData?.token) {
+      throw new Error('Đăng nhập Google thất bại');
+    }
+    const meResponse = await apiClient.get('/users/my-info', {
+      headers: { Authorization: `Bearer ${authData.token}` },
+    });
+    const meData = normalizeApiResponse(meResponse.data);
+    const mappedUser = mapUser(meData);
+
+    // 🚀 TỰ ĐỘNG ĐỒNG BỘ ĐĂNG NHẬP GOOGLE SANG LECGEN SERVER (Username = Email, Password = 123456)
+    if (mappedUser?.email) {
+      syncLecgenSession(mappedUser.email, '123456');
+    }
+
+    return {
+      user: mappedUser,
       token: authData.token,
       refreshToken: authData.refreshToken,
     };
   },
 
   async register(email, password) {
+    // Chỉ gửi đăng ký tạo OTP trên GenSlide trước, KHÔNG gọi LecGen ở bước này
+    // để tránh gọi thừa API hoặc báo lỗi khi người dùng chưa nhập mã OTP.
     const response = await apiClient.post('/auth/register', { email, password });
     return normalizeApiResponse(response.data);
   },
@@ -108,47 +194,23 @@ export const authService = {
     return normalizeApiResponse(response.data);
   },
 
-  async resetPassword(email, newPassword, confirmPassword) {
-    const response = await apiClient.post('/auth/reset-password', {
-      email,
-      newPassword,
-      confirmPassword,
-    });
+  async resetPassword(token, newPassword) {
+    const response = await apiClient.post('/auth/reset-password', { token, newPassword });
     return normalizeApiResponse(response.data);
   },
 
   async logout() {
-    const refreshToken = useAuthStore.getState().refreshToken;
-    const response = await apiClient.post('/auth/logout', {
-      token: refreshToken,
-    });
-    return normalizeApiResponse(response.data);
-  },
+    const token = localStorage.getItem('token');
+    localStorage.removeItem('lecgen_token');
+    if (!token) return;
 
-  async getGoogleAuthUrl() {
-    const response = await apiClient.get('/auth/google/login');
-    return normalizeApiResponse(response.data);
-  },
-
-  async loginWithGoogle(code) {
-    const response = await apiClient.post('/auth/google/redirect', { code });
-    const authData = normalizeApiResponse(response.data);
-
-    if (!authData?.token) {
-      throw new Error('Đăng nhập Google thất bại');
+    try {
+      await apiClient.post('/auth/logout', null, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 3000
+      });
+    } catch (err) {
+      console.warn('Logout API background call warning:', err.message);
     }
-
-    const meResponse = await apiClient.get('/users/my-info', {
-      headers: {
-        Authorization: `Bearer ${authData.token}`,
-      },
-    });
-    const meData = normalizeApiResponse(meResponse.data);
-
-    return {
-      user: mapUser(meData),
-      token: authData.token,
-      refreshToken: authData.refreshToken,
-    };
-  },
+  }
 };

@@ -64,6 +64,9 @@ public class AuthenticationService {
     @Value("${jwt.signerKey}")
     protected String SIGNER_KEY;
 
+    @Value("${lec-service.url:http://localhost:8000}")
+    private String lecServiceUrl;
+
     @NonFinal
     @Value("${jwt.valid-duration}")
     protected long VALID_DURATION;
@@ -124,6 +127,7 @@ public class AuthenticationService {
             userRepository.save(userEntity);
             log.info("[user-service] lưu user thành công, gửi email xác nhận tới: {}", email);
             sendVerificationEmail(userEntity);
+            registerToLecBE(userEntity, createUserRequest.getPassword());
         } catch (DataIntegrityViolationException e) {
             throw new AppException(ErrorCode.USER_EXISTED);
         }
@@ -197,7 +201,7 @@ public class AuthenticationService {
     }
 
     private String generateToken(UserEntity userEntity, long durationInSeconds, String tokenType) {
-        JWSHeader jwsHeader = new JWSHeader(JWSAlgorithm.HS512);
+        JWSHeader jwsHeader = new JWSHeader(JWSAlgorithm.HS256);
 
         JWTClaimsSet jwtClaimsSet = new JWTClaimsSet.Builder()
                 .subject(userEntity.getId().toString())
@@ -255,6 +259,9 @@ public class AuthenticationService {
         userEntity.setStatus(Status.USER_STATUS.ACTIVE);
         userRepository.save(userEntity);
         log.info("[user-service] đăng nhập thành công, userId: {}", userEntity.getId());
+
+        // Tự động đồng bộ tài khoản sang lecBE đề phòng user cũ chưa có tài khoản
+        registerToLecBE(userEntity, request.getPassword());
 
         return buildAuthenticationResponse(userEntity);
     }
@@ -319,10 +326,11 @@ public class AuthenticationService {
             RoleEntity defaultRole = roleRepository.findById(String.valueOf(RoleEnum.USER_FREE))
                     .orElseThrow(() -> new AppException(ErrorCode.ROLE_NOT_FOUND));
 
+            String rawPassword = UUID.randomUUID().toString();
             user = UserEntity.builder()
                     .email(googleUserInfo.getEmail())
                     .username(generateUsernameFromEmail(googleUserInfo.getEmail()))
-                    .password(passwordEncoder.encode(UUID.randomUUID().toString()))
+                    .password(passwordEncoder.encode(rawPassword))
                     .googleId(googleUserInfo.getSub())
                     .status(Status.USER_STATUS.VERIFIED)
                     .emailVerified(true)
@@ -332,7 +340,9 @@ public class AuthenticationService {
                     .fullName(googleUserInfo.getName())
                     .avatarUrl(googleUserInfo.getPicture())
                     .build());
-            return userRepository.save(user);
+            UserEntity savedUser = userRepository.save(user);
+            registerToLecBE(savedUser, rawPassword);
+            return savedUser;
         }
 
         user.setGoogleId(googleUserInfo.getSub());
@@ -543,5 +553,26 @@ public class AuthenticationService {
                 .token(generateAccessToken(userEntity))
                 .refreshToken(generateRefreshToken(userEntity))
                 .build();
+    }
+
+    private void registerToLecBE(UserEntity userEntity, String rawPassword) {
+        log.info("[user-service] Đang đồng bộ đăng ký tài khoản sang Python lecBE: {}", userEntity.getEmail());
+        try {
+            Map<String, String> requestBody = new HashMap<>();
+            requestBody.put("username", userEntity.getId().toString()); // UUID làm username
+            requestBody.put("email", userEntity.getEmail());
+            requestBody.put("password", rawPassword);
+
+            String response = webClient.post()
+                    .uri(lecServiceUrl + "/api/v1/auth/register")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+            log.info("[user-service] Đồng bộ tài khoản sang lecBE thành công: {}", response);
+        } catch (Exception e) {
+            log.error("[user-service] Lỗi khi đồng bộ đăng ký sang lecBE (Bỏ qua để tiếp tục): {}", e.getMessage());
+        }
     }
 }
