@@ -12,7 +12,7 @@ const videoApiClient = axios.create({
 });
 
 function authHeaders() {
-  const token = localStorage.getItem('lecgen_token');
+  const token = localStorage.getItem('token') || localStorage.getItem('lecgen_token');
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -39,7 +39,7 @@ export function getVideoApiError(error, fallback = 'Không thể kết nối d�
 
 export const videoGenerationService = {
   hasSession() {
-    return Boolean(localStorage.getItem('lecgen_token'));
+    return Boolean(localStorage.getItem('token') || localStorage.getItem('lecgen_token'));
   },
 
   async getCurrentUser(signal) {
