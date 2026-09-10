@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw } from 'lucide-react';
 import { createElementsFromSlide, createTextElement } from '../../utils/slideElements';
+import { normalizeTableElements } from '../../utils/templateLayouts';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import EditableSlide, { THEMES } from './EditableSlide';
 import { TiptapInlineEditor } from './TiptapEditor';
@@ -50,7 +51,7 @@ export default function ElementCanvas({
     const source = Array.isArray(slide.elements) && (slide.elements.length || preserveTemplate)
       ? slide.elements
       : fallbackElements;
-    return source.map((element) => {
+    return normalizeTableElements(source).map((element) => {
       const style = element.style || {};
       const legacyTitle = element.role === 'title' && Number(style.fontSize) === 36 && element.x === 64 && element.y === 48;
       const legacyBody = element.role === 'body' && Number(style.fontSize) === 20 && element.y === 140;

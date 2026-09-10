@@ -6,6 +6,8 @@ import { projectService } from '../../services/documentService';
 import { isCustomTemplateId, templateService } from '../../services/templateService';
 import { exportSlidesToPptx } from '../../services/pptxExportService';
 import { formatSlidePage, toSlidePageUpdate } from '../../utils/slideMapping';
+import { reflowSlideTemplate } from '../../utils/slideElements';
+import { applyCustomTemplateResult, prepareTemplateContent, restoreBuiltInTemplate } from '../../utils/templateSwitching';
 import {
   ChevronLeft, ChevronRight, Download, ArrowLeft,
   LayoutTemplate, Check, Loader2, Maximize2, Minimize2,
@@ -121,17 +123,13 @@ function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
   );
 }
 
-async function formatPagesWithTemplate(pages, templateId, force = false) {
+async function formatPagesWithTemplate(pages, templateId, force = false, sourceTheme) {
   return Promise.all(pages.map(async (page) => {
     const formatted = page.type ? page : formatSlidePage(page);
     if (!force && Array.isArray(formatted.elements) && formatted.elements.length) return formatted;
-    const match = await templateService.match(templateId, formatted);
-    return {
-      ...formatted,
-      type: match.layoutType || formatted.type,
-      templateLayoutId: match.layoutId,
-      elements: Array.isArray(match.elements) ? match.elements : formatted.elements,
-    };
+    const current = prepareTemplateContent(formatted, sourceTheme);
+    const match = await templateService.match(templateId, current);
+    return applyCustomTemplateResult(current, match);
   }));
 }
 
@@ -466,11 +464,17 @@ export default function EditorPage() {
   }, [presenting, slides.length]);
 
   // ── Handlers ──
+  const historyBusyRef = useRef(false);
+  const historySnapshot = useCallback(() => ({
+    slides: slidesRef.current,
+    templateId: projects.find((item) => item.id === id)?.templateId,
+  }), [id, projects]);
+
   const handleSlideUpdate = useCallback((updatedSlide) => {
     const now = Date.now();
     const startsNewHistoryStep = activeIdx !== lastHistorySlideRef.current || now - lastHistoryAtRef.current > 800;
     if (startsNewHistoryStep) {
-      undoStackRef.current.push(slidesRef.current);
+      undoStackRef.current.push(historySnapshot());
       if (undoStackRef.current.length > 50) undoStackRef.current.shift();
     }
     lastHistoryAtRef.current = now;
@@ -485,11 +489,12 @@ export default function EditorPage() {
     newSlides[activeIdx] = updatedSlide;
     slidesRef.current = newSlides;
     setSlides(newSlides);
-  }, [activeIdx]);
+  }, [activeIdx, historySnapshot]);
 
   const applyHistorySnapshot = useCallback((nextSlides) => {
     slidesRef.current = nextSlides;
     setSlides(nextSlides);
+    setActiveIdx((index) => Math.max(0, Math.min(index, nextSlides.length - 1)));
     editVersionRef.current += 1;
     hasUnsavedChangesRef.current = true;
     setHasUnsavedChanges(true);
@@ -497,24 +502,34 @@ export default function EditorPage() {
     setHistoryVersion((version) => version + 1);
   }, []);
 
-  const handleUndo = useCallback(() => {
-    if (!undoStackRef.current.length) return;
-    const previous = undoStackRef.current.pop();
-    redoStackRef.current.push(slidesRef.current);
-    lastHistoryAtRef.current = 0;
-    applyHistorySnapshot(previous);
-  }, [applyHistorySnapshot]);
+  const restoreHistory = useCallback(async (from, to) => {
+    if (!from.current.length || historyBusyRef.current || applyingTemplate) return;
+    const target = from.current[from.current.length - 1];
+    const current = historySnapshot();
+    historyBusyRef.current = true;
+    try {
+      if (target.templateId !== current.templateId) {
+        setApplyingTemplate(true);
+        await projectService.update(id, { templateId: target.templateId });
+        updateProject(id, { templateId: target.templateId });
+      }
+      from.current.pop();
+      to.current.push(current);
+      lastHistoryAtRef.current = 0;
+      applyHistorySnapshot(target.slides);
+    } catch (error) {
+      addToast(error.message || 'Không thể khôi phục template', 'error');
+    } finally {
+      historyBusyRef.current = false;
+      setApplyingTemplate(false);
+    }
+  }, [addToast, applyingTemplate, applyHistorySnapshot, historySnapshot, id, updateProject]);
 
-  const handleRedo = useCallback(() => {
-    if (!redoStackRef.current.length) return;
-    const next = redoStackRef.current.pop();
-    undoStackRef.current.push(slidesRef.current);
-    lastHistoryAtRef.current = 0;
-    applyHistorySnapshot(next);
-  }, [applyHistorySnapshot]);
+  const handleUndo = useCallback(() => restoreHistory(undoStackRef, redoStackRef), [restoreHistory]);
+  const handleRedo = useCallback(() => restoreHistory(redoStackRef, undoStackRef), [restoreHistory]);
 
   const handleDeckUpdate = useCallback((nextSlides, nextActiveIdx) => {
-    undoStackRef.current.push(slidesRef.current);
+    undoStackRef.current.push(historySnapshot());
     if (undoStackRef.current.length > 50) undoStackRef.current.shift();
     redoStackRef.current = [];
     lastHistoryAtRef.current = 0;
@@ -527,7 +542,7 @@ export default function EditorPage() {
     setHasUnsavedChanges(true);
     setSaveState('pending');
     setHistoryVersion((version) => version + 1);
-  }, []);
+  }, [historySnapshot]);
 
   const duplicateSlide = useCallback((index) => {
     const duplicate = structuredClone(slidesRef.current[index]);
@@ -686,20 +701,24 @@ export default function EditorPage() {
   }, [handleRedo, handleUndo]);
 
   const applyTemplate = async (tmpl, successMessage) => {
+    if (applyingTemplate || historyBusyRef.current) return false;
     const previousTemplateId = projects.find((item) => item.id === id)?.templateId;
     setApplyingTemplate(true);
     try {
-      const matchedSlides = tmpl.isCustom
-        ? await formatPagesWithTemplate(slidesRef.current, tmpl.id, true)
+      const customSlides = tmpl.isCustom
+        ? await formatPagesWithTemplate(slidesRef.current, tmpl.id, true, previousTemplateId)
         : null;
       await projectService.update(id, { templateId: tmpl.id });
+      const matchedSlides = customSlides || slidesRef.current.map((slide) => isCustomTemplateId(previousTemplateId)
+        ? restoreBuiltInTemplate(slide, tmpl.id) : reflowSlideTemplate(slide, tmpl.id));
+      handleDeckUpdate(matchedSlides, activeIdx);
       updateProject(id, { templateId: tmpl.id });
-      if (tmpl.isCustom) {
-        handleDeckUpdate(matchedSlides, activeIdx);
-      } else if (isCustomTemplateId(previousTemplateId)) {
-        handleDeckUpdate(slidesRef.current.map((slide) => ({ ...slide, elements: [] })), activeIdx);
-      }
       addToast(successMessage || `Template đổi sang "${tmpl.name}" ✓`, 'success');
+      const denseSlides = matchedSlides.flatMap((slide, index) => slide.elements?.some((element) =>
+        (element.type === 'table' && ((element.data?.rows?.length || 0) > 10 || (element.data?.headers?.length || 0) > 6))
+        || (element.type === 'text' && element.role === 'body' && String(element.content || '').length > 1600)
+      ) ? [index + 1] : []);
+      if (denseSlides.length) addToast(`Slide ${denseSlides.join(', ')} có nhiều dữ liệu. Nên tách slide nếu chữ quá nhỏ.`, 'info');
       return true;
     } catch (error) {
       addToast(error.message || 'Không thể lưu template', 'error');
@@ -1367,6 +1386,7 @@ export default function EditorPage() {
                       scale={scale}
                       onUpdate={handleSlideUpdate}
                       onNotify={addToast}
+                      readonly={applyingTemplate}
                       preserveTemplateStyles={isCustomTemplateId(templateId)}
                     />
                   )}

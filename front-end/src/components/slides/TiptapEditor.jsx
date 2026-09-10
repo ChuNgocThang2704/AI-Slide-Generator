@@ -133,7 +133,7 @@ export function TiptapInlineEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // mount only
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (document.activeElement !== editorRef.current && editorRef.current?.innerHTML !== (value || '')) {
       editorRef.current.innerHTML = value || '';
     }
@@ -142,7 +142,9 @@ export function TiptapInlineEditor({
   useLayoutEffect(() => {
     if (!autoFit || !editorRef.current) return undefined;
     const element = editorRef.current;
+    let disposed = false;
     const fit = () => {
+      if (disposed) return;
       element.style.removeProperty('font-size');
       let size = Number(autoFitBaseFontSize)
         || Number.parseFloat(window.getComputedStyle(element).fontSize)
@@ -160,11 +162,13 @@ export function TiptapInlineEditor({
       }
     };
     const frame = window.requestAnimationFrame(fit);
+    document.fonts?.ready.then(fit);
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
     observer?.observe(element);
     if (element.parentElement) observer?.observe(element.parentElement);
     window.addEventListener('resize', fit);
     return () => {
+      disposed = true;
       window.cancelAnimationFrame(frame);
       observer?.disconnect();
       window.removeEventListener('resize', fit);
