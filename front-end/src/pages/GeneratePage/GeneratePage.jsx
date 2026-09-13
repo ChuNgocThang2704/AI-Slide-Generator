@@ -28,8 +28,6 @@ const PROMPT_SUGGESTIONS = [
   },
 ];
 
-
-
 export default function GeneratePage() {
   const { addProject, updateProject } = useProjectStore();
   const { addToast } = useUIStore();
@@ -47,7 +45,6 @@ export default function GeneratePage() {
   const [form, setForm] = useState({
     prompt: '',
     slideCount: 8,
-    templateId: 'soft-blue',
   });
   const promptQuality = evaluatePromptQuality(form.prompt, { hasFile: Boolean(uploadedFileData) });
 
@@ -225,7 +222,7 @@ export default function GeneratePage() {
       
       const project = await projectService.create(
         promptText,
-        form.templateId,
+        'soft-blue',
         promptText,
         uploadedFileData?.fileUrl || null,
         uploadedFileData?.fileName || null,
@@ -293,7 +290,7 @@ export default function GeneratePage() {
           <h1 className="gen2-title">
             <Sparkles size={26} style={{ color: '#a89fff' }} /> Tạo slide với AI
           </h1>
-          <p className="gen2-desc">Nhập chủ đề, chọn template, AI sẽ tạo slide thuyết trình cho bạn</p>
+          <p className="gen2-desc">Nhập chủ đề, AI sẽ tạo slide thuyết trình cho bạn</p>
         </div>
 
         <div className="gen2-form-card">
@@ -382,8 +379,6 @@ export default function GeneratePage() {
               </div>
             )}
           </div>
-
-
 
           <button
             id="create-btn"

@@ -655,7 +655,6 @@ function TechPurpleContentSlide({ slide, theme, index }) {
   const half = Math.ceil(count / 2);
   const leftCol = useGrid ? bullets.slice(0, half) : bullets;
   const rightCol = useGrid ? bullets.slice(half) : [];
-  const colCount = useGrid ? Math.max(leftCol.length, rightCol.length) : count;
   const fs = useGrid ? (count <= 6 ? 15.5 : 14) : bulletFontSize(count);
   const tfs = titleFontSize(count);
   const dotSize = count <= 3 ? 10 : 8;
@@ -931,7 +930,11 @@ export default function SlideRenderer({ slide, theme = 'clean-white', index = 0,
         {slide.elements.map((element, elementIndex) => (
           <div key={element.id} style={{ position:'absolute', left:element.x, top:element.y, width:element.width, height:element.height, zIndex:elementIndex + 1, transform:`rotate(${element.rotation || 0}deg)`, overflow:'hidden' }}>
             {element.type === 'image'
-              ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || inferImageFit(element.src), objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`, transform:`scale(${element.imageScale || 1})`, transformOrigin:'center' }}/>
+              ? (element.src || element.storageUrl || element.assetId
+                  ? <AssetImage src={resolveAssetUrl(element.src)} storageUrl={element.storageUrl} assetId={element.assetId} alt="" style={{ width:'100%', height:'100%', objectFit:element.objectFit || inferImageFit(element.src), objectPosition:`${element.objectPositionX ?? 50}% ${element.objectPositionY ?? 50}%`, transform:`scale(${element.imageScale || 1})`, transformOrigin:'center' }}/>
+                  : <div style={{ width:'100%', height:'100%', background:'rgba(148,163,184,.08)', border:'1px dashed #94a3b8' }}/>)
+              : element.type === 'shape'
+                ? <div style={{ width:'100%', height:'100%', background:element.fill || 'transparent', border:`1px solid ${element.borderColor || 'transparent'}`, opacity:element.opacity ?? 1 }}/>
               : <div style={{ width:'100%', height:'100%', ...element.style }} dangerouslySetInnerHTML={{ __html: element.content || '' }}/>
             }
           </div>

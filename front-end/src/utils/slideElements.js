@@ -1,5 +1,6 @@
 import { fitTextToBox } from './textFit';
 import { inferImageFit } from './imageFit';
+import { layoutTemplateElements } from './templateLayouts.js';
 
 const id = () => `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -85,7 +86,6 @@ const isVietnameseSlide = (slide) => {
   return /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i.test(text)
     || /\b(bài giảng|tổng kết|mục tiêu|nội dung|cảm ơn)\b/i.test(text);
 };
-
 const contentTextMetrics = (slide, options = {}) => {
   const bullets = Array.isArray(slide?.bullets) ? slide.bullets.filter(Boolean) : [];
   const hasVisual = Boolean(slide?.imageUrl || slide?.table || slide?.chart);
@@ -104,7 +104,7 @@ const contentTextMetrics = (slide, options = {}) => {
   return { fontSize, lineHeight, x, width: adjustedWidth };
 };
 
-export function createElementsFromSlide(slide, theme = 'clean-white') {
+function createBaseElements(slide, theme = 'clean-white') {
   if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
@@ -325,13 +325,24 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
       id: id(), type: 'table', role: 'visual', x: 64, y: 120,
       width: 832, height: 350, rotation: 0, data: slide.table,
     });
-  } else if (slide?.chart) {
+  }
+  if (slide?.chart) {
     elements.push({
       id: id(), type: 'chart', role: 'visual', x: 64, y: 120,
       width: 832, height: 350, rotation: 0, data: slide.chart,
     });
   }
   return elements;
+}
+
+export function reflowSlideTemplate(slide, theme = 'clean-white') {
+  const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
+  return { ...slide, elements: layoutTemplateElements(slide, createBaseElements(slide, theme), theme, colors) };
+}
+
+export function createElementsFromSlide(slide, theme = 'clean-white') {
+  if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
+  return reflowSlideTemplate(slide, theme).elements;
 }
 
 export function createTextElement() {

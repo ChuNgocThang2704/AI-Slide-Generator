@@ -171,7 +171,7 @@ export function TableVisual({ table, theme, onChange, onInteract }) {
   const [cellRange, setCellRange] = useState(null);
   const cellRangeRef = useRef(null);
   const selectingRef = useRef(false);
-  const visibleRows = rows.slice(0, 8);
+  const visibleRows = rows;
   const density = Math.max(headers.length, rows.length);
   const visibleCells = [...headers, ...visibleRows.flat()].map((value) => String(value ?? ''));
   const cellWidth = Math.max(72, 810 / Math.max(1, headers.length));
@@ -496,7 +496,8 @@ export function TableVisual({ table, theme, onChange, onInteract }) {
   if (!headers.length) return <div className="sv-empty">Không có dữ liệu bảng</div>;
 
   return (
-    <div className="sv-table-wrap" style={{ borderColor: theme.surfaceBorder, '--table-font-size': `${tableFontSize}px` }}
+    <div className="sv-table-wrap" style={{ borderColor: theme.surfaceBorder, '--table-font-size': `${tableFontSize}px`,
+      '--cell-padding-y': rows.length > 8 ? '2px' : undefined }}
       onPaste={pasteCellMatrix}
       onPointerDown={(event) => {
         if (event.target.closest('.sv-cell-editor, .sv-column-resizer, .sv-row-resizer')) {

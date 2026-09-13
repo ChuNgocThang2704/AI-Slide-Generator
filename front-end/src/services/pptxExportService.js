@@ -190,7 +190,7 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
       if (element.type === 'table') {
         const table = element.data || slide.table || {};
         const headers = Array.isArray(table.headers) ? table.headers : [];
-        const rows = Array.isArray(table.rows) ? table.rows.slice(0, 8) : [];
+        const rows = Array.isArray(table.rows) ? table.rows : [];
         const colCount = Math.max(headers.length, 1);
         const colWidth = w / colCount;
         const rowHeight = Math.min(0.58, h / Math.max(rows.length + 1, 1));
@@ -297,7 +297,7 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
     ], { margin: 0 }));
   } else if (slide.type === 'table') {
     const headers = Array.isArray(slide.table?.headers) ? slide.table.headers : [];
-    const rows = Array.isArray(slide.table?.rows) ? slide.table.rows.slice(0, 8) : [];
+    const rows = Array.isArray(slide.table?.rows) ? slide.table.rows : [];
     const colCount = Math.max(headers.length, 1);
     const colWidth = 11.4 / colCount;
     const rowHeight = Math.min(0.62, 4.8 / Math.max(rows.length + 1, 1));

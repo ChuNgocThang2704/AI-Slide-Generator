@@ -5,14 +5,17 @@ import ElementCanvas from '../../components/slides/ElementCanvas';
 import VideoGenerationModal from '../../components/video/VideoGenerationModal';
 import VideoLibraryModal from '../../components/video/VideoLibraryModal';
 import { projectService } from '../../services/documentService';
+import { isCustomTemplateId, templateService } from '../../services/templateService';
 import { exportSlidesToPptx } from '../../services/pptxExportService';
 import { captureSlides, exportSnapshotsToPdf } from '../../services/visualExportService';
-import { formatSlideDeck, toSlidePageUpdate } from '../../utils/slideMapping';
+import { formatSlideDeck, formatSlidePage, toSlidePageUpdate } from '../../utils/slideMapping';
+import { reflowSlideTemplate } from '../../utils/slideElements';
+import { applyCustomTemplateResult, prepareTemplateContent, restoreBuiltInTemplate } from '../../utils/templateSwitching';
 import {
   ChevronLeft, ChevronRight, Download, ArrowLeft,
   LayoutTemplate, Check, Loader2, Maximize2, Minimize2,
   Info, Palette, Save, Sparkles, X, FileText, Play, Presentation, Cloud, CloudOff,
-  Undo2, Redo2, Copy, Trash2, GripVertical, Plus, ZoomIn, ZoomOut, Clapperboard, Library
+  Undo2, Redo2, Copy, Trash2, GripVertical, Plus, ZoomIn, ZoomOut, Clapperboard, Library, UploadCloud
 } from 'lucide-react';
 import './EditorPage.css';
 
@@ -111,9 +114,59 @@ function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
   return (
     <div style={{ width: 960 * scale, height: 540 * scale, overflow: 'hidden' }}>
       <div style={{ width: 960, height: 540, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
-        <ElementCanvas slide={slide} theme={theme} scale={1} readonly />
+        <ElementCanvas
+          slide={slide}
+          theme={theme}
+          scale={1}
+          readonly
+          preserveTemplateStyles={isCustomTemplateId(theme)}
+        />
       </div>
     </div>
+  );
+}
+
+async function formatPagesWithTemplate(pages, templateId, force = false, sourceTheme) {
+  return Promise.all(pages.map(async (page) => {
+    const formatted = page.type ? page : formatSlidePage(page);
+    if (!force && Array.isArray(formatted.elements) && formatted.elements.length) return formatted;
+    const current = prepareTemplateContent(formatted, sourceTheme);
+    const match = await templateService.match(templateId, current);
+    return applyCustomTemplateResult(current, match);
+  }));
+}
+
+function toCustomTemplateOption(template) {
+  return {
+    id: template.id,
+    name: template.name,
+    colors: { primary: template.primaryColor || '#4f46e5' },
+    preview: template.backgroundColor || '#ffffff',
+    isLight: true,
+    isCustom: true,
+  };
+}
+
+function TemplateCard({ template, selected, disabled, onSelect }) {
+  return (
+    <button
+      type="button"
+      className={`e2-tmpl-card ${selected ? 'selected' : ''}`}
+      onClick={() => onSelect(template.id)}
+      disabled={disabled}
+      aria-pressed={selected}
+    >
+      {selected && <span className="e2-tmpl-check"><Check size={11} /></span>}
+      <span className="e2-tmpl-thumb" style={{ background: template.preview }}>
+        <span className="e2-tmpl-th-title" style={{ color: template.isLight ? '#1a1a1a' : 'white' }}>
+          {template.name}
+        </span>
+        <span className="e2-tmpl-th-bar" style={{ background: template.colors.primary }} />
+      </span>
+      <span className="e2-tmpl-name" title={template.name}>{template.name}</span>
+      {template.isCustom && <span className="e2-tmpl-custom-tag">PowerPoint</span>}
+      {template.isDefault && <span className="e2-tmpl-default-tag">Mặc định</span>}
+    </button>
   );
 }
 
@@ -140,6 +193,10 @@ export default function EditorPage() {
   const [presentationViewport, setPresentationViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [rightTab, setRightTab] = useState('ai');
   const [slides, setSlides] = useState([]);
+  const [customTemplates, setCustomTemplates] = useState([]);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
+  const [templateMode, setTemplateMode] = useState('default');
+  const [templateUploading, setTemplateUploading] = useState(false);
   const [revisionPrompt, setRevisionPrompt] = useState('');
   const [revising, setRevising] = useState(false);
   const [revisionProgress, setRevisionProgress] = useState(0);
@@ -196,7 +253,12 @@ export default function EditorPage() {
         const pages = await projectService.getSlidePages(id);
         if (cancelled) return;
         if (pages && pages.length > 0) {
-          const formattedSlides = formatSlideDeck(pages, project.presentationMode);
+          const formattedSlides = isCustomTemplateId(project.templateId)
+            ? await formatPagesWithTemplate(
+                formatSlideDeck(pages, project.presentationMode),
+                project.templateId,
+              )
+            : formatSlideDeck(pages, project.presentationMode);
           slidesRef.current = formattedSlides;
           loadedProjectIdRef.current = id;
           undoStackRef.current = [];
@@ -232,6 +294,22 @@ export default function EditorPage() {
       cancelled = true;
     };
   }, [id]);
+
+  useEffect(() => {
+    let active = true;
+    templateService.getAll()
+      .then((templates) => {
+        if (active) {
+          setCustomTemplates(templates.filter((template) => template.sourceType === 'CUSTOM_PPTX'));
+        }
+      })
+      .catch(() => {
+        // The editor can continue with built-in templates.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const center = centerRef.current;
@@ -412,11 +490,17 @@ export default function EditorPage() {
   }, [presenting, slides.length]);
 
   // ── Handlers ──
+  const historyBusyRef = useRef(false);
+  const historySnapshot = useCallback(() => ({
+    slides: slidesRef.current,
+    templateId: projects.find((item) => item.id === id)?.templateId,
+  }), [id, projects]);
+
   const handleSlideUpdate = useCallback((updatedSlide) => {
     const now = Date.now();
     const startsNewHistoryStep = activeIdx !== lastHistorySlideRef.current || now - lastHistoryAtRef.current > 800;
     if (startsNewHistoryStep) {
-      undoStackRef.current.push(slidesRef.current);
+      undoStackRef.current.push(historySnapshot());
       if (undoStackRef.current.length > 50) undoStackRef.current.shift();
     }
     lastHistoryAtRef.current = now;
@@ -431,11 +515,12 @@ export default function EditorPage() {
     newSlides[activeIdx] = updatedSlide;
     slidesRef.current = newSlides;
     setSlides(newSlides);
-  }, [activeIdx]);
+  }, [activeIdx, historySnapshot]);
 
   const applyHistorySnapshot = useCallback((nextSlides) => {
     slidesRef.current = nextSlides;
     setSlides(nextSlides);
+    setActiveIdx((index) => Math.max(0, Math.min(index, nextSlides.length - 1)));
     editVersionRef.current += 1;
     hasUnsavedChangesRef.current = true;
     setHasUnsavedChanges(true);
@@ -443,24 +528,34 @@ export default function EditorPage() {
     setHistoryVersion((version) => version + 1);
   }, []);
 
-  const handleUndo = useCallback(() => {
-    if (!undoStackRef.current.length) return;
-    const previous = undoStackRef.current.pop();
-    redoStackRef.current.push(slidesRef.current);
-    lastHistoryAtRef.current = 0;
-    applyHistorySnapshot(previous);
-  }, [applyHistorySnapshot]);
+  const restoreHistory = useCallback(async (from, to) => {
+    if (!from.current.length || historyBusyRef.current || applyingTemplate) return;
+    const target = from.current[from.current.length - 1];
+    const current = historySnapshot();
+    historyBusyRef.current = true;
+    try {
+      if (target.templateId !== current.templateId) {
+        setApplyingTemplate(true);
+        await projectService.update(id, { templateId: target.templateId });
+        updateProject(id, { templateId: target.templateId });
+      }
+      from.current.pop();
+      to.current.push(current);
+      lastHistoryAtRef.current = 0;
+      applyHistorySnapshot(target.slides);
+    } catch (error) {
+      addToast(error.message || 'Không thể khôi phục template', 'error');
+    } finally {
+      historyBusyRef.current = false;
+      setApplyingTemplate(false);
+    }
+  }, [addToast, applyingTemplate, applyHistorySnapshot, historySnapshot, id, updateProject]);
 
-  const handleRedo = useCallback(() => {
-    if (!redoStackRef.current.length) return;
-    const next = redoStackRef.current.pop();
-    undoStackRef.current.push(slidesRef.current);
-    lastHistoryAtRef.current = 0;
-    applyHistorySnapshot(next);
-  }, [applyHistorySnapshot]);
+  const handleUndo = useCallback(() => restoreHistory(undoStackRef, redoStackRef), [restoreHistory]);
+  const handleRedo = useCallback(() => restoreHistory(redoStackRef, undoStackRef), [restoreHistory]);
 
   const handleDeckUpdate = useCallback((nextSlides, nextActiveIdx) => {
-    undoStackRef.current.push(slidesRef.current);
+    undoStackRef.current.push(historySnapshot());
     if (undoStackRef.current.length > 50) undoStackRef.current.shift();
     redoStackRef.current = [];
     lastHistoryAtRef.current = 0;
@@ -473,7 +568,7 @@ export default function EditorPage() {
     setHasUnsavedChanges(true);
     setSaveState('pending');
     setHistoryVersion((version) => version + 1);
-  }, []);
+  }, [historySnapshot]);
 
   const duplicateSlide = useCallback((index) => {
     const duplicate = structuredClone(slidesRef.current[index]);
@@ -631,15 +726,68 @@ export default function EditorPage() {
     return () => window.removeEventListener('keydown', handleHistoryShortcut);
   }, [handleRedo, handleUndo]);
 
-  const handleTemplateSwitch = async (tmplId) => {
-    const tmpl = TEMPLATES.find((t) => t.id === tmplId);
-    if (!tmpl) return;
+  const applyTemplate = async (tmpl, successMessage) => {
+    if (applyingTemplate || historyBusyRef.current) return false;
+    const previousTemplateId = projects.find((item) => item.id === id)?.templateId;
+    setApplyingTemplate(true);
     try {
-      await projectService.update(id, { templateId: tmplId });
-      updateProject(id, { templateId: tmplId });
-      addToast(`Template đổi sang "${tmpl.name}" ✓`, 'success');
+      const customSlides = tmpl.isCustom
+        ? await formatPagesWithTemplate(slidesRef.current, tmpl.id, true, previousTemplateId)
+        : null;
+      await projectService.update(id, { templateId: tmpl.id });
+      const matchedSlides = customSlides || slidesRef.current.map((slide) => isCustomTemplateId(previousTemplateId)
+        ? restoreBuiltInTemplate(slide, tmpl.id) : reflowSlideTemplate(slide, tmpl.id));
+      handleDeckUpdate(matchedSlides, activeIdx);
+      updateProject(id, { templateId: tmpl.id });
+      addToast(successMessage || `Template đổi sang "${tmpl.name}" ✓`, 'success');
+      const denseSlides = matchedSlides.flatMap((slide, index) => slide.elements?.some((element) =>
+        (element.type === 'table' && ((element.data?.rows?.length || 0) > 10 || (element.data?.headers?.length || 0) > 6))
+        || (element.type === 'text' && element.role === 'body' && String(element.content || '').length > 1600)
+      ) ? [index + 1] : []);
+      if (denseSlides.length) addToast(`Slide ${denseSlides.join(', ')} có nhiều dữ liệu. Nên tách slide nếu chữ quá nhỏ.`, 'info');
+      return true;
     } catch (error) {
       addToast(error.message || 'Không thể lưu template', 'error');
+      return false;
+    } finally {
+      setApplyingTemplate(false);
+    }
+  };
+
+  const handleTemplateSwitch = async (tmplId) => {
+    const customOptions = customTemplates.map(toCustomTemplateOption);
+    const tmpl = [...TEMPLATES, ...customOptions].find((item) => item.id === tmplId);
+    if (tmpl) await applyTemplate(tmpl);
+  };
+
+  const handleTemplateUpload = async (event) => {
+    const selectedFile = event.target.files?.[0];
+    event.target.value = '';
+    if (!selectedFile) return;
+
+    const extension = selectedFile.name.slice(selectedFile.name.lastIndexOf('.')).toLowerCase();
+    if (!['.pptx', '.potx'].includes(extension)) {
+      addToast('Chỉ hỗ trợ template PowerPoint định dạng PPTX hoặc POTX', 'error');
+      return;
+    }
+    if (selectedFile.size > 50 * 1024 * 1024) {
+      addToast('Dung lượng template tối đa là 50MB', 'error');
+      return;
+    }
+
+    setTemplateUploading(true);
+    try {
+      const template = await templateService.uploadCustom(selectedFile);
+      setCustomTemplates((current) => [template, ...current.filter((item) => item.id !== template.id)]);
+      setTemplateMode('custom');
+      await applyTemplate(
+        toCustomTemplateOption(template),
+        `Đã upload và áp dụng template "${template.name}"`,
+      );
+    } catch (error) {
+      addToast(error.message || 'Không thể phân tích template PowerPoint', 'error');
+    } finally {
+      setTemplateUploading(false);
     }
   };
 
@@ -668,6 +816,10 @@ export default function EditorPage() {
     if (rightTab === tabId) {
       setRightTab(null);
     } else {
+      if (tabId === 'templates') {
+        const selectedTemplateId = projects.find((item) => item.id === id)?.templateId;
+        setTemplateMode(isCustomTemplateId(selectedTemplateId) ? 'custom' : 'default');
+      }
       setRightTab(tabId);
     }
   };
@@ -1050,6 +1202,9 @@ export default function EditorPage() {
   }
 
   const { name: title, templateId = 'soft-blue' } = project;
+  const customTemplateOptions = customTemplates.map(toCustomTemplateOption);
+  const availableTemplates = [...TEMPLATES, ...customTemplateOptions];
+  const activeTemplate = availableTemplates.find((template) => template.id === templateId);
   const activeSlide = slides[activeIdx];
   const fitScale = getScale();
   const scale = fitScale * zoomPercent / 100;
@@ -1100,6 +1255,10 @@ export default function EditorPage() {
                 {title}
               </button>
             )}
+            <span className="e2-badge">{slides.length} slides</span>
+            <span className="e2-template-chip" style={{ color: activeTemplate?.colors?.primary || '#666' }}>
+              {activeTemplate?.name || templateId}
+            </span>
           </div>
         </div>
         <div className="e2-top-right">
@@ -1320,6 +1479,8 @@ export default function EditorPage() {
                       scale={scale}
                       onUpdate={handleSlideUpdate}
                       onNotify={addToast}
+                      readonly={applyingTemplate}
+                      preserveTemplateStyles={isCustomTemplateId(templateId)}
                     />
                   )}
                   </div>
@@ -1446,26 +1607,91 @@ export default function EditorPage() {
 
                 {rightTab === 'templates' && (
                   <div className="e2-template-panel">
-                    <p className="e2-panel-hint">Chọn template để áp dụng ngay cho toàn bộ presentation</p>
-                    <div className="e2-template-grid">
-                      {TEMPLATES.map((tmpl) => (
-                        <div
-                          key={tmpl.id}
-                          className={`e2-tmpl-card ${templateId === tmpl.id ? 'selected' : ''}`}
-                          onClick={() => handleTemplateSwitch(tmpl.id)}
-                        >
-                          {templateId === tmpl.id && <div className="e2-tmpl-check"><Check size={11}/></div>}
-                          <div className="e2-tmpl-thumb" style={{ background: tmpl.preview }}>
-                            <div className="e2-tmpl-th-title" style={{ color: tmpl.isLight ? '#1a1a1a' : 'white' }}>
-                              {tmpl.name}
-                            </div>
-                            <div className="e2-tmpl-th-bar" style={{ background: tmpl.colors.primary }} />
-                          </div>
-                          <div className="e2-tmpl-name">{tmpl.name}</div>
-                          {tmpl.isDefault && <div className="e2-tmpl-default-tag">Mặc định</div>}
-                        </div>
-                      ))}
+                    <div className="e2-template-tabs" role="tablist" aria-label="Nguồn template">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={templateMode === 'default'}
+                        className={templateMode === 'default' ? 'active' : ''}
+                        onClick={() => setTemplateMode('default')}
+                      >
+                        Mặc định
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={templateMode === 'custom'}
+                        className={templateMode === 'custom' ? 'active' : ''}
+                        onClick={() => setTemplateMode('custom')}
+                      >
+                        Tùy chỉnh
+                      </button>
                     </div>
+
+                    {templateMode === 'default' ? (
+                      <>
+                        <p className="e2-panel-hint">Chọn template để áp dụng ngay cho toàn bộ bài trình chiếu</p>
+                        <div className="e2-template-grid">
+                          {TEMPLATES.map((tmpl) => (
+                            <TemplateCard
+                              key={tmpl.id}
+                              template={tmpl}
+                              selected={templateId === tmpl.id}
+                              disabled={applyingTemplate || templateUploading}
+                              onSelect={handleTemplateSwitch}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="e2-template-custom-head">
+                          <p className="e2-panel-hint">Template PowerPoint của bạn</p>
+                          <label className={`e2-template-upload-btn ${(templateUploading || applyingTemplate) ? 'disabled' : ''}`}>
+                            {templateUploading ? <Loader2 size={15} className="spin" /> : <UploadCloud size={15} />}
+                            {templateUploading ? 'Đang xử lý...' : 'Upload'}
+                            <input
+                              type="file"
+                              accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                              onChange={handleTemplateUpload}
+                              disabled={templateUploading || applyingTemplate}
+                              hidden
+                            />
+                          </label>
+                        </div>
+
+                        {customTemplateOptions.length ? (
+                          <div className="e2-template-grid">
+                            {customTemplateOptions.map((tmpl) => (
+                              <TemplateCard
+                                key={tmpl.id}
+                                template={tmpl}
+                                selected={templateId === tmpl.id}
+                                disabled={applyingTemplate || templateUploading}
+                                onSelect={handleTemplateSwitch}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="e2-template-empty">
+                            <div className="e2-template-empty-icon"><Presentation size={30} /></div>
+                            <h4>Chưa có template tùy chỉnh</h4>
+                            <p>Upload file PPTX hoặc POTX để áp dụng thiết kế cho bài trình chiếu.</p>
+                            <label className={`e2-template-upload-primary ${templateUploading ? 'disabled' : ''}`}>
+                              {templateUploading ? <Loader2 size={16} className="spin" /> : <UploadCloud size={16} />}
+                              {templateUploading ? 'Đang phân tích...' : 'Upload template'}
+                              <input
+                                type="file"
+                                accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                                onChange={handleTemplateUpload}
+                                disabled={templateUploading}
+                                hidden
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -1478,7 +1704,7 @@ export default function EditorPage() {
                         {SLIDE_LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
                       </select>
                     </label>
-                    <InfoRow label="Template" value={TEMPLATES.find(t => t.id === templateId)?.name || templateId} />
+                    <InfoRow label="Template" value={activeTemplate?.name || templateId} />
                     <InfoRow label="Tiêu đề" value={activeSlide?.title || '—'} />
                     {activeSlide?.pedagogicalRole && (
                       <InfoRow

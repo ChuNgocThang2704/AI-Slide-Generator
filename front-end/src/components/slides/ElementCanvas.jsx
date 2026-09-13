@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
 import { createElementsFromSlide, createTextElement } from '../../utils/slideElements';
+import { normalizeTableElements } from '../../utils/templateLayouts';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import EditableSlide, { THEMES } from './EditableSlide';
 import { TiptapInlineEditor } from './TiptapEditor';
@@ -57,7 +58,16 @@ const adaptiveCanvasFontSize = (element) => {
   });
 };
 
-export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNotify, readonly = false, preserveTemplate = false }) {
+export default function ElementCanvas({
+  slide,
+  theme,
+  scale = 1,
+  onUpdate,
+  onNotify,
+  readonly = false,
+  preserveTemplate = false,
+  preserveTemplateStyles = false,
+}) {
   const imageInputRef = useRef(null);
   const themeData = THEMES[theme] || THEMES['clean-white'];
   const fallbackElements = useMemo(() => createElementsFromSlide(slide, theme), [slide, theme]);
@@ -65,11 +75,12 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
     const source = Array.isArray(slide.elements) && (slide.elements.length || preserveTemplate)
       ? slide.elements
       : fallbackElements;
-    return source.map((element) => {
+    return normalizeTableElements(source).map((element) => {
       const style = element.style || {};
       const legacyTitle = element.role === 'title' && Number(style.fontSize) === 36 && element.x === 64 && element.y === 48;
       const legacyBody = element.role === 'body' && Number(style.fontSize) === 20 && element.y === 140;
-      const isThemeDefaultColor = !style.color || DEFAULT_THEME_TEXT_COLORS.has(normalizeColor(style.color));
+      const isThemeDefaultColor = !preserveTemplateStyles
+        && (!style.color || DEFAULT_THEME_TEXT_COLORS.has(normalizeColor(style.color)));
       const themedStyle = element.role === 'title'
         ? {
             ...style,
@@ -104,7 +115,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
       }
       return themedStyle === style ? element : { ...element, style: themedStyle };
     });
-  }, [fallbackElements, preserveTemplate, slide.elements, slide.imageUrl, themeData]);
+  }, [fallbackElements, preserveTemplate, preserveTemplateStyles, slide.elements, slide.imageUrl, themeData]);
   const [selectedId, setSelectedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [hasClipboard, setHasClipboard] = useState(Boolean(elementClipboard));
@@ -600,6 +611,7 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
             </button>
           )}
           {element.type === 'image' ? (
+            element.src || element.storageUrl || element.assetId ? (
             <div className="canvas-image-viewport">
               <AssetImage
                 src={resolveAssetUrl(element.src)}
@@ -617,6 +629,21 @@ export default function ElementCanvas({ slide, theme, scale = 1, onUpdate, onNot
                 }}
               />
             </div>
+            ) : (
+              <div className="canvas-image-placeholder" title="Khung ảnh">
+                <ImagePlus size={32}/>
+              </div>
+            )
+          ) : element.type === 'shape' ? (
+            <div
+              className="canvas-shape"
+              style={{
+                background: element.fill || 'transparent',
+                borderColor: element.borderColor || 'transparent',
+                borderRadius: element.radius || 0,
+                opacity: element.opacity ?? 1,
+              }}
+            />
           ) : element.type === 'table' ? (
             <TableVisual
               table={element.data || slide.table}

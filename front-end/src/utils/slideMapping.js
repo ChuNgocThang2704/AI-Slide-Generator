@@ -1,4 +1,5 @@
 import { inferImageFit } from './imageFit';
+import { normalizeTableElements, orderedBodyElements } from './templateLayouts.js';
 
 export function parseBullets(page) {
   if (Array.isArray(page?.bullets)) return page.bullets;
@@ -60,13 +61,20 @@ function splitText(value) {
   return String(value || '').split(/\r?\n+/).map((item) => item.trim()).filter(Boolean);
 }
 
+export function slideTextLines(html) {
+  const separated = String(html || '').replace(/<\/(?:li|p|div|h[1-6])>/gi, '\n').replace(/<br\s*\/?>/gi, '\n');
+  let text;
+  if (typeof DOMParser !== 'undefined') {
+    text = new DOMParser().parseFromString(separated, 'text/html').body.textContent || '';
+  } else {
+    text = separated.replace(/<[^>]+>/g, '').replace(/&nbsp;|&#160;/gi, ' ')
+      .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&amp;/gi, '&');
+  }
+  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
 function normalizeElementText(value) {
-  return String(value || '')
-    .replace(/<\/li>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;|&#160;/gi, ' ')
-    .replace(/&amp;/gi, '&')
+  return slideTextLines(value).join(' ')
     .replace(/\s+/g, ' ')
     .trim()
     .toLocaleLowerCase('vi');
@@ -78,7 +86,8 @@ function currentElements(page, bullets) {
 
   const titleElement = elements.find((element) => element?.type === 'text' && element?.role === 'title');
   const bodyElement = elements.find((element) => element?.type === 'text' && element?.role === 'body');
-  const backendLayout = String(page?.layout || '').toLowerCase();
+  const bodyContent = orderedBodyElements(elements)
+    .map((element) => element.content).join(' ');
   const frontendType = backendLayoutToFrontend(page);
   const isBoundarySlide = frontendType === 'title' || frontendType === 'thankyou';
   const isLegacyBoundaryTextCanvas = isBoundarySlide
@@ -119,7 +128,7 @@ function currentElements(page, bullets) {
   // AI revision updates semantic fields first. Do not let persisted editor
   // elements from the previous revision hide that newer content.
   if (titleElement && expectedTitle && normalizeElementText(titleElement.content) !== expectedTitle) return [];
-  if (bodyElement && expectedBody && normalizeElementText(bodyElement.content) !== expectedBody) return [];
+  if (bodyElement && expectedBody && normalizeElementText(bodyContent) !== expectedBody) return [];
   return elements;
 }
 
@@ -180,7 +189,7 @@ export function formatSlidePage(page, presentationMode = 'presentation') {
   return {
     id: page.id,
     type,
-    title: page.title || '',
+    title: page.title || page.table?.title || '',
     bullets,
     subtitle: page.subtitle || ((type === 'title' || type === 'thankyou') ? bullets[0] || '' : ''),
     contact: type === 'thankyou' ? bullets[1] || '' : '',
@@ -197,7 +206,7 @@ export function formatSlidePage(page, presentationMode = 'presentation') {
     chart: page.chart || null,
     table: page.table || null,
     richText: page.richText || {},
-    elements,
+    elements: normalizeTableElements(elements),
     imageFit,
     notes: page.notes || '',
     primaryVisual: page.primaryVisual || '',
@@ -276,12 +285,13 @@ export function formatSlideDeck(pages, presentationMode = '') {
 }
 
 export function toSlidePageUpdate(slide) {
+  slide = { ...slide, elements: normalizeTableElements(slide.elements) };
   const elementTitle = slide.elements?.find((element) => element.role === 'title' && element.type === 'text');
-  const elementBody = slide.elements?.find((element) => element.role === 'body' && element.type === 'text');
-  const plainText = (html) => String(html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  const bodyElements = orderedBodyElements(slide.elements);
+  const plainText = (html) => slideTextLines(html).join(' ');
   const semanticTitle = elementTitle ? plainText(elementTitle.content) : slide.title;
-  const semanticBullets = elementBody
-    ? String(elementBody.content || '').replace(/<\/li>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').split('\n').map((item) => item.trim()).filter(Boolean)
+  const semanticBullets = bodyElements.length
+    ? bodyElements.flatMap((element) => slideTextLines(element.content))
     : serializeBullets(slide);
   const richText = {
     ...(slide.richText || {}),
