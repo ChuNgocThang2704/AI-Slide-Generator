@@ -222,3 +222,25 @@ function resetUserScopedStores() {
   useProjectStore.getState().reset();
   useDocumentStore.getState().reset();
 }
+
+// ── Video generation background job state ──────────────────────────────────
+export const useVideoGenStore = create((set) => ({
+  activeJobs: {}, // { [projectId]: { phase, progress, status, currentSlide, totalSlides, resultUrl, error } }
+
+  updateJob: (projectId, updates) =>
+    set((state) => ({
+      activeJobs: {
+        ...state.activeJobs,
+        [projectId]: { ...(state.activeJobs[projectId] || {}), ...updates },
+      },
+    })),
+
+  removeJob: (projectId) =>
+    set((state) => {
+      const next = { ...state.activeJobs };
+      delete next[projectId];
+      return { activeJobs: next };
+    }),
+
+  clearAllJobs: () => set({ activeJobs: {} }),
+}));

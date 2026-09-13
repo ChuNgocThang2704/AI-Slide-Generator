@@ -140,8 +140,8 @@ function parseTwoColumns(bullets) {
   if (groups.length >= 2) return [groups[0], groups[1]];
   const half = Math.ceil(bullets.length / 2);
   return [
-    { heading: 'Cơ hội & Lợi ích', points: bullets.slice(0, half) },
-    { heading: 'Thách thức & Rủi ro', points: bullets.slice(half) },
+    { heading: 'Nội dung chính', points: bullets.slice(0, half) },
+    { heading: 'Góc nhìn bổ sung', points: bullets.slice(half) },
   ];
 }
 

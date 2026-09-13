@@ -1,7 +1,9 @@
 from services.images.pipeline import (
     _allows_generated_factual_fallback,
+    _remove_duplicate_deck_images,
     _requires_factual_visual_source,
 )
+from PIL import Image
 from services.images.semantics import _classify_risk
 from services.images.prompts import _simplify_prompt_for_retry
 from services.slide_quality import _heuristic_visual, _is_dense_for_image
@@ -9,6 +11,30 @@ from services.slide_quality import _heuristic_visual, _is_dense_for_image
 
 def _slide(title: str, *bullets: str) -> dict:
     return {"title": title, "bullets": list(bullets)}
+
+
+def test_duplicate_deck_images_are_removed(tmp_path):
+    first = tmp_path / "first.png"
+    duplicate = tmp_path / "duplicate.png"
+    distinct = tmp_path / "distinct.png"
+    Image.new("RGB", (80, 60), "red").save(first)
+    Image.new("RGB", (80, 60), "red").save(duplicate)
+    Image.new("RGB", (80, 60), "blue").save(distinct)
+    records = [
+        {"slide_index": 1, "status": "saved", "image_path": str(first)},
+        {"slide_index": 2, "status": "saved", "image_path": str(duplicate)},
+        {"slide_index": 3, "status": "saved", "image_path": str(distinct)},
+    ]
+
+    result = _remove_duplicate_deck_images(
+        {1: str(first), 2: str(duplicate), 3: str(distinct)},
+        records,
+    )
+
+    assert set(result) == {1, 3}
+    assert records[1]["status"] == "rejected_duplicate"
+    assert records[1]["duplicate_of_slide"] == 1
+    assert not duplicate.exists()
 
 
 def test_operational_medical_content_is_not_forced_to_scientific_diagram():

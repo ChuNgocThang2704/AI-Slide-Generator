@@ -31,7 +31,7 @@ const richBulletHtml = (item) => {
   if (/^[^:]{2,38}:$/.test(value)) {
     return `<li class="slide-section-label">${escapeHtml(value.slice(0, -1))}</li>`;
   }
-  const labelled = value.match(/^([^:]{2,32}):\s+(.+)$/);
+  const labelled = value.match(/^([^:!?。]{2,56}):\s+(.+)$/);
   if (labelled) {
     return `<li><strong>${escapeHtml(labelled[1])}:</strong> ${escapeHtml(labelled[2])}</li>`;
   }
@@ -58,6 +58,24 @@ const contentPartsFromBullets = (bullets) => {
       : '';
   return { body: list, code: code.join('\n'), normal, codeLines: code };
 };
+
+const splitBalancedBullets = (items) => {
+  if (!Array.isArray(items) || items.length < 2) return [items || [], []];
+  const total = items.reduce((sum, item) => sum + String(item || '').length, 0);
+  let consumed = 0;
+  let splitAt = 1;
+  for (let index = 0; index < items.length - 1; index += 1) {
+    consumed += String(items[index] || '').length;
+    splitAt = index + 1;
+    if (consumed >= total / 2) break;
+  }
+  splitAt = Math.max(2, Math.min(items.length - 2, splitAt));
+  return [items.slice(0, splitAt), items.slice(splitAt)];
+};
+
+const bulletListHtml = (items, className = 'slide-content-flow') => (
+  `<ul class="${className}">${items.map(richBulletHtml).join('')}</ul>`
+);
 
 const isVietnameseSlide = (slide) => {
   const language = String(slide?.language || slide?.lang || '').toLowerCase();
@@ -225,20 +243,49 @@ export function createElementsFromSlide(slide, theme = 'clean-white') {
     { ...slide, imageUrl: showImage ? slide?.imageUrl : '', bullets: contentParts.normal },
     { height: bodyHeight },
   );
-  if (body && !slide?.table && !slide?.chart) elements.push(textElement(
-    'body',
-    body,
-    bodyMetrics.x,
-    126,
-    bodyMetrics.width,
-    bodyHeight,
-    {
+  const useTextColumns = !hasCode
+    && !hasVisual
+    && contentParts.normal.length >= 6
+    && contentParts.normal.length <= 10;
+  if (useTextColumns) {
+    const [leftItems, rightItems] = splitBalancedBullets(contentParts.normal);
+    const columnStyle = (items) => ({
       fontFamily: colors.body,
-      fontSize: bodyMetrics.fontSize,
+      fontSize: fitTextToBox(items.join('\n'), {
+        width: 380,
+        height: 332,
+        min: 16,
+        max: 22,
+        lineHeight: 1.5,
+        itemCount: items.length,
+      }),
       color: colors.sub,
-      lineHeight: bodyMetrics.lineHeight,
-    },
-  ));
+      lineHeight: 1.5,
+    });
+    elements.push(textElement(
+      'body-left', bulletListHtml(leftItems, 'slide-content-flow slide-content-column'),
+      64, 126, 388, 344, columnStyle(leftItems),
+    ));
+    elements.push(textElement(
+      'body-right', bulletListHtml(rightItems, 'slide-content-flow slide-content-column'),
+      508, 126, 388, 344, columnStyle(rightItems),
+    ));
+  } else if (body && !slide?.table && !slide?.chart) {
+    elements.push(textElement(
+      'body',
+      body,
+      bodyMetrics.x,
+      126,
+      bodyMetrics.width,
+      bodyHeight,
+      {
+        fontFamily: colors.body,
+        fontSize: bodyMetrics.fontSize,
+        color: colors.sub,
+        lineHeight: bodyMetrics.lineHeight,
+      },
+    ));
+  }
   if (hasCode && !slide?.table && !slide?.chart) {
     const codeY = body ? 126 + bodyHeight + 12 : 126;
     const codeHeight = 470 - codeY;

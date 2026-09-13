@@ -64,15 +64,15 @@ def chart_intent_from_slide(slide: Dict[str, Any], slide_spec: Optional[Dict[str
 
     # 2. Fallback: sử dụng heuristic từ khóa thô nếu AI không định nghĩa
     text = _fold_text(_slide_context(slide, max_chars=1200))
-    if not any(k in text for k in ("chart", "bieu do", "graph")):
+    if not re.search(r"\b(?:chart|bieu\s+do|graph)\b", text):
         return None
-    if any(k in text for k in ("tron", "pie", "thi phan")):
+    if re.search(r"\b(?:tron|pie|thi\s+phan)\b", text):
         return "pie"
-    if any(k in text for k in ("duong", "line", "xu huong", "trend")):
+    if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", text):
         return "line"
-    if any(k in text for k in ("cot", "column", "bar")):
+    if re.search(r"\b(?:cot|column|bar)\b", text):
         return "bar"
-    if "radar" in text:
+    if re.search(r"\bradar\b", text):
         return "radar"
     return "bar"
 
@@ -353,13 +353,14 @@ def _raw_chart_candidates(raw_content: str) -> List[Dict[str, Any]]:
 def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Dict[str, Any]]:
     text = str(raw_content or "")
     marker_re = re.compile(
-        r"\b(?:slide|trang)\s*(?:(?:số|so|thứ|thu)\s*)?(?:#\s*)?(\d+)\b",
-        flags=re.IGNORECASE,
+        r"(?:\b(?:slide|trang)\s*(?:(?:số|so|thứ|thu)\s*)?(?:#\s*)?(?P<slide>\d+)\b"
+        r"|^[ \t]*(?P<item>\d+)[.)][ \t]+)",
+        flags=re.IGNORECASE | re.MULTILINE,
     )
     markers = list(marker_re.finditer(text))
     out: Dict[int, Dict[str, Any]] = {}
     for pos, marker in enumerate(markers):
-        idx = int(marker.group(1)) - 1
+        idx = int(marker.group("slide") or marker.group("item")) - 1
         if not (0 <= idx < slide_count):
             continue
         end = markers[pos + 1].start() if pos + 1 < len(markers) else len(text)
@@ -378,7 +379,8 @@ def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Di
         # value list: "2021-2025 with values 13, 16, 20, 25, 31".
         range_match = re.search(r"\b(\d{4})\s*[-–—]\s*(\d{4})\b", segment)
         values_match = re.search(
-            r"\b(?:cac\s+)?(?:gia\s+tri|values?|data)\s*(?::|la|are|gom|including)?\s*(.{1,180})",
+            r"\b(?:cac\s+)?(?:gia\s+tri|du\s+lieu|values?|data)\s*"
+            r"(?::|la|are|gom|including)?\s*(.{1,180})",
             _fold_text(segment),
         )
         if range_match and values_match:
@@ -656,6 +658,50 @@ def _user_chart_from_slide(slide: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _chart_from_inline_table(slide: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Convert a chart-intended category/value table into an editable chart."""
+    if not chart_intent_from_slide(slide, slide_spec=slide):
+        return None
+    table = slide.get("table")
+    if not isinstance(table, dict):
+        return None
+    headers = [str(value or "").strip() for value in (table.get("headers") or [])]
+    rows = [row for row in (table.get("rows") or []) if isinstance(row, list)]
+    if len(headers) < 2 or len(rows) < 2:
+        return None
+
+    labels = [str(row[0] if row else "").strip() for row in rows]
+    if any(not label for label in labels):
+        return None
+    series = []
+    for column in range(1, len(headers)):
+        values = []
+        for row in rows:
+            if column >= len(row):
+                values = []
+                break
+            value = _parse_float_cell(row[column])
+            if value is None:
+                values = []
+                break
+            values.append(value)
+        if len(values) == len(labels):
+            series.append({"name": headers[column] or f"Series {column}", "values": values})
+    if not series:
+        return None
+
+    chart_type = chart_intent_from_slide(slide, slide_spec=slide) or "bar"
+    if chart_type == "bar" and all(re.fullmatch(r"(?:19|20)\d{2}", label) for label in labels):
+        chart_type = "line"
+    return normalize_chart_spec({
+        "title": str(table.get("title") or slide.get("title") or "Biểu đồ"),
+        "chart_type": chart_type,
+        "labels": labels,
+        "series": series,
+        "unit": "percent" if any("%" in str(cell) for row in rows for cell in row) else "number",
+    })
+
+
 async def build_chart_specs_for_slides(
     content_extractor,
     structured: Dict[str, Any],
@@ -705,15 +751,8 @@ async def build_chart_specs_for_slides(
 
     explicit_requests = _explicit_chart_requests(raw_content, len(slides))
     for idx, spec in explicit_requests.items():
-        if idx in skip:
-            continue
-        planned_visual = str(
-            (visual_plan or {}).get(idx)
-            or (visual_plan or {}).get(str(idx))
-            or ""
-        ).strip().lower()
-        if planned_visual and planned_visual != "chart":
-            continue
+        # Explicit user data is stronger evidence than a generated visual
+        # plan or a table inferred by another quality pass.
         out[idx] = spec
         assigned_raw.add(idx)
         debug_records.append(
@@ -827,6 +866,25 @@ async def build_chart_specs_for_slides(
             )
             continue
 
+        inline_table_chart = _chart_from_inline_table(slide)
+        if inline_table_chart:
+            out[idx] = inline_table_chart
+            debug_records.append(
+                {
+                    "slide_index": idx,
+                    "title": str(slide.get("title") or ""),
+                    "context": "chart_intended_inline_table",
+                    "raw": slide.get("table"),
+                    "spec": inline_table_chart,
+                    "status": "created",
+                }
+            )
+            print(
+                f"[slide_charts] slide {idx} chart: converted inline table "
+                f"to {inline_table_chart['chart_type']} with {len(inline_table_chart['labels'])} point(s)"
+            )
+            continue
+
         planned_visual = str((visual_plan or {}).get(idx) or "").strip().lower()
         if planned_visual and planned_visual != "chart":
             debug_records.append(
@@ -916,6 +974,8 @@ async def build_chart_specs_for_slides(
                 f"{spec['chart_type']} {len(spec['labels'])} point(s)"
             )
     for idx in list(out):
+        if idx in explicit_requests:
+            continue
         planned_visual = str(
             (visual_plan or {}).get(idx)
             or (visual_plan or {}).get(str(idx))

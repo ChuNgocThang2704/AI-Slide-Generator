@@ -5,6 +5,7 @@ import {
   Check,
   Download,
   Film,
+  Link2,
   Loader2,
   Play,
   RefreshCw,
@@ -12,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { getVideoApiError, videoGenerationService } from '../../services/videoGenerationService';
+import { projectService } from '../../services/documentService';
 import './VideoLibraryModal.css';
 
 function formatCreatedAt(value) {
@@ -28,7 +30,7 @@ function formatCreatedAt(value) {
   });
 }
 
-export default function VideoLibraryModal({ open, onClose, onNotify }) {
+export default function VideoLibraryModal({ open, onClose, onNotify, projectId }) {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -36,18 +38,45 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
+  const [attachingId, setAttachingId] = useState(null);
+  const [scope, setScope] = useState(projectId ? 'project' : 'all');
+
+  const visibleVideos = scope === 'project'
+    ? videos.filter((video) => video.belongsToCurrentProject)
+    : videos;
 
   const loadVideos = async (signal) => {
-    if (!videoGenerationService.hasSession()) {
-      setError('Phiên đăng nhập Gen Video chưa sẵn sàng. Vui lòng đăng nhập lại GenSlide.');
+    const hasSession = await videoGenerationService.ensureSession();
+    if (!hasSession) {
+      setError('Phiên đăng nhập Gen Video chưa sẵn sàng. Vui lòng đăng nhập lại LecGen.');
       return;
     }
 
     setLoading(true);
     setError('');
     try {
-      const result = await videoGenerationService.getMyVideos(signal);
-      setVideos(result.videos);
+      const [libraryResult, projectVideos] = await Promise.all([
+        videoGenerationService.getMyVideos(signal),
+        projectId ? projectService.getVideos(projectId) : Promise.resolve([]),
+      ]);
+      const projectVideoByUrl = new Map(
+        (projectVideos || []).map((video) => [video.videoUrl, video]),
+      );
+      const merged = (libraryResult.videos || []).map((video) => {
+        const projectVideo = projectVideoByUrl.get(video.video_url);
+        return {
+          ...video,
+          belongsToCurrentProject: Boolean(projectVideo),
+          projectVideoId: projectVideo?.id || null,
+        };
+      });
+      merged.sort((a, b) => {
+        if (a.belongsToCurrentProject !== b.belongsToCurrentProject) {
+          return a.belongsToCurrentProject ? -1 : 1;
+        }
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      });
+      setVideos(merged);
     } catch (loadError) {
       if (loadError?.code !== 'ERR_CANCELED') {
         setError(getVideoApiError(loadError, 'Không tải được danh sách video'));
@@ -65,7 +94,7 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
       window.clearTimeout(loadTimer);
       controller.abort();
     };
-  }, [open]);
+  }, [open, projectId]);
 
   const handleClose = () => {
     setSelectedVideo(null);
@@ -74,14 +103,17 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
     onClose();
   };
 
-  const handleDelete = async (videoId) => {
-    setDeletingId(videoId);
+  const handleDelete = async (video) => {
+    setDeletingId(video.id);
     setError('');
     try {
-      await videoGenerationService.deleteVideo(videoId);
-      setVideos((current) => current.filter((video) => video.id !== videoId));
+      await videoGenerationService.deleteVideo(video.id);
+      if (projectId && video.projectVideoId) {
+        await projectService.deleteVideo(projectId, video.projectVideoId).catch(() => {});
+      }
+      setVideos((current) => current.filter((item) => item.id !== video.id));
       setPendingDeleteId(null);
-      if (selectedVideo?.id === videoId) setSelectedVideo(null);
+      if (selectedVideo?.id === video.id) setSelectedVideo(null);
       onNotify?.('Đã xóa video', 'success');
     } catch (deleteError) {
       const message = getVideoApiError(deleteError, 'Không thể xóa video');
@@ -114,6 +146,36 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
     }
   };
 
+  const handleAttachToProject = async (video) => {
+    if (!projectId || !video?.video_url) return;
+    setAttachingId(video.id);
+    setError('');
+    try {
+      const projectVideo = await projectService.updateVideo(projectId, {
+        startNew: true,
+        phase: 'result',
+        progress: 100,
+        status: 'Video đã hoàn thành',
+        videoUrl: video.video_url,
+        temporaryVideoUrl: '',
+        error: '',
+      });
+      setVideos((current) => current.map((item) => (
+        item.id === video.id
+          ? { ...item, belongsToCurrentProject: true, projectVideoId: projectVideo.id }
+          : item
+      )));
+      onNotify?.('Đã gắn video vào bài trình chiếu này', 'success');
+      setScope('project');
+    } catch (attachError) {
+      const message = getVideoApiError(attachError, 'Không thể gắn video vào bài trình chiếu');
+      setError(message);
+      onNotify?.(message, 'error');
+    } finally {
+      setAttachingId(null);
+    }
+  };
+
   if (!open) return null;
 
   return (
@@ -124,7 +186,7 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
             <span><Film size={19} /></span>
             <div>
               <h2 id="video-library-title">Video của tôi</h2>
-              <p>{videos.length} video đã lưu</p>
+              <p>{visibleVideos.length} video đang hiển thị</p>
             </div>
           </div>
           <div className="video-library-header-actions">
@@ -138,6 +200,29 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
         </header>
 
         {error && <div className="video-library-alert"><AlertTriangle size={17} /><span>{error}</span></div>}
+
+        {!selectedVideo && projectId && (
+          <div className="video-library-scope" role="tablist" aria-label="Phạm vi video">
+            <button
+              type="button"
+              className={scope === 'project' ? 'active' : ''}
+              onClick={() => setScope('project')}
+              role="tab"
+              aria-selected={scope === 'project'}
+            >
+              Bài này
+            </button>
+            <button
+              type="button"
+              className={scope === 'all' ? 'active' : ''}
+              onClick={() => setScope('all')}
+              role="tab"
+              aria-selected={scope === 'all'}
+            >
+              Tất cả video
+            </button>
+          </div>
+        )}
 
         {selectedVideo ? (
           <div className="video-library-player">
@@ -160,11 +245,11 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
           <div className="video-library-body">
             {loading ? (
               <div className="video-library-state"><Loader2 size={24} className="spin" /><span>Đang tải danh sách video...</span></div>
-            ) : videos.length === 0 ? (
-              <div className="video-library-state"><Film size={30} /><strong>Chưa có video nào</strong><span>Video hoàn thành sẽ xuất hiện tại đây.</span></div>
+            ) : visibleVideos.length === 0 ? (
+              <div className="video-library-state"><Film size={30} /><strong>{scope === 'project' ? 'Bài này chưa có video' : 'Chưa có video nào'}</strong><span>{scope === 'project' ? 'Hãy sinh video mới cho bài trình chiếu này hoặc xem tab Tất cả video.' : 'Video hoàn thành sẽ xuất hiện tại đây.'}</span></div>
             ) : (
               <div className="video-library-list">
-                {videos.map((video) => (
+                {visibleVideos.map((video) => (
                   <article className="video-library-row" key={video.id}>
                     <button type="button" className="video-library-thumbnail" onClick={() => setSelectedVideo(video)} aria-label={`Xem video ${video.id}`}>
                       <video src={video.video_url} muted preload="metadata" />
@@ -173,17 +258,28 @@ export default function VideoLibraryModal({ open, onClose, onNotify }) {
                     <div className="video-library-info">
                       <strong>Video #{video.id}</strong>
                       <span>{formatCreatedAt(video.created_at)}</span>
-                      <small>{video.username}</small>
+                      <small>{video.belongsToCurrentProject ? 'Thuộc bài trình chiếu này' : video.username}</small>
                     </div>
                     <div className="video-library-actions">
                       <button type="button" onClick={() => setSelectedVideo(video)} title="Xem video" aria-label="Xem video"><Play size={16} /></button>
                       <button type="button" onClick={() => handleDownload(video)} disabled={downloadingId === video.id} title="Tải xuống" aria-label="Tải xuống">
                         {downloadingId === video.id ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
                       </button>
+                      {projectId && !video.belongsToCurrentProject && (
+                        <button
+                          type="button"
+                          onClick={() => handleAttachToProject(video)}
+                          disabled={attachingId === video.id}
+                          title="Gắn vào bài này"
+                          aria-label="Gắn vào bài này"
+                        >
+                          {attachingId === video.id ? <Loader2 size={16} className="spin" /> : <Link2 size={16} />}
+                        </button>
+                      )}
                       {pendingDeleteId === video.id ? (
                         <div className="video-library-delete-confirm">
                           <span>Xóa?</span>
-                          <button type="button" onClick={() => handleDelete(video.id)} disabled={deletingId === video.id} title="Xác nhận xóa" aria-label="Xác nhận xóa">
+                          <button type="button" onClick={() => handleDelete(video)} disabled={deletingId === video.id} title="Xác nhận xóa" aria-label="Xác nhận xóa">
                             {deletingId === video.id ? <Loader2 size={15} className="spin" /> : <Check size={15} />}
                           </button>
                           <button type="button" onClick={() => setPendingDeleteId(null)} disabled={deletingId === video.id} title="Hủy xóa" aria-label="Hủy xóa"><X size={15} /></button>

@@ -19,7 +19,10 @@ from services.lecture_quality import (
 )
 from services.content.json_utils import parse_json_response
 from services.plan_limits import enforce_plan_slide_limit
-from services.slide_text_quality import improve_final_slide_quality
+from services.slide_text_quality import (
+    improve_final_slide_quality,
+    improve_speaker_notes_quality,
+)
 from services.presentation_mode import lock_presentation_mode
 from services.technical_quality import repair_technical_content, validate_technical_content
 
@@ -155,7 +158,7 @@ async def finalize_deck_for_visuals(
     original_count = len(deck.get("slides") or [])
 
     if deck.get("_outline_locked"):
-        return await _finalize_locked_outline_deck(
+        deck = await _finalize_locked_outline_deck(
             content_extractor,
             deck,
             raw_content=raw_content,
@@ -163,6 +166,11 @@ async def finalize_deck_for_visuals(
             task_id=task_id,
             plan=plan,
             target_slides=target_slides,
+        )
+        return await improve_speaker_notes_quality(
+            content_extractor,
+            deck,
+            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
         )
 
     deck = await improve_final_slide_quality(
@@ -221,6 +229,11 @@ async def finalize_deck_for_visuals(
     deck = _flatten_boundary_visuals(deck)
     if remaining_technical:
         print(f"[deck_contract] unresolved technical issues={len(remaining_technical)}")
+    deck = await improve_speaker_notes_quality(
+        content_extractor,
+        deck,
+        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+    )
     deck = assign_stable_slide_ids(deck)
 
     signature = deck_structure_signature(deck)

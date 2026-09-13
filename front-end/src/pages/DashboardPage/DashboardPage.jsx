@@ -1,36 +1,54 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuthStore, useProjectStore, useUIStore } from '../../store';
+import { useAuthStore, useProjectStore, useUIStore, useVideoGenStore } from '../../store';
 import { projectService } from '../../services/documentService';
 import ElementCanvas from '../../components/slides/ElementCanvas';
 import { formatSlideDeck } from '../../utils/slideMapping';
 import {
-  Plus, Trash2, Clock,
+  Plus, Trash2, Clock, Loader2,
   Download, Sparkles, Search, FileText, Eye, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import './DashboardPage.css';
 
 const PLAN_INFO = {
-  free:  { label: 'Free',  color: '#6c63ff', desc: '3 bài trình chiếu/ngày', price: 'Miễn phí' },
-  pro:   { label: 'Pro',   color: '#f72585', desc: '20 bài trình chiếu/ngày', price: '199.000đ/tháng' },
+  free: { label: 'Free', color: '#6c63ff', desc: '3 bài trình chiếu/ngày', price: 'Miễn phí' },
+  pro: { label: 'Pro', color: '#f72585', desc: '20 bài trình chiếu/ngày', price: '199.000đ/tháng' },
   ultra: { label: 'Ultra', color: '#fbbf24', desc: 'Không giới hạn lượt tạo', price: '499.000đ/tháng' },
 };
 
 const getStatusBadge = (status) => {
   const key = typeof status === 'string' ? status.toUpperCase() : status;
   const mapping = {
-    0:            { label: '⏳ Đang tạo...',   color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
-    'CREATE':     { label: '⏳ Đang tạo...',   color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
-    'PROCESSING': { label: '⏳ Đang tạo...',   color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
-    1:            { label: '✅ Hoàn thành',   color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
-    'DONE':       { label: '✅ Hoàn thành',   color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
-    'COMPLETED':  { label: '✅ Hoàn thành',   color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
-    2:            { label: '❌ Thất bại',     color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
-    'FAILED':     { label: '❌ Thất bại',     color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
+    0: { label: '⏳ Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
+    'CREATE': { label: '⏳ Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
+    'PROCESSING': { label: '⏳ Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
+    1: { label: '✅ Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
+    'DONE': { label: '✅ Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
+    'COMPLETED': { label: '✅ Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
+    2: { label: '❌ Thất bại', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
+    'FAILED': { label: '❌ Thất bại', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
   };
-  return mapping[key] || { label: `⏳ Processing (${status})`, color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' };
+  return mapping[key] || { label: '⏳ Đang xử lý...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' };
 };
 const PAGE_SIZE = 12;
+
+const looksLikePromptName = (value) => {
+  const name = String(value || '').trim();
+  if (!name) return true;
+  const normalized = name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return name.endsWith('...')
+    || /^(hay\s+)?(tao|lam|soan|viet|thiet ke)\b/.test(normalized)
+    || /^(create|make|prepare|generate)\b/.test(normalized);
+};
+
+const projectDisplayName = (project, previewSlide) => {
+  const coverTitle = String(previewSlide?.title || '').trim();
+  if (coverTitle && looksLikePromptName(project?.name)) return coverTitle;
+  return project?.name || coverTitle || 'Bài trình chiếu';
+};
 
 function ProjectSlideThumbnail({ slide, theme }) {
   const [scale, setScale] = useState(0.3);
@@ -61,6 +79,7 @@ export default function DashboardPage() {
   const { user } = useAuthStore();
   const { projects, setProjects, updateProject, deleteProject } = useProjectStore();
   const { addToast } = useUIStore();
+  const { activeJobs } = useVideoGenStore();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
@@ -371,16 +390,20 @@ export default function DashboardPage() {
               const taskProgress = progressById[pres.id];
               const progressPercent = Math.max(0, Math.min(100, Number(taskProgress?.progress) || 0));
               const previewSlide = previewById[pres.id];
+              const displayName = projectDisplayName(pres, previewSlide);
               const statusKey = typeof pres.status === 'string' ? pres.status.toUpperCase() : pres.status;
               const isCompleted = statusKey === 1 || statusKey === 'DONE' || statusKey === 'COMPLETED';
               const isPreviewLoading = isCompleted && typeof previewSlide === 'undefined';
+              const videoJob = activeJobs[pres.id];
+              const isVideoProcessing = videoJob && videoJob.phase === 'processing';
+              const isVideoDone = videoJob && videoJob.phase === 'result';
               return (
                 <div key={pres.id} className="pres-card" onClick={() => handleOpen(pres)}>
                   <div className="pres-thumb" style={{
                     background: 'linear-gradient(135deg,#0d0d1a,#1c1c3a)'
                   }}>
                     {isPreviewLoading ? (
-                      <div className="pres-thumb-loading" aria-label="Äang táº£i áº£nh xem trÆ°á»›c">
+                      <div className="pres-thumb-loading" aria-label="Đang tải ảnh xem trước">
                         <span />
                       </div>
                     ) : previewSlide ? (
@@ -392,7 +415,7 @@ export default function DashboardPage() {
                           ✦ AI Slide
                         </div>
                         <div className="pres-thumb-title" style={{ color: 'white' }}>
-                          {pres.name}
+                          {displayName}
                         </div>
                         <div className="pres-thumb-bar" style={{ background: '#6c63ff' }} />
                       </>
@@ -404,12 +427,12 @@ export default function DashboardPage() {
 
                   <div className="pres-info">
                     <div className="pres-info-top">
-                      <h4 className="pres-title-text">{pres.name}</h4>
+                      <h4 className="pres-title-text">{displayName}</h4>
                       <button className="pres-delete-btn" onClick={(e) => handleDelete(pres.id, e)} title="Xóa" disabled={deleting === pres.id}>
                         <Trash2 size={14} />
                       </button>
                     </div>
-                    <div className="pres-meta">
+                    <div className="pres-meta" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
                       {(() => {
                         const effectiveStatus = progressPercent >= 100
                           || taskProgress?.projectStatus === 1
@@ -423,10 +446,26 @@ export default function DashboardPage() {
                           </span>
                         );
                       })()}
+                      {isVideoProcessing && (
+                        <span className="pres-template-tag" style={{ color: '#a89fff', background: 'rgba(108,99,255,0.18)', border: '1px solid rgba(108,99,255,0.4)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <Loader2 size={11} className="spin" /> Sinh video ({videoJob.progress || 0}%)
+                        </span>
+                      )}
+                      {isVideoDone && (
+                        <span className="pres-template-tag" style={{ color: '#34d399', background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.3)' }}>
+                          ✓ Video xong
+                        </span>
+                      )}
                     </div>
-                    {progressPercent < 100 && (pres.status === 0 || ['CREATE', 'PROCESSING'].includes(String(pres.status).toUpperCase())) && (
+                    {isVideoProcessing && (
+                      <div className="pres-progress" title={videoJob.status || 'Đang sinh video...'} style={{ marginTop: 4 }}>
+                        <div className="pres-progress-track"><span style={{ width: `${videoJob.progress || 0}%`, background: '#6c63ff' }} /></div>
+                        <span style={{ color: '#a89fff' }}>{videoJob.progress || 0}%</span>
+                      </div>
+                    )}
+                    {!isVideoProcessing && progressPercent < 100 && (pres.status === 0 || ['CREATE', 'PROCESSING'].includes(String(pres.status).toUpperCase())) && (
                       <div className="pres-progress" title={taskProgress?.aiStatus || 'Đang tạo slide'}>
-                        <div className="pres-progress-track"><span style={{ width: `${progressPercent}%` }}/></div>
+                        <div className="pres-progress-track"><span style={{ width: `${progressPercent}%` }} /></div>
                         <span>{progressPercent}%</span>
                       </div>
                     )}

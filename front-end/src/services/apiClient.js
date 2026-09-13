@@ -85,6 +85,9 @@ function responseMessage(data, status) {
 
   const backendMessage = typeof data?.message === 'string' ? data.message.trim() : '';
   if (MESSAGE_TRANSLATIONS[backendMessage]) return MESSAGE_TRANSLATIONS[backendMessage];
+  if (/vllm|qwen|gemini|vertex|flux|deep[- ]?live|wav2lip|tts|cuda|pytorch|redis|rabbitmq|traceback|exception|stderr|stack trace/i.test(backendMessage)) {
+    return fallbackMessage(status || 500);
+  }
   if (/^(uncategorized error|internal server error)(\s*-|$)/i.test(backendMessage)) {
     return fallbackMessage(status || 500);
   }

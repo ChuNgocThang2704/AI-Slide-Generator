@@ -572,9 +572,13 @@ class RedisQueue:
             for idx, spec in table_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["table"] = spec
+                    note_slides[idx].pop("chart", None)
+                    note_slides[idx]["layout"] = "text_table"
             for idx, spec in chart_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["chart"] = spec
+                    note_slides[idx].pop("table", None)
+                    note_slides[idx]["layout"] = "text_chart"
             assert_deck_structure_locked(structured_content, locked_signature)
             # ── Image generation (tuỳ chọn) ───────────────────────────
             want_img = _task_wants_images(task_data)
@@ -981,9 +985,13 @@ class RedisQueue:
             for idx, spec in table_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["table"] = spec
+                    note_slides[idx].pop("chart", None)
+                    note_slides[idx]["layout"] = "text_table"
             for idx, spec in chart_specs.items():
                 if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
                     note_slides[idx]["chart"] = spec
+                    note_slides[idx].pop("table", None)
+                    note_slides[idx]["layout"] = "text_chart"
             assert_deck_structure_locked(structured_content, locked_signature)
 
             # ── Image generation (tuỳ chọn) ───────────────────────────
@@ -1042,6 +1050,19 @@ class RedisQueue:
 
             if await self.is_task_cancelled(task_id):
                 return
+
+            # Failed or duplicate image candidates must not leave an empty
+            # image frame in the FE. Keep the complete text and fall back to a
+            # valid text composition; explicit user revisions can try again.
+            resolved_image_indices = set((image_paths or {}).keys())
+            for idx in image_target_indices - resolved_image_indices:
+                slides = structured_content.get("slides") or []
+                if not (0 <= idx < len(slides) and isinstance(slides[idx], dict)):
+                    continue
+                slide = slides[idx]
+                if not slide.get("image_url") and str(slide.get("layout") or "").strip().lower() == "text_image":
+                    slide["layout"] = "text_only"
+                visual_plan[idx] = "none"
 
             # ── Build Spec Payload ────────────────────────────────────
             assert_deck_structure_locked(structured_content, locked_signature)

@@ -16,7 +16,9 @@ from services.content.json_utils import parse_json_response
 _DEBUG_DIR = Path("outputs") / "debug"
 _GEMINI_REVIEW_ENABLE = os.getenv("TEXT_GEMINI_REVIEW_ENABLE", "true").lower() in ("1", "true", "yes")
 _GEMINI_REVIEW_MAX_SLIDES = int(os.getenv("TEXT_GEMINI_REVIEW_MAX_SLIDES", "8"))
-_SPEAKER_NOTES_REVIEW_MAX_SLIDES = int(os.getenv("SPEAKER_NOTES_REVIEW_MAX_SLIDES", "12"))
+_SPEAKER_NOTES_REVIEW_BATCH_SIZE = int(os.getenv("SPEAKER_NOTES_REVIEW_BATCH_SIZE", "4"))
+_SPEAKER_NOTES_MIN_WORDS = int(os.getenv("SPEAKER_NOTES_MIN_WORDS", "85"))
+_SPEAKER_NOTES_MAX_WORDS = int(os.getenv("SPEAKER_NOTES_MAX_WORDS", "140"))
 
 
 def _normalize_for_match(text: str) -> str:
@@ -630,19 +632,42 @@ _NOTE_META_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
+_GREETING_RE = re.compile(
+    r"^(?:xin\s+chào|chào\s+mừng|chào\s+các\s+bạn|chào\s+mọi\s+người|hello|welcome|trong\s+buổi\s+học\s+hôm\s+nay|ở\s+bài\s+học\s+này)",
+    flags=re.IGNORECASE,
+)
 
-def _speaker_note_issues(slide: Dict[str, Any]) -> List[str]:
+_NOTE_INSTRUCTION_OPENER_RE = re.compile(
+    r"^(?:gioi thieu|trinh bay|tap trung|huong dan|cung cap|neu ro|nhan manh|"
+    r"introduce|present|focus on|guide|provide|describe|highlight)\b",
+    flags=re.IGNORECASE,
+)
+
+_NOTE_PLACEHOLDER_RE = re.compile(
+    r"[\[<{](?:ten\s+)?(?:giang\s+vien|nguoi\s+trinh\s+bay|to\s+chuc|don\s+vi|"
+    r"speaker|presenter|organization|author)[^\]}>]*[\]}>]",
+    flags=re.IGNORECASE,
+)
+
+
+def _speaker_note_issues(slide: Dict[str, Any], idx: int = 0) -> List[str]:
     notes = str(slide.get("notes") or slide.get("script") or "").strip()
-    bullets = _slide_bullets_preview(slide, limit=6)
+    bullets = _slide_bullets_preview(slide, limit=10)
     source = " ".join([str(slide.get("title") or "")] + bullets)
     issues: List[str] = []
     word_count = len(_words(notes))
-    if word_count < 65:
+    if word_count < _SPEAKER_NOTES_MIN_WORDS:
         issues.append("speaker_notes_too_short")
-    elif word_count > 130:
+    elif word_count > _SPEAKER_NOTES_MAX_WORDS:
         issues.append("speaker_notes_too_long")
     if _NOTE_META_RE.search(notes):
         issues.append("speaker_notes_meta_description")
+    if _NOTE_INSTRUCTION_OPENER_RE.search(_normalize_for_match(notes).strip()):
+        issues.append("speaker_notes_instruction_opener")
+    if _NOTE_PLACEHOLDER_RE.search(_normalize_for_match(notes)):
+        issues.append("speaker_notes_unresolved_placeholder")
+    if idx > 0 and _GREETING_RE.search(notes):
+        issues.append("speaker_notes_repeated_greeting")
     folded_notes = re.sub(r"\W+", " ", notes.lower()).strip()
     for bullet in bullets:
         folded_bullet = re.sub(r"\W+", " ", bullet.lower()).strip()
@@ -656,7 +681,25 @@ def _speaker_note_issues(slide: Dict[str, Any]) -> List[str]:
     return issues
 
 
-def _ground_and_trim_speaker_notes(notes: str, source: str, max_words: int = 125) -> str:
+def _ground_and_trim_speaker_notes(
+    notes: str,
+    source: str,
+    max_words: int = _SPEAKER_NOTES_MAX_WORDS,
+    idx: int = 0,
+) -> str:
+    if idx > 0:
+        notes = re.sub(
+            r"^(?:Xin\s+chào|Chào\s+mừng|Chào\s+các\s+bạn|Chào\s+mọi\s+người|Hello|Welcome)[^.!?]*[.!?]\s*",
+            "",
+            notes,
+            flags=re.IGNORECASE,
+        )
+        notes = re.sub(
+            r"^(?:Trong\s+buổi\s+học\s+hôm\s+nay|Ở\s+bài\s+học\s+này)[^.!?]*[.!?]\s*",
+            "",
+            notes,
+            flags=re.IGNORECASE,
+        )
     source_folded = unicodedata.normalize("NFKD", str(source or ""))
     source_folded = "".join(ch for ch in source_folded if not unicodedata.combining(ch)).lower()
     speculative_patterns = (
@@ -690,12 +733,13 @@ def _ground_and_trim_speaker_notes(notes: str, source: str, max_words: int = 125
     return " ".join(kept).strip()
 
 
-async def _review_speaker_notes(
+async def _review_speaker_notes_batch(
     content_extractor,
     structured: Dict[str, Any],
     *,
     source_language: str = "auto",
     provider: str = "auto",
+    candidate_indices: Optional[set[int]] = None,
 ) -> Tuple[Dict[str, Any], List[int]]:
     if not _GEMINI_REVIEW_ENABLE:
         return structured, []
@@ -707,14 +751,16 @@ async def _review_speaker_notes(
     for idx, slide in enumerate(slides):
         if not isinstance(slide, dict):
             continue
-        issues = _speaker_note_issues(slide)
+        if candidate_indices is not None and idx not in candidate_indices:
+            continue
+        issues = _speaker_note_issues(slide, idx=idx)
         if not issues:
             continue
         review_items.append(
             {
                 "index": idx,
                 "title": str(slide.get("title") or ""),
-                "bullets": _slide_bullets_preview(slide, limit=6),
+                "bullets": _slide_bullets_preview(slide, limit=10),
                 "table": slide.get("table"),
                 "chart": slide.get("chart"),
                 "current_notes": str(slide.get("notes") or slide.get("script") or ""),
@@ -726,8 +772,6 @@ async def _review_speaker_notes(
                 "issues": issues,
             }
         )
-        if len(review_items) >= max(1, _SPEAKER_NOTES_REVIEW_MAX_SLIDES):
-            break
     if not review_items:
         return structured, []
 
@@ -735,14 +779,23 @@ async def _review_speaker_notes(
         {
             "role": "system",
             "content": (
-                "You are an expert presentation speechwriter. Rewrite only the speaker notes.\n"
+                "You are an expert Vietnamese university lecturer writing spoken narration scripts for an AI text-to-speech video lecture system.\n"
                 f"{_language_instruction(source_language)}\n"
-                "For each slide, write 70-120 words of natural narration that a presenter can speak directly. "
-                "Use only facts, numbers, names, and claims supported by that slide's title, bullets, table, or chart. "
-                "Do not invent examples, statistics, causes, or conclusions. Explain the meaning and relationship of the provided points instead of reading bullets verbatim. "
-                "Never say 'Slide này giới thiệu/trình bày/mô tả' or 'This slide presents/introduces'. "
-                "When next_slide_title is provided, finish with one short natural bridge to that idea without mentioning slide numbers. "
-                "For the final slide, end with a concise closing thought. Plain text only, no Markdown.\n"
+                "GOAL: Rewrite the speaker notes for each slide so they sound like a real lecturer speaking live to students — natural, engaging, and easy for a TTS engine to pronounce correctly.\n"
+                "\n"
+                "STRICT RULES:\n"
+                "1. LENGTH: Write 90-130 words per slide. Never fewer than 85, never more than 140.\n"
+                "2. SENTENCE LENGTH: Keep each sentence to 12-20 words maximum. Short sentences help TTS pause naturally.\n"
+                "3. PLAIN TEXT ONLY: No Markdown, no bullet points, no symbols like *, -, #, /, or parentheses. Numbers must be written in full words (e.g. 'hai mươi phần trăm' not '20%', 'ba tỷ đồng' not '3 tỷ').\n"
+                "4. ABBREVIATIONS: Spell out all abbreviations. Write 'Công nghệ thông tin' not 'CNTT', 'ví dụ' not 'vd', 'và' not '&'.\n"
+                "5. LECTURER TONE: Use first-person plural ('Chúng ta', 'Các bạn', 'Hãy cùng nhau'). Sound like a real teacher explaining to students, not reading a document.\n"
+                "6. COVERAGE: Explain every visible bullet and all important table or chart values. Connect related ideas instead of reading bullets verbatim.\n"
+                "7. GREETINGS & OPENERS: ONLY slide 1 (index 0) can start with a greeting (e.g., 'Xin chào các bạn...'). From slide 2 onwards (index >= 1), ABSOLUTELY NEVER say 'Xin chào', 'Chào mừng các bạn', or re-introduce the whole topic. Jump directly into that specific slide's content using transition phrases (e.g., 'Tiếp theo, chúng ta cùng phân tích...', 'Đi sâu vào phần này...').\n"
+                "8. FORBIDDEN OPENERS: Never say 'Slide này', 'Trang này', 'This slide', 'In this slide'.\n"
+                "9. GROUNDING: Only use facts, numbers, and claims that appear in the slide's title, bullets, table, or chart. Do not invent new statistics or examples. Start with the actual narration, never an instruction such as introduce, present, explain, focus on, or guide. Never output unresolved placeholders such as [Speaker name], [Presenter], [Organization], or [Tên giảng viên]. Omit unknown identity information entirely.\n"
+                "10. TRANSITION: When next_slide_title is provided, end with one natural bridge sentence that leads into the next topic (no slide numbers). For the final slide, close with a memorable summary thought.\n"
+                "11. SPECULATIVE LANGUAGE: Do not use speculative phrases ('chúng tôi tin', 'trong tương lai sẽ', 'hứa hẹn'). Stick to facts.\n"
+                "\n"
                 "Return strict JSON only: {\"slides\":[{\"index\":number,\"notes\":string}]}"
             ),
         },
@@ -778,14 +831,20 @@ async def _review_speaker_notes(
             continue
         source = " ".join(
             [str(improved_slides[idx].get("title") or "")]
-            + _slide_bullets_preview(improved_slides[idx], limit=6)
+            + _slide_bullets_preview(improved_slides[idx], limit=10)
             + [
                 json.dumps(improved_slides[idx].get("table") or {}, ensure_ascii=False),
                 json.dumps(improved_slides[idx].get("chart") or {}, ensure_ascii=False),
             ]
         )
-        notes = _ground_and_trim_speaker_notes(item.get("notes") or "", source)
-        if len(_words(notes)) < 50 or len(_words(notes)) > 130 or _NOTE_META_RE.search(notes):
+        notes = _ground_and_trim_speaker_notes(item.get("notes") or "", source, idx=idx)
+        if (
+            len(_words(notes)) < _SPEAKER_NOTES_MIN_WORDS
+            or len(_words(notes)) > _SPEAKER_NOTES_MAX_WORDS
+            or _NOTE_META_RE.search(notes)
+            or _NOTE_INSTRUCTION_OPENER_RE.search(_normalize_for_match(notes).strip())
+            or _NOTE_PLACEHOLDER_RE.search(_normalize_for_match(notes))
+        ):
             continue
         source_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", source))
         note_numbers = set(re.findall(r"\d+(?:[.,]\d+)?", notes))
@@ -794,6 +853,39 @@ async def _review_speaker_notes(
         improved_slides[idx]["notes"] = notes
         changed.append(idx)
     return improved, changed
+
+
+async def _review_speaker_notes(
+    content_extractor,
+    structured: Dict[str, Any],
+    *,
+    source_language: str = "auto",
+    provider: str = "auto",
+) -> Tuple[Dict[str, Any], List[int]]:
+    """Review every weak note in small batches so long decks are not truncated."""
+    slides = structured.get("slides") or []
+    pending = [
+        idx
+        for idx, slide in enumerate(slides)
+        if isinstance(slide, dict) and _speaker_note_issues(slide, idx=idx)
+    ]
+    if not pending:
+        return structured, []
+
+    improved = copy.deepcopy(structured)
+    changed: List[int] = []
+    batch_size = max(1, _SPEAKER_NOTES_REVIEW_BATCH_SIZE)
+    for start in range(0, len(pending), batch_size):
+        batch = set(pending[start : start + batch_size])
+        improved, batch_changed = await _review_speaker_notes_batch(
+            content_extractor,
+            improved,
+            source_language=source_language,
+            provider=provider,
+            candidate_indices=batch,
+        )
+        changed.extend(batch_changed)
+    return improved, sorted(set(changed))
 
 
 async def improve_speaker_notes_quality(

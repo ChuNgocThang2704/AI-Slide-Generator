@@ -54,7 +54,7 @@ export default function GeneratePage() {
   // Progress states
   const [showProgress, setShowProgress] = useState(false);
   const [progressVal, setProgressVal] = useState(0);
-  const [progressStatus, setProgressStatus] = useState('Đang gửi dữ liệu đến AI...');
+  const [progressStatus, setProgressStatus] = useState('Đang gửi nội dung để xử lý...');
   const [currentProjectId, setCurrentProjectId] = useState(null);
   const [pollingIntervalId, setPollingIntervalId] = useState(null);
 
@@ -176,7 +176,7 @@ export default function GeneratePage() {
     if (pct >= 100 || aiStatus === 'completed') {
       return 'Hoàn thành! Đang chuẩn bị mở trình soạn thảo...';
     }
-    return 'AI đang tạo slide, Vui lòng chờ...';
+    return 'Đang xây dựng nội dung và bố cục slide, vui lòng chờ...';
   };
 
   // Hủy tác vụ
@@ -219,7 +219,7 @@ export default function GeneratePage() {
     try {
       setLoading(true);
       setProgressVal(0);
-      setProgressStatus('Đang khởi tạo project...');
+      setProgressStatus('Đang chuẩn bị bài trình chiếu...');
       setShowProgress(true);
       const promptText = form.prompt.trim();
       
@@ -236,7 +236,7 @@ export default function GeneratePage() {
       addProject(project);
       setCurrentProjectId(project.id);
       setProgressVal(0);
-      setProgressStatus('Đang khởi tạo tác vụ...');
+      setProgressStatus('Đang bắt đầu tạo slide...');
       setShowProgress(true);
 
       // Bắt đầu vòng lặp check status mỗi 1.5 giây
@@ -262,7 +262,7 @@ export default function GeneratePage() {
             setPollingIntervalId(null);
             setShowProgress(false);
             setLoading(false);
-            addToast(res.errorMessage || 'AI sinh slide thất bại, vui lòng thử lại', 'error');
+            addToast('Không thể tạo slide. Vui lòng kiểm tra nội dung và thử lại.', 'error');
           } else if (status === 'cancelled') {
             clearInterval(intervalId);
             setPollingIntervalId(null);
@@ -393,7 +393,7 @@ export default function GeneratePage() {
           >
             {loading && !showProgress ? (
               <>
-                <Loader2 size={18} className="spin" /> Đang tạo project...
+                <Loader2 size={18} className="spin" /> Đang chuẩn bị bài trình chiếu...
               </>
             ) : (
               <>
@@ -410,7 +410,7 @@ export default function GeneratePage() {
           <div className="gen2-progress-modal">
             <div className="gen2-progress-header">
               <Sparkles size={32} className="gen2-progress-sparkle spin-slow" />
-              <h3>Đang tạo slide với AI</h3>
+              <h3>Đang tạo bài trình chiếu</h3>
             </div>
             
             <div className="gen2-progress-circle-container">

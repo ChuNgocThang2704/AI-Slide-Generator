@@ -269,6 +269,13 @@ def _heuristic_visual(slide: Dict[str, Any], *, want_images: bool) -> str:
 def _declared_visual(slide: Dict[str, Any]) -> Optional[str]:
     """Return only an explicit visual contract already present on the slide."""
     layout = str(slide.get("layout") or "").strip().lower()
+    # Models sometimes encode chart-ready category/value data as an inline
+    # table. A clear chart title is the stronger semantic contract; keeping the
+    # table here would prevent the chart builder from ever seeing the slide.
+    if isinstance(slide.get("table"), dict):
+        from services.slide_charts import chart_intent_from_slide
+        if chart_intent_from_slide(slide, slide_spec=slide):
+            return "chart"
     if isinstance(slide.get("table"), dict) or "table" in layout:
         return "table"
     if isinstance(slide.get("chart"), dict) or slide.get("chart_type") or "chart" in layout:
@@ -276,6 +283,54 @@ def _declared_visual(slide: Dict[str, Any]) -> Optional[str]:
     if slide.get("image") or slide.get("image_url") or "image" in layout:
         return "image"
     return None
+
+
+def _apply_planned_composition(slide: Dict[str, Any], item: Dict[str, Any], visual: str) -> None:
+    """Apply a renderer-supported non-asset composition without losing content."""
+    if visual != "none":
+        return
+    current_layout = str(slide.get("layout") or "").strip().lower()
+    if current_layout in {"intro", "title", "thankyou", "thank_you", "text_table", "text_chart", "text_image"}:
+        return
+    if str(item.get("composition") or "standard").strip().lower() != "split_columns":
+        return
+
+    bullets = slide.get("bullets") or slide.get("content") or []
+    if not isinstance(bullets, list) or not 4 <= len(bullets) <= 8:
+        return
+
+    def valid_indices(value: Any) -> List[int]:
+        if not isinstance(value, list):
+            return []
+        result: List[int] = []
+        for raw_index in value:
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(bullets) and index not in result:
+                result.append(index)
+        return result
+
+    left_indices = valid_indices(item.get("left_indices"))
+    right_indices = valid_indices(item.get("right_indices"))
+    if not left_indices or not right_indices or set(left_indices) & set(right_indices):
+        return
+    assigned = set(left_indices) | set(right_indices)
+    for index in range(len(bullets)):
+        if index not in assigned:
+            (left_indices if len(left_indices) <= len(right_indices) else right_indices).append(index)
+
+    left_heading = str(item.get("left_heading") or "").strip()[:48]
+    right_heading = str(item.get("right_heading") or "").strip()[:48]
+    if not left_heading or not right_heading or left_heading.casefold() == right_heading.casefold():
+        return
+
+    slide["bullets"] = [
+        *[f"{left_heading} — {str(bullets[index]).strip()}" for index in left_indices],
+        *[f"{right_heading} — {str(bullets[index]).strip()}" for index in right_indices],
+    ]
+    slide["layout"] = "split_columns"
 
 
 async def build_visual_plan(
@@ -291,7 +346,7 @@ async def build_visual_plan(
         return {}
 
     fallback: Dict[int, str] = {
-        idx: _heuristic_visual(slide, want_images=want_images)
+        idx: (_declared_visual(slide) or _heuristic_visual(slide, want_images=want_images))
         for idx, slide in enumerate(slides)
         if isinstance(slide, dict)
     }
@@ -302,7 +357,13 @@ async def build_visual_plan(
         "raw_input_excerpt": str(raw_content or "")[:5000],
         "want_images": bool(want_images),
         "slides": [
-            {"slide_index": idx, "text": _slide_text(slide, max_chars=700)}
+            {
+                "slide_index": idx,
+                "title": str(slide.get("title") or ""),
+                "bullets": slide.get("bullets") or slide.get("content") or [],
+                "layout": str(slide.get("layout") or ""),
+                "text": _slide_text(slide, max_chars=700),
+            }
             for idx, slide in enumerate(slides)
             if isinstance(slide, dict)
         ],
@@ -320,10 +381,24 @@ async def build_visual_plan(
                 "- none: for title, conclusion, thin, or abstract slides where a visual would add little value.\n"
                 "- none: also for dense slides with over 7 bullets or roughly over 760 visible characters; "
                 "readability is more important than decorative image coverage.\n"
-                "- When want_images=true, route at least 30% of the deck to image unless chart/table already "
-                "provides the visual. Avoid an overly text-only deck.\n"
+                "- When want_images=true, keep the whole deck visually balanced: roughly half of the content "
+                "slides should use an image, chart, or table when suitable, and at least 35% should use images "
+                "when chart/table coverage is low. Do not count cover or closing slides toward this target.\n"
+                "- Avoid more than two consecutive none slides when a relevant, non-dense image candidate exists.\n"
+                "- For a none slide with 4-8 bullets that naturally forms exactly two meaningful groups, set "
+                "composition=split_columns and return concise left_heading/right_heading plus zero-based "
+                "left_indices/right_indices covering the bullets. Otherwise use composition=standard.\n"
+                "- Evaluate composition as a fallback for every slide, including image candidates, because deck-level "
+                "balancing may later remove a lower-priority image.\n"
+                "- Return image_priority from 0.0 to 1.0 for every image choice: use higher values only when the "
+                "image materially explains the slide rather than merely decorating it.\n"
+                "- Do not force split columns merely for variety; both groups must have distinct meanings.\n"
                 "- Do not choose chart/table from prose if the data structure is weak.\n"
-                "Return strict JSON only: {\"slides\":[{\"slide_index\":number,\"visual\":\"none|image|chart|table\"}]}."
+                "Return strict JSON only: {\"slides\":[{\"slide_index\":number,"
+                "\"visual\":\"none|image|chart|table\",\"composition\":\"standard|split_columns\","
+                "\"image_priority\":number,"
+                "\"left_heading\":string,\"right_heading\":string,"
+                "\"left_indices\":[number],\"right_indices\":[number]}]}."
             ),
         },
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -331,7 +406,7 @@ async def build_visual_plan(
     try:
         raw = await content_extractor._llm_completion_plain_text(
             messages,
-            max_tokens=min(1800, 240 + len(fallback) * 70),
+            max_tokens=min(2600, 300 + len(fallback) * 115),
             temperature=0.05,
             json_mode=True,
         )
@@ -340,6 +415,7 @@ async def build_visual_plan(
         if not isinstance(items, list):
             return fallback
         plan = dict(fallback)
+        items_by_index: Dict[int, Dict[str, Any]] = {}
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -349,6 +425,7 @@ async def build_visual_plan(
                 continue
             visual = str(item.get("visual") or "").strip().lower()
             if idx in plan and visual in _VISUAL_VALUES:
+                items_by_index[idx] = item
                 from services.technical_quality import slide_has_code_content
                 if slide_has_code_content(slides[idx]):
                     plan[idx] = "none"
@@ -362,13 +439,50 @@ async def build_visual_plan(
                     visual = "none"
                 plan[idx] = visual
         if want_images:
+            boundary_indices = {
+                idx for idx, slide in enumerate(slides)
+                if str((slide or {}).get("layout") or "").strip().lower()
+                in {"intro", "title", "thankyou", "thank_you"}
+            }
+            for idx in boundary_indices:
+                plan[idx] = "none"
             fallback_candidates = [
                 idx for idx, visual in fallback.items()
-                if visual == "image" and plan.get(idx) not in {"chart", "table"}
+                if (
+                    idx not in boundary_indices
+                    and visual == "image"
+                    and plan.get(idx) not in {"chart", "table"}
+                )
             ]
+            content_indices = [idx for idx in range(len(slides)) if idx not in boundary_indices]
+            maximum_images = max(1, (len(content_indices) * 55 + 99) // 100)
+            planned_image_indices = [idx for idx in content_indices if plan.get(idx) == "image"]
+            while len(planned_image_indices) > maximum_images:
+                def removal_key(candidate: int) -> tuple[float, int, int]:
+                    item = items_by_index.get(candidate) or {}
+                    try:
+                        priority = max(0.0, min(1.0, float(item.get("image_priority") or 0.0)))
+                    except (TypeError, ValueError):
+                        priority = 0.0
+                    others = [idx for idx in planned_image_indices if idx != candidate]
+                    nearest = min((abs(candidate - idx) for idx in others), default=len(slides))
+                    return priority, nearest, candidate
+
+                removed = min(planned_image_indices, key=removal_key)
+                plan[removed] = "none"
+                planned_image_indices.remove(removed)
+                print(
+                    "[slide_quality] visual plan capped: "
+                    f"demoted slide {removed}, maximum_images={maximum_images}"
+                )
+            structured_visuals = sum(
+                1 for idx in content_indices if plan.get(idx) in {"chart", "table"}
+            )
+            image_floor = (len(content_indices) * 35 + 99) // 100
+            visual_target = (len(content_indices) + 1) // 2
             minimum_images = min(
                 len(fallback_candidates),
-                max(1, (len(slides) * 3 + 9) // 10),
+                max(1, image_floor, visual_target - structured_visuals),
             )
             planned_images = sum(1 for visual in plan.values() if visual == "image")
             if planned_images < minimum_images:
@@ -404,18 +518,22 @@ async def build_visual_plan(
                 run_end = run_start
                 while run_end + 1 < len(slides) and plan.get(run_end + 1) == "none":
                     run_end += 1
-                if run_end - run_start + 1 > 4:
+                if run_end - run_start + 1 > 2:
                     eligible = [
                         idx for idx in fallback_candidates
                         if run_start <= idx <= run_end and plan.get(idx) == "none"
                     ]
-                    if eligible:
+                    if eligible and planned_images < maximum_images:
                         midpoint = (run_start + run_end) / 2
                         chosen = min(eligible, key=lambda idx: abs(idx - midpoint))
                         plan[chosen] = "image"
                         planned_images += 1
                         continue
                 run_start = run_end + 1
+
+        for idx, item in items_by_index.items():
+            if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+                _apply_planned_composition(slides[idx], item, plan.get(idx, "none"))
         print(f"[slide_quality] visual plan: {plan}")
         return plan
     except Exception as e:

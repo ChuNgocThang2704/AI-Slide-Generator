@@ -165,7 +165,15 @@
 /* ── STATS ── */
 .stats-section { padding: 40px 0; border-top: 1px solid rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05); }
 .stats-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 32px; text-align: center; }
-.stat-value { font-family:'Outfit',sans-serif; font-size: 2.5rem; font-weight: 900; margin-bottom: 4px; }
+.stat-value {
+  min-height: 42px;
+  margin-bottom: 6px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.75rem;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
 .stat-label { color: rgba(255,255,255,0.5); font-size: 0.875rem; }
 
 /* ── SECTION HEADERS ── */
@@ -436,6 +444,7 @@
   .preview-main { width: 220px; }
   .preview-sm { width: 140px; }
   .stats-grid { grid-template-columns: repeat(2,1fr); }
+  .stat-value { min-height: 36px; font-size: 1.35rem; white-space: normal; }
   .features-grid { grid-template-columns: 1fr; }
   .templates-showcase { grid-template-columns: 1fr; }
   .steps-grid { grid-template-columns: 1fr; }

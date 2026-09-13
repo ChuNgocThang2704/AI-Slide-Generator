@@ -7,6 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class ProjectServiceNameTest {
 
     @Test
+    void stripsMarkdownFromPromptBeforeBuildingName() {
+        assertEquals(
+                "Hướng dẫn IELTS Speaking",
+                ProjectService.buildConciseProjectName(
+                        "Hãy tạo *một bài trình chiếu khoảng 15 slide* với chủ đề: Hướng dẫn IELTS Speaking",
+                        null
+                )
+        );
+    }
+
+    @Test
     void removesRoleInstructionFromVietnamesePrompt() {
         assertEquals(
                 "Tổng quan IELTS",

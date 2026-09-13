@@ -3,7 +3,12 @@ import unittest
 
 from services.content.slide_normalizer import SlideNormalizerMixin
 from services.slide_quality import build_visual_plan
-from services.slide_charts import _chart_spec_has_text_evidence, build_chart_specs_for_slides, normalize_chart_spec
+from services.slide_charts import (
+    _chart_from_inline_table,
+    _chart_spec_has_text_evidence,
+    build_chart_specs_for_slides,
+    normalize_chart_spec,
+)
 from services.slide_text_quality import improve_slide_titles_quality
 from routes.api import _detect_generate_images_request
 from services.revision_rules import revision_prompt_mentions_image, revision_prompt_mentions_table
@@ -36,6 +41,37 @@ class AllNoneVisualExtractor:
         return json.dumps({
             "slides": [
                 {"slide_index": slide["slide_index"], "visual": "none"}
+                for slide in payload["slides"]
+            ],
+        })
+
+
+class SplitColumnVisualExtractor:
+    async def _llm_completion_plain_text(self, messages, **kwargs):
+        return json.dumps({
+            "slides": [{
+                "slide_index": 0,
+                "visual": "none",
+                "composition": "split_columns",
+                "left_heading": "Cơ hội",
+                "right_heading": "Thách thức",
+                "left_indices": [0, 2],
+                "right_indices": [1, 3],
+            }],
+        })
+
+
+class AllImageVisualExtractor:
+    async def _llm_completion_plain_text(self, messages, **kwargs):
+        payload = json.loads(messages[-1]["content"])
+        return json.dumps({
+            "slides": [
+                {
+                    "slide_index": slide["slide_index"],
+                    "visual": "image",
+                    "image_priority": 0.5,
+                    "composition": "standard",
+                }
                 for slide in payload["slides"]
             ],
         })
@@ -112,6 +148,26 @@ class AiFirstQualityTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(plan[0], "table")
 
+    async def test_chart_title_converts_numeric_inline_table_to_chart(self):
+        slide = {
+            "title": "Biểu đồ: Thị trường AI trong giáo dục (2020-2023)",
+            "bullets": ["2020: 1.5", "2021: 2.0", "2022: 2.7", "2023: 3.5"],
+            "layout": "text_table",
+            "table": {
+                "title": "Thị trường AI",
+                "headers": ["Năm", "Tỷ USD"],
+                "rows": [["2020", "1.5"], ["2021", "2.0"], ["2022", "2.7"], ["2023", "3.5"]],
+            },
+        }
+
+        plan = await build_visual_plan(VisualExtractor("none"), {"slides": [slide]}, "", want_images=False)
+        chart = _chart_from_inline_table(slide)
+
+        self.assertEqual(plan[0], "chart")
+        self.assertIsNotNone(chart)
+        self.assertEqual(chart["labels"], ["2020", "2021", "2022", "2023"])
+        self.assertEqual(chart["series"][0]["values"], [1.5, 2.0, 2.7, 3.5])
+
     async def test_requested_images_rejects_degenerate_all_none_plan(self):
         deck = {"slides": [{
             "title": "Historical context",
@@ -123,6 +179,20 @@ class AiFirstQualityTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(plan[0], "image")
 
+    async def test_visual_planner_can_apply_supported_split_column_contract(self):
+        deck = {"slides": [{
+            "title": "Hai góc nhìn",
+            "bullets": ["Lợi ích một", "Rủi ro một", "Lợi ích hai", "Rủi ro hai"],
+            "layout": "text_only",
+        }]}
+
+        plan = await build_visual_plan(SplitColumnVisualExtractor(), deck, "", want_images=False)
+
+        self.assertEqual(plan[0], "none")
+        self.assertEqual(deck["slides"][0]["layout"], "split_columns")
+        self.assertEqual(deck["slides"][0]["bullets"][0], "Cơ hội — Lợi ích một")
+        self.assertEqual(deck["slides"][0]["bullets"][2], "Thách thức — Rủi ro một")
+
     async def test_requested_images_enforces_deck_level_minimum(self):
         deck = {
             "slides": [
@@ -133,7 +203,7 @@ class AiFirstQualityTest(unittest.IsolatedAsyncioTestCase):
 
         plan = await build_visual_plan(AllNoneVisualExtractor(), deck, "", want_images=True)
 
-        self.assertGreaterEqual(sum(visual == "image" for visual in plan.values()), 3)
+        self.assertGreaterEqual(sum(visual == "image" for visual in plan.values()), 5)
         longest_none_run = 0
         current_none_run = 0
         for index in range(len(deck["slides"])):
@@ -142,7 +212,46 @@ class AiFirstQualityTest(unittest.IsolatedAsyncioTestCase):
                 longest_none_run = max(longest_none_run, current_none_run)
             else:
                 current_none_run = 0
-        self.assertLessEqual(longest_none_run, 4)
+        self.assertLessEqual(longest_none_run, 2)
+
+    async def test_visual_balance_excludes_cover_and_closing_from_image_target(self):
+        deck = {
+            "slides": [
+                {"title": "Cover", "bullets": ["Subtitle"], "layout": "intro"},
+                *[
+                    {"title": f"Topic {index}", "bullets": ["One", "Two"], "layout": "text_only"}
+                    for index in range(8)
+                ],
+                {"title": "Closing", "bullets": ["Thank you"], "layout": "thankyou"},
+            ],
+        }
+
+        plan = await build_visual_plan(AllNoneVisualExtractor(), deck, "", want_images=True)
+
+        self.assertEqual(plan[0], "none")
+        self.assertEqual(plan[9], "none")
+        self.assertGreaterEqual(
+            sum(plan[index] == "image" for index in range(1, 9)),
+            4,
+        )
+
+    async def test_visual_balance_caps_excessive_image_routing(self):
+        deck = {
+            "slides": [
+                {"title": "Cover", "bullets": ["Subtitle"], "layout": "intro"},
+                *[
+                    {"title": f"Topic {index}", "bullets": ["One", "Two"], "layout": "text_only"}
+                    for index in range(8)
+                ],
+                {"title": "Closing", "bullets": ["Thank you"], "layout": "thankyou"},
+            ],
+        }
+
+        plan = await build_visual_plan(AllImageVisualExtractor(), deck, "", want_images=True)
+
+        self.assertEqual(sum(plan[index] == "image" for index in range(1, 9)), 5)
+        self.assertEqual(plan[0], "none")
+        self.assertEqual(plan[9], "none")
 
     async def test_unmatched_raw_chart_does_not_block_planned_slide_pairs(self):
         deck = {

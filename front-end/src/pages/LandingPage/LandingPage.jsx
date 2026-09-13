@@ -1,15 +1,15 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Sparkles, Zap, FileText, Download, Palette, CheckCircle, ArrowRight, Star, Users, BarChart3, ChevronRight } from 'lucide-react';
+import { Sparkles, Zap, FileText, Download, Palette, CheckCircle, ArrowRight, BarChart3, ChevronRight } from 'lucide-react';
 import { useAuthStore } from '../../store';
 import './LandingPage.css';
 
 const FEATURES = [
-  { icon: <Sparkles size={24} />, title: 'AI Tạo Slide Tự Động', desc: 'Chỉ cần nhập chủ đề, AI sẽ tạo toàn bộ nội dung và bố cục slide chuyên nghiệp trong vài giây.' },
-  { icon: <Palette size={24} />, title: '6 Template Đẹp', desc: 'Modern Dark, Corporate Blue, Creative Minimal... Mỗi template với màu sắc và font riêng biệt.' },
-  { icon: <Download size={24} />, title: 'Xuất PDF Dễ Dàng', desc: 'Tải slide về dạng PDF chất lượng cao chỉ với một cú click, sẵn sàng trình bày ngay.' },
+  { icon: <Sparkles size={24} />, title: 'AI Tạo Slide Tự Động', desc: 'Nhập yêu cầu hoặc tải tài liệu để hệ thống xây dựng nội dung và bố cục bài trình chiếu.' },
+  { icon: <Palette size={24} />, title: 'Nhiều phong cách trình bày', desc: 'Chọn giao diện phù hợp với bài giảng, báo cáo hoặc bài thuyết trình thông thường.' },
+  { icon: <Download size={24} />, title: 'Xuất PPTX và PDF', desc: 'Tải bài trình chiếu về để tiếp tục chỉnh sửa hoặc sử dụng ngoại tuyến.' },
   { icon: <FileText size={24} />, title: 'Nhiều Loại Slide', desc: 'Title, Content, Two-Column, Image+Text, Quote, Thank You – đầy đủ cấu trúc bài thuyết trình.' },
-  { icon: <Zap size={24} />, title: 'Sinh Slide Siêu Nhanh', desc: 'Không cần kỹ năng thiết kế. AI xử lý mọi thứ từ nội dung đến bố cục trong dưới 5 giây.' },
+  { icon: <Zap size={24} />, title: 'Quy trình tự động', desc: 'Hệ thống xử lý nội dung, lựa chọn bố cục và bổ sung thành phần trực quan theo tiến trình.' },
   { icon: <BarChart3 size={24} />, title: 'Quản Lý Dễ Dàng', desc: 'Lưu trữ toàn bộ presentation, chỉnh sửa lại bất cứ lúc nào, không bao giờ mất dữ liệu.' },
 ];
 
@@ -22,11 +22,11 @@ const TEMPLATES_PREVIEW = [
   { id: 'creative-minimal', name: 'Creative Minimal', tag: 'Sáng tạo', grad: 'linear-gradient(135deg,#f8f8f8,#fff)', accent: '#ff4757' },
 ];
 
-const STATS = [
-  { value: '10K+', label: 'Slide đã tạo' },
-  { value: '500+', label: 'Người dùng' },
-  { value: '6', label: 'Templates đẹp' },
-  { value: '99%', label: 'Hài lòng' },
+const CAPABILITIES = [
+  { value: 'Prompt & tài liệu', label: 'Nguồn nội dung' },
+  { value: 'Text • Ảnh', label: 'Nội dung trực quan' },
+  { value: 'Bảng • Biểu đồ', label: 'Dữ liệu có cấu trúc' },
+  { value: 'PPTX • PDF', label: 'Định dạng xuất' },
 ];
 
 export default function LandingPage() {
@@ -49,8 +49,8 @@ export default function LandingPage() {
               <span className="gradient-text">Chuyên Nghiệp Với AI</span>
             </h1>
             <p className="hero-desc">
-              Nhập chủ đề, chọn template, AI sẽ tự động tạo toàn bộ nội dung slide
-              đẹp mắt trong vài giây. Không cần kỹ năng thiết kế.
+              Nhập yêu cầu hoặc tải tài liệu, chọn template và để AI xây dựng nội dung slide.
+              Bạn có thể chỉnh sửa, trình chiếu và xuất tệp ngay trên hệ thống.
             </p>
             <div className="hero-actions">
               <button
@@ -65,8 +65,8 @@ export default function LandingPage() {
               </Link>
             </div>
             <div className="hero-trust">
-              {[...Array(5)].map((_, i) => <Star key={i} size={14} fill="#fbbf24" color="#fbbf24" />)}
-              <span>4.9/5 từ 500+ người dùng</span>
+              <CheckCircle size={15} color="#2ecc71" />
+              <span>Hỗ trợ prompt, PDF, DOCX và TXT</span>
             </div>
           </div>
 
@@ -119,7 +119,7 @@ export default function LandingPage() {
       <section className="stats-section">
         <div className="container">
           <div className="stats-grid">
-            {STATS.map((s, i) => (
+            {CAPABILITIES.map((s, i) => (
               <div key={i} className="stat-item">
                 <div className="stat-value gradient-text">{s.value}</div>
                 <div className="stat-label">{s.label}</div>
@@ -194,9 +194,9 @@ export default function LandingPage() {
           </div>
           <div className="steps-grid">
             {[
-              { num: '01', title: 'Nhập chủ đề', desc: 'Gõ chủ đề bài thuyết trình và chọn số lượng slide mong muốn' },
+              { num: '01', title: 'Nhập yêu cầu', desc: 'Mô tả chủ đề, số lượng slide và nội dung mong muốn hoặc chọn tài liệu đã tải lên' },
               { num: '02', title: 'Chọn template', desc: 'Lựa chọn 1 trong 6 template thiết kế đẹp phù hợp với nội dung' },
-              { num: '03', title: 'Tải về PDF', desc: 'AI tạo slide trong vài giây, xuất PDF và sẵn sàng trình bày' },
+              { num: '03', title: 'Hoàn thiện', desc: 'Chỉnh sửa, trình chiếu trực tiếp hoặc xuất bài dưới dạng PPTX và PDF' },
             ].map((s, i) => (
               <div key={i} className="step-card">
                 <div className="step-num gradient-text">{s.num}</div>
@@ -214,9 +214,9 @@ export default function LandingPage() {
         <div className="container">
           <div className="cta-box">
             <div className="cta-glow" />
-            <div className="cta-badge"><Users size={13} /> Tham gia 500+ người dùng</div>
+            <div className="cta-badge"><Sparkles size={13} /> Tạo bài trình chiếu với AI</div>
             <h2>Bắt đầu tạo slide<br /><span className="gradient-text">ngay hôm nay</span></h2>
-            <p>Miễn phí 5 slides đầu tiên. Không cần thẻ tín dụng.</p>
+            <p>Bắt đầu với gói miễn phí. Không cần thẻ tín dụng.</p>
             <div className="flex gap-4 justify-center" style={{flexWrap:'wrap'}}>
               <button className="btn btn-primary btn-lg" onClick={() => navigate(isAuthenticated ? '/generate' : '/register')}>
                 <Sparkles size={18} /> Tạo slide miễn phí
@@ -224,7 +224,7 @@ export default function LandingPage() {
               <Link to="/pricing" className="btn btn-secondary btn-lg">Xem bảng giá</Link>
             </div>
             <div className="cta-checks">
-              {['Miễn phí 5 slides', 'Không cần thẻ tín dụng', 'Xuất PDF ngay'].map(c => (
+              {['Có gói miễn phí', 'Không cần thẻ tín dụng', 'Xuất PPTX và PDF'].map(c => (
                 <span key={c} className="cta-check"><CheckCircle size={14} color="#2ecc71" /> {c}</span>
               ))}
             </div>

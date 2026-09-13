@@ -34,6 +34,18 @@ class PlanLimitsTest(unittest.TestCase):
             12,
         )
 
+    def test_slide_reference_does_not_override_requested_deck_count(self):
+        prompt = (
+            "Tao 10 slide thuyet trinh bang tieng Viet.\n"
+            "9. Trinh bay bieu do duong theo du lieu minh hoa.\n"
+            "Khong chuyen du lieu o slide 9 thanh bang.\n"
+            "10. Ket luan va de xuat."
+        )
+        self.assertEqual(detect_requested_slide_count(prompt), 10)
+
+    def test_unlabelled_slide_reference_is_not_a_deck_count(self):
+        self.assertIsNone(detect_requested_slide_count("Sua noi dung slide 9 thanh bieu do."))
+
     def test_free_without_count_uses_automatic_length(self):
         target, resolved = validate_plan_limits("free", None, "short input")
         self.assertEqual((target, resolved), (None, None))

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useProjectStore, useUIStore } from '../../store';
+import { useProjectStore, useUIStore, useVideoGenStore } from '../../store';
 import ElementCanvas from '../../components/slides/ElementCanvas';
 import VideoGenerationModal from '../../components/video/VideoGenerationModal';
 import VideoLibraryModal from '../../components/video/VideoLibraryModal';
@@ -122,6 +122,8 @@ export default function EditorPage() {
   const navigate = useNavigate();
   const { projects, setProjects, updateProject } = useProjectStore();
   const { addToast } = useUIStore();
+  const { activeJobs } = useVideoGenStore();
+  const activeVideoJob = activeJobs[id];
 
   // ── State ──
   const [activeIdx, setActiveIdx] = useState(0);
@@ -700,7 +702,7 @@ export default function EditorPage() {
 
       await projectService.syncSlidePages(id, pageUpdates);
       setRevisionProgress(15);
-      setRevisionStatus('Đang gửi yêu cầu chỉnh sửa lên AI...');
+      setRevisionStatus('Đang gửi yêu cầu chỉnh sửa...');
 
       // 2. Trigger AI Revise
       const payload = {
@@ -964,14 +966,8 @@ export default function EditorPage() {
       slideSnapshots,
       download: false,
     });
-    const textBlob = await exportSlidesToPptx({
-      slides: currentSlides,
-      theme: projects.find((item) => item.id === id)?.templateId || 'soft-blue',
-      fileName: `${projectName}-content`,
-      download: false,
-    });
 
-    return { blob, textBlob, fileName: projectName };
+    return { blob, textBlob: blob, fileName: projectName };
   };
 
   const handleExportEditablePPTX = async () => {
@@ -1104,10 +1100,6 @@ export default function EditorPage() {
                 {title}
               </button>
             )}
-            <span className="e2-badge">{slides.length} slides</span>
-            <span className="e2-template-chip" style={{ color: TEMPLATES.find(t=>t.id===templateId)?.colors?.primary || '#666' }}>
-              {TEMPLATES.find((t) => t.id === templateId)?.name || templateId}
-            </span>
           </div>
         </div>
         <div className="e2-top-right">
@@ -1136,8 +1128,13 @@ export default function EditorPage() {
             className="btn btn-ghost btn-sm e2-video-action"
             onClick={() => setShowVideoModal(true)}
             disabled={!slides.length}
+            style={activeVideoJob?.phase === 'processing' ? { color: '#a89fff', border: '1px solid rgba(108,99,255,0.5)' } : {}}
           >
-            <Clapperboard size={14}/> Sinh video
+            {activeVideoJob?.phase === 'processing' ? (
+              <><Loader2 size={14} className="spin" /> Sinh video ({activeVideoJob.progress || 0}%)</>
+            ) : (
+              <><Clapperboard size={14} /> Sinh video</>
+            )}
           </button>
           <button
             type="button"
@@ -1190,8 +1187,17 @@ export default function EditorPage() {
         {/* ── LEFT: Slide thumbnails ── */}
         <div className="editor2-thumbs" style={{ width: leftPanelWidth }}>
           <div className="thumbs-header">
-            <div><LayoutTemplate size={14}/> <span>Slides</span></div>
-            <button type="button" onClick={() => addSlide()} title="Thêm slide" aria-label="Thêm slide"><Plus size={14} /></button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <LayoutTemplate size={14}/>
+              <span>Slides</span>
+              <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', fontWeight: 400 }}>({slides.length})</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: '0.68rem', color: TEMPLATES.find(t => t.id === templateId)?.colors?.primary || '#888', background: 'rgba(255,255,255,0.07)', borderRadius: 4, padding: '1px 6px', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {TEMPLATES.find((t) => t.id === templateId)?.name || templateId}
+              </span>
+              <button type="button" onClick={() => addSlide()} title="Thêm slide" aria-label="Thêm slide"><Plus size={14} /></button>
+            </div>
           </div>
           <div
             className="thumbs-scroll"
@@ -1295,7 +1301,7 @@ export default function EditorPage() {
                       {generationProgress.active ? (
                         <div className="e2-generation-wait">
                           <Loader2 size={34} className="spin"/>
-                          <strong>Đang tạo slide với AI</strong>
+                          <strong>Đang tạo bài trình chiếu</strong>
                           <div className="e2-generation-track"><span style={{ width: `${generationProgress.value}%` }}/></div>
                           <span>{generationProgress.value}%</span>
                           <small>{generationProgress.status}</small>
@@ -1531,6 +1537,7 @@ export default function EditorPage() {
         onClose={() => setShowVideoModal(false)}
         slides={slides}
         projectName={title}
+        projectId={id}
         onPreparePresentation={preparePresentationForVideo}
         onNotify={addToast}
       />
@@ -1538,6 +1545,7 @@ export default function EditorPage() {
         open={showVideoLibrary}
         onClose={() => setShowVideoLibrary(false)}
         onNotify={addToast}
+        projectId={id}
       />
 
       <div ref={exportStageRef} className="e2-export-stage" aria-hidden="true" style={{ position: 'fixed', left: -12000, top: 0, width: 960, pointerEvents: 'none' }}>

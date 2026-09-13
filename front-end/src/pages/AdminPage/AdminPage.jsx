@@ -743,7 +743,7 @@ function getMockPermissions() {
   return [
     { code: 'EXPORT_PPTX', name: 'Xuất slide PPTX', description: 'Cho phép xuất tệp PowerPoint vật lý về máy' },
     { code: 'EXPORT_PDF', name: 'Xuất slide PDF', description: 'Cho phép convert slide sang file PDF' },
-    { code: 'GEN_IMAGE_FLUX', name: 'Sinh ảnh FLUX AI', description: 'Quyền tạo ảnh minh họa chất lượng cao bằng FLUX' },
+    { code: 'GEN_IMAGE_FLUX', name: 'Sinh ảnh minh họa', description: 'Quyền tạo ảnh minh họa cho bài trình chiếu' },
     { code: 'SYNC_AI_CONFIGS', name: 'Đồng bộ cấu hình', description: 'Thay đổi giới hạn tạo slide của các gói cước' }
   ];
 }

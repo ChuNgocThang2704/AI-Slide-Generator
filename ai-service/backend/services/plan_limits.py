@@ -62,20 +62,30 @@ def detect_requested_slide_count(text: str) -> Optional[int]:
     # "10 English lecture slides" or "12 slide bài giảng".
     # Horizontal whitespace is intentional: never join a number from a
     # previous line with a later "Slide N" label.
-    matches = re.findall(
+    direct_matches = re.findall(
         r"\b(\d{1,3})(?:[ \t]+[\wÀ-ỹ-]+){0,4}[ \t]+"
         r"(?:slides?|trang|pages?)\b",
         text.lower(),
         flags=re.UNICODE,
     )
-    matches += re.findall(
-        r"\b(?:slides?|trang|pages?)[ \t]*(?::|=)?[ \t]*(\d{1,3})\b",
+    if direct_matches:
+        try:
+            # "slide 9" is normally a reference, not the requested deck size.
+            # Prefer the explicit count-before-unit construction.
+            return int(direct_matches[0])
+        except ValueError:
+            return None
+
+    labelled_match = re.search(
+        r"\b(?:total[ \t]+(?:number[ \t]+of[ \t]+)?|number[ \t]+of[ \t]+|"
+        r"slide[ \t]+count|tổng[ \t]+số[ \t]+|số[ \t]+lượng[ \t]+)"
+        r"(?:slides?|trang|pages?)[ \t]*(?::|=)?[ \t]*(\d{1,3})\b",
         text.lower(),
         flags=re.UNICODE,
     )
-    if matches:
+    if labelled_match:
         try:
-            return int(matches[-1])
+            return int(labelled_match.group(1))
         except ValueError:
             return None
     return None

@@ -37,6 +37,21 @@ class RevisionRulesTest(unittest.TestCase):
         self.assertEqual(specs[4]["labels"], ["2021", "2022", "2023", "2024", "2025"])
         self.assertEqual(specs[4]["values"], [13.0, 16.0, 20.0, 25.0, 31.0])
 
+    def test_extracts_chart_from_numbered_outline_item(self):
+        prompt = (
+            "Tao 10 slide thuyet trinh.\n"
+            "8. Xu huong phat trien.\n"
+            "9. Trinh bay bieu do duong giai doan 2020-2027, voi du lieu "
+            "lan luot la 1,5; 2,0; 2,7; 3,5; 4,2; 5,0; 5,5 va 6,0 ty USD.\n"
+            "10. Ket luan.\n"
+            "Khong chuyen du lieu o slide 9 thanh bang."
+        )
+        specs = _explicit_chart_requests(prompt, 10)
+        self.assertIn(8, specs)
+        self.assertEqual(specs[8]["chart_type"], "line")
+        self.assertEqual(specs[8]["labels"], [str(year) for year in range(2020, 2028)])
+        self.assertEqual(specs[8]["values"], [1.5, 2.0, 2.7, 3.5, 4.2, 5.0, 5.5, 6.0])
+
     def test_understands_deck_structure_operations(self):
         self.assertEqual(revision_prompt_add_slide_count("Them 2 slide moi"), 2)
         self.assertEqual(revision_prompt_add_slide_count("Thêm một slide trước phần kết luận"), 1)

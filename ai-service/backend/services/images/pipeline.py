@@ -1,11 +1,13 @@
 from __future__ import annotations
 import asyncio
+import hashlib
 import re
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
 import httpx
+from PIL import Image, ImageStat
 
 from config import (
     IMAGE_DIR,
@@ -58,6 +60,71 @@ from services.source_visuals import (
     match_source_visuals_to_slides,
     match_source_visuals_with_ai,
 )
+
+
+def _image_fingerprint(path: str) -> Optional[tuple[int, tuple[float, float, float]]]:
+    try:
+        with Image.open(path) as image:
+            rgb = image.convert("RGB")
+            grayscale = rgb.convert("L").resize((9, 8))
+            pixels = list(grayscale.get_flattened_data())
+            mean_color = tuple(ImageStat.Stat(rgb.resize((1, 1))).mean[:3])
+        value = 0
+        for row in range(8):
+            offset = row * 9
+            for column in range(8):
+                value = (value << 1) | int(pixels[offset + column] > pixels[offset + column + 1])
+        return value, mean_color
+    except Exception:
+        return None
+
+
+def _remove_duplicate_deck_images(
+    paths: Dict[int, str],
+    debug_records: List[Dict[str, Any]],
+) -> Dict[int, str]:
+    """Drop exact or near-identical images so a deck never repeats a visual."""
+    kept: Dict[int, str] = {}
+    fingerprints: List[tuple[int, str, Optional[tuple[int, tuple[float, float, float]]]]] = []
+    records_by_index = {
+        int(record.get("slide_index")): record
+        for record in debug_records
+        if isinstance(record, dict) and str(record.get("slide_index", "")).isdigit()
+    }
+    for index, path in sorted(paths.items()):
+        try:
+            digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            digest = ""
+        fingerprint = _image_fingerprint(path)
+        duplicate_of: Optional[int] = None
+        for previous_index, previous_digest, previous_fingerprint in fingerprints:
+            exact_match = bool(digest and digest == previous_digest)
+            near_match = (
+                fingerprint is not None
+                and previous_fingerprint is not None
+                and (fingerprint[0] ^ previous_fingerprint[0]).bit_count() <= 2
+                and sum(abs(a - b) for a, b in zip(fingerprint[1], previous_fingerprint[1])) <= 45
+            )
+            if exact_match or near_match:
+                duplicate_of = previous_index
+                break
+        if duplicate_of is None:
+            kept[index] = path
+            fingerprints.append((index, digest, fingerprint))
+            continue
+
+        record = records_by_index.get(index)
+        if record is not None:
+            record["status"] = "rejected_duplicate"
+            record["duplicate_of_slide"] = duplicate_of
+            record.pop("image_path", None)
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        print(f"[slide_images] slide {index} duplicate of slide {duplicate_of}; image removed")
+    return kept
 
 
 
@@ -1391,6 +1458,7 @@ async def build_image_paths_for_slides(
         if debug_rec:
             debug_records.append(debug_rec)
 
+    out = _remove_duplicate_deck_images(out, debug_records)
     print(f"[slide_images] done: {len(out)}/{n} images saved to {IMAGE_DIR}")
     _write_debug_json(task_id, "images", debug_records)
     _write_image_quality_report(task_id, debug_records)
