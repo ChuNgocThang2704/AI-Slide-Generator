@@ -144,7 +144,7 @@ public class TemplateService {
         }
         List<Template> templates = templateRepository.findAllById(ids);
         if (!templates.isEmpty()) {
-            templates.forEach(this::verifyAccess);
+            templates.forEach(this::verifyCustomTemplateOwner);
             for (Template template : templates) {
                 if (template.getS3Url() != null) {
                     s3Service.deleteFile(template.getS3Url());
@@ -152,6 +152,17 @@ public class TemplateService {
             }
             templateRepository.deleteAll(templates);
         }
+    }
+
+    @Transactional
+    public void deleteCustomTemplate(UUID id) {
+        Template template = templateRepository.findById(id)
+                .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+        verifyCustomTemplateOwner(template);
+        if (template.getS3Url() != null) {
+            s3Service.deleteFile(template.getS3Url());
+        }
+        templateRepository.delete(template);
     }
 
     public TemplateResponse getTemplate(UUID id) {
@@ -208,6 +219,13 @@ public class TemplateService {
     private void verifyAccess(Template template) {
         if ("CUSTOM_PPTX".equals(template.getSourceType())
                 && !Objects.equals(template.getCreatedBy(), currentAuditor())) {
+            throw new CustomException(ErrorCode.TEMPLATE_NOT_FOUND);
+        }
+    }
+
+    private void verifyCustomTemplateOwner(Template template) {
+        if (!"CUSTOM_PPTX".equals(template.getSourceType())
+                || !Objects.equals(template.getCreatedBy(), currentAuditor())) {
             throw new CustomException(ErrorCode.TEMPLATE_NOT_FOUND);
         }
     }

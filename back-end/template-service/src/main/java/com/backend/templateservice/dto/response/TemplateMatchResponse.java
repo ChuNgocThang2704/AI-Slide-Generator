@@ -17,6 +17,13 @@ public class TemplateMatchResponse {
     private String layoutId;
     private String layoutType;
     private String backgroundColor;
+    private String primaryColor;
+    private String headingFont;
+    private String bodyFont;
+    @Builder.Default
+    private Map<String, Object> titleStyle = new java.util.LinkedHashMap<>();
+    @Builder.Default
+    private Map<String, Object> bodyStyle = new java.util.LinkedHashMap<>();
     @Builder.Default
     private List<Map<String, Object>> elements = new ArrayList<>();
 }

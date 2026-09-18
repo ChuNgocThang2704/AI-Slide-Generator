@@ -126,10 +126,10 @@ function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
 async function formatPagesWithTemplate(pages, templateId, force = false, sourceTheme) {
   return Promise.all(pages.map(async (page) => {
     const formatted = page.type ? page : formatSlidePage(page);
-    if (!force && Array.isArray(formatted.elements) && formatted.elements.length) return formatted;
+    if (!force && formatted.elements?.some((element) => element.templateStyleOnly)) return formatted;
     const current = prepareTemplateContent(formatted, sourceTheme);
     const match = await templateService.match(templateId, current);
-    return applyCustomTemplateResult(current, match);
+    return applyCustomTemplateResult(current, match, sourceTheme);
   }));
 }
 
@@ -144,26 +144,40 @@ function toCustomTemplateOption(template) {
   };
 }
 
-function TemplateCard({ template, selected, disabled, onSelect }) {
+function TemplateCard({ template, selected, disabled, deleting, onSelect, onDelete }) {
   return (
-    <button
-      type="button"
-      className={`e2-tmpl-card ${selected ? 'selected' : ''}`}
-      onClick={() => onSelect(template.id)}
-      disabled={disabled}
-      aria-pressed={selected}
-    >
-      {selected && <span className="e2-tmpl-check"><Check size={11} /></span>}
-      <span className="e2-tmpl-thumb" style={{ background: template.preview }}>
-        <span className="e2-tmpl-th-title" style={{ color: template.isLight ? '#1a1a1a' : 'white' }}>
-          {template.name}
+    <div className={`e2-tmpl-card ${selected ? 'selected' : ''} ${template.isCustom ? 'has-delete' : ''} ${disabled ? 'disabled' : ''}`}>
+      <button
+        type="button"
+        className="e2-tmpl-select"
+        onClick={() => onSelect(template.id)}
+        disabled={disabled}
+        aria-pressed={selected}
+      >
+        {selected && <span className="e2-tmpl-check"><Check size={11} /></span>}
+        <span className="e2-tmpl-thumb" style={{ background: template.preview }}>
+          <span className="e2-tmpl-th-title" style={{ color: template.isLight ? '#1a1a1a' : 'white' }}>
+            {template.name}
+          </span>
+          <span className="e2-tmpl-th-bar" style={{ background: template.colors.primary }} />
         </span>
-        <span className="e2-tmpl-th-bar" style={{ background: template.colors.primary }} />
-      </span>
-      <span className="e2-tmpl-name" title={template.name}>{template.name}</span>
-      {template.isCustom && <span className="e2-tmpl-custom-tag">PowerPoint</span>}
-      {template.isDefault && <span className="e2-tmpl-default-tag">Mặc định</span>}
-    </button>
+        <span className="e2-tmpl-name" title={template.name}>{template.name}</span>
+        {template.isCustom && <span className="e2-tmpl-custom-tag">PowerPoint</span>}
+        {template.isDefault && <span className="e2-tmpl-default-tag">Mặc định</span>}
+      </button>
+      {template.isCustom && (
+        <button
+          type="button"
+          className="e2-tmpl-delete"
+          onClick={() => onDelete(template)}
+          disabled={disabled}
+          title={`Xóa template ${template.name}`}
+          aria-label={`Xóa template ${template.name}`}
+        >
+          {deleting ? <Loader2 size={13} className="spin" /> : <Trash2 size={13} />}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -190,6 +204,7 @@ export default function EditorPage() {
   const [applyingTemplate, setApplyingTemplate] = useState(false);
   const [templateMode, setTemplateMode] = useState('default');
   const [templateUploading, setTemplateUploading] = useState(false);
+  const [templateDeletingId, setTemplateDeletingId] = useState(null);
   const [revisionPrompt, setRevisionPrompt] = useState('');
   const [revising, setRevising] = useState(false);
   const [revisionProgress, setRevisionProgress] = useState(0);
@@ -238,7 +253,7 @@ export default function EditorPage() {
         if (pages && pages.length > 0) {
           const formattedSlides = isCustomTemplateId(project.templateId)
             ? await formatPagesWithTemplate(pages, project.templateId)
-            : pages.map(formatSlidePage);
+            : pages.map((page) => formatSlidePage(page, project.templateId));
           slidesRef.current = formattedSlides;
           undoStackRef.current = [];
           redoStackRef.current = [];
@@ -762,6 +777,29 @@ export default function EditorPage() {
       addToast(error.message || 'Không thể phân tích template PowerPoint', 'error');
     } finally {
       setTemplateUploading(false);
+    }
+  };
+
+  const handleTemplateDelete = async (template) => {
+    const isActive = projects.find((item) => item.id === id)?.templateId === template.id;
+    const warning = isActive
+      ? `Template "${template.name}" đang được sử dụng. Bài trình chiếu sẽ chuyển về Soft Blue trước khi xóa. Tiếp tục?`
+      : `Bạn có chắc muốn xóa template "${template.name}"?`;
+    if (!window.confirm(warning)) return;
+
+    setTemplateDeletingId(template.id);
+    try {
+      if (isActive) {
+        const switched = await applyTemplate(TEMPLATES[0], 'Đã chuyển bài trình chiếu về Soft Blue');
+        if (!switched) return;
+      }
+      await templateService.deleteCustom(template.id);
+      setCustomTemplates((current) => current.filter((item) => item.id !== template.id));
+      addToast(`Đã xóa template "${template.name}"`, 'success');
+    } catch (error) {
+      addToast(error.message || 'Không thể xóa template', 'error');
+    } finally {
+      setTemplateDeletingId(null);
     }
   };
 
@@ -1544,7 +1582,7 @@ export default function EditorPage() {
                               key={tmpl.id}
                               template={tmpl}
                               selected={templateId === tmpl.id}
-                              disabled={applyingTemplate || templateUploading}
+                              disabled={applyingTemplate || templateUploading || Boolean(templateDeletingId)}
                               onSelect={handleTemplateSwitch}
                             />
                           ))}
@@ -1574,8 +1612,10 @@ export default function EditorPage() {
                                 key={tmpl.id}
                                 template={tmpl}
                                 selected={templateId === tmpl.id}
-                                disabled={applyingTemplate || templateUploading}
+                                disabled={applyingTemplate || templateUploading || Boolean(templateDeletingId)}
+                                deleting={templateDeletingId === tmpl.id}
                                 onSelect={handleTemplateSwitch}
+                                onDelete={handleTemplateDelete}
                               />
                             ))}
                           </div>

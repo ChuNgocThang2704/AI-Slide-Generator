@@ -1,4 +1,4 @@
-import { normalizeTableElements, orderedBodyElements } from './templateLayouts.js';
+import { normalizeBoundaryElements, normalizeTableElements, orderedBodyElements } from './templateLayouts.js';
 
 export function parseBullets(page) {
   if (Array.isArray(page?.bullets)) return page.bullets;
@@ -142,7 +142,7 @@ function serializeBullets(slide) {
   return Array.isArray(slide.bullets) ? slide.bullets : [];
 }
 
-export function formatSlidePage(page) {
+export function formatSlidePage(page, theme) {
   const bullets = parseBullets(page);
   const type = backendLayoutToFrontend(page);
   const joinedText = bullets.join('\n');
@@ -169,7 +169,7 @@ export function formatSlidePage(page) {
     chart: page.chart || null,
     table: page.table || null,
     richText: page.richText || {},
-    elements: normalizeTableElements(currentElements(page, bullets)),
+    elements: normalizeBoundaryElements(normalizeTableElements(currentElements(page, bullets)), type, theme),
     notes: page.notes || '',
     primaryVisual: page.primaryVisual || '',
     likelyMultiPptxSlides: page.likelyMultiPptxSlides || false,
@@ -179,7 +179,7 @@ export function formatSlidePage(page) {
 }
 
 export function toSlidePageUpdate(slide) {
-  slide = { ...slide, elements: normalizeTableElements(slide.elements) };
+  slide = { ...slide, elements: normalizeBoundaryElements(normalizeTableElements(slide.elements), slide.type) };
   const elementTitle = slide.elements?.find((element) => element.role === 'title' && element.type === 'text');
   const bodyElements = orderedBodyElements(slide.elements);
   const plainText = (html) => slideTextLines(html).join(' ');

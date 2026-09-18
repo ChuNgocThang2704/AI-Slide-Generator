@@ -49,12 +49,45 @@ public class TemplateLayoutMatcher {
 
         ensureSemanticElements(elements, request, manifest);
         ensureReadableTextColors(elements, manifest);
+        Map<String, Object> titleStyle = styleForRole(
+                elements, "title", manifest.getTheme().getHeadingFont(), 32, 700
+        );
+        Map<String, Object> bodyStyle = styleForRole(
+                elements, "body", manifest.getTheme().getBodyFont(), 18, 400
+        );
         return TemplateMatchResponse.builder()
                 .layoutId(layout.getId())
                 .layoutType(layout.getType())
                 .backgroundColor(DISPLAY_BACKGROUND)
+                .primaryColor(manifest.getTheme().getPrimaryColor())
+                .headingFont(manifest.getTheme().getHeadingFont())
+                .bodyFont(manifest.getTheme().getBodyFont())
+                .titleStyle(titleStyle)
+                .bodyStyle(bodyStyle)
                 .elements(elements)
                 .build();
+    }
+
+    private Map<String, Object> styleForRole(
+            List<Map<String, Object>> elements,
+            String role,
+            String fallbackFont,
+            int fallbackSize,
+            int fallbackWeight
+    ) {
+        return elements.stream()
+                .filter(item -> "text".equals(item.get("type")) && role.equals(item.get("role")))
+                .map(item -> copyStyle(item.get("style")))
+                .filter(style -> !style.isEmpty())
+                .findFirst()
+                .orElseGet(() -> new LinkedHashMap<>(Map.of(
+                        "fontFamily", fallbackFont == null ? "Arial" : fallbackFont,
+                        "fontSize", fallbackSize,
+                        "fontWeight", fallbackWeight,
+                        "color", "title".equals(role) ? "#1F2937" : "#374151",
+                        "textAlign", "left",
+                        "lineHeight", 1.2
+                )));
     }
 
     private TemplateManifest.Layout chooseLayout(

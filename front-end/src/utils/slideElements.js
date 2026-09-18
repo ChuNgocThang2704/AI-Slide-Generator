@@ -32,17 +32,8 @@ function createBaseElements(slide, theme = 'clean-white') {
   if (Array.isArray(slide?.elements) && slide.elements.length) return slide.elements;
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
-  const isVietnamese = isVietnameseSlide(slide);
 
   if (slide?.type === 'title') {
-    elements.push(textElement('custom', isVietnamese ? 'BÀI GIẢNG' : 'LECTURE', 110, 116, 740, 34, {
-      fontFamily: colors.body,
-      fontSize: 14,
-      color: colors.sub,
-      fontWeight: 700,
-      textAlign: 'center',
-      letterSpacing: 2,
-    }));
     elements.push(textElement('title', slide?.title || slide?.richText?.title, 110, 164, 740, 132, {
       fontFamily: colors.title,
       fontSize: 48,
@@ -68,14 +59,7 @@ function createBaseElements(slide, theme = 'clean-white') {
   }
 
   if (slide?.type === 'thankyou') {
-    elements.push(textElement('custom', isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE', 130, 112, 700, 34, {
-      fontFamily: colors.body,
-      fontSize: 14,
-      color: colors.sub,
-      fontWeight: 700,
-      textAlign: 'center',
-      letterSpacing: 2,
-    }));
+    const isVietnamese = isVietnameseSlide(slide);
     elements.push(textElement('title', slide?.title || (isVietnamese ? 'Tổng kết và Hỏi đáp' : 'Summary and Q&A'), 120, 164, 720, 112, {
       fontFamily: colors.title,
       fontSize: 46,

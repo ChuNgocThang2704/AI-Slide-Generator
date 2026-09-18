@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Template layout regression fixture</title>
+<style>
+  body { margin: 0; background: #ededed; font-family: Arial, sans-serif; }
+  header { padding: 12px; display: flex; gap: 12px; background: white; color: #222; }
+  main { padding: 12px; }
+  section { margin-bottom: 20px; }
+  .frame { width: 100%; max-width: 960px; aspect-ratio: 16 / 9; overflow: hidden; }
+  .scaled { transform-origin: top left; width: 960px; height: 540px; }
+</style>
+<div id="root"></div>
+<script type="module">
+  import React, { useState } from 'react';
+  import { createRoot } from 'react-dom/client';
+  import ElementCanvas from '/src/components/slides/ElementCanvas.jsx';
+  import { reflowSlideTemplate } from '/src/utils/slideElements.js';
+  import { toSlidePageUpdate, formatSlidePage } from '/src/utils/slideMapping.js';
+  import '/src/index.css';
+  import { ADAPTIVE_TEMPLATES } from '/src/utils/templateLayouts.js';
+  const themes = [...ADAPTIVE_TEMPLATES];
+  const h = React.createElement;
+  const bitmap = document.createElement('canvas');
+  bitmap.width = 640; bitmap.height = 480;
+  const ctx = bitmap.getContext('2d');
+  ['#299fa3', '#eee9de', '#d05366', '#e1b65b'].forEach((color, i) => {
+    ctx.fillStyle = color; ctx.fillRect((i % 2) * 320, Math.floor(i / 2) * 240, 320, 240);
+  });
+  const bullets = ['Hiểu khái niệm chuyển đổi số trong giáo dục đại học.', 'Nhận diện vai trò của sinh viên, giảng viên và nhà trường.', 'Áp dụng công cụ vào học tập và nghiên cứu.', 'Đánh giá hiệu quả và đề xuất cải tiến.'];
+  const base = { id: 'qa', type: 'content', title: 'Mục tiêu học tập', bullets };
+  const fixtures = [
+    { ...base, type: 'title', title: 'Chuyển đổi số trong Giáo dục Đại học', subtitle: 'Kiến tạo tương lai học tập' },
+    base,
+    { ...base, imageUrl: bitmap.toDataURL() },
+    { ...base, title: 'Kết quả theo năm', bullets: [], table: { headers: ['Năm', 'Sinh viên', 'Khóa học'], rows: [[2023, 1200, 18], [2024, 1600, 24], [2025, 2200, 30]] } },
+    { ...base, title: 'Mức độ tham gia', bullets: ['Số liệu minh họa theo từng nhóm.'], chart: { type: 'bar', labels: ['Nhóm A', 'Nhóm B', 'Nhóm C'], series: [{ name: '2024', values: [40, 55, 68] }, { name: '2025', values: [60, 70, 82] }] } },
+    { ...base, title: 'Bảng 12 dòng', bullets: [], table: { headers: ['Tháng', 'Giá trị'], rows: Array.from({ length: 12 }, (_, i) => [i + 1, (i + 1) * 120]) } },
+    { ...base, title: 'Nội dung dài', bullets: Array.from({ length: 9 }, (_, i) => `${i + 1}. ${bullets.join(' ')}`) },
+    { ...base, type: 'thankyou', title: 'Tổng kết và Hỏi đáp', bullets: [
+      'Nhiệt độ toàn cầu: Xu hướng tăng liên tục trong giai đoạn 2019–2023, phản ánh sự nóng lên của khí hậu.',
+      'Thời tiết cực đoan: Tần suất và cường độ gia tăng, gây áp lực lớn lên hạ tầng và đời sống.',
+      'Nguyên nhân: Sự gia tăng nồng độ khí nhà kính trong khí quyển là tác nhân chính.',
+      'Hệ lụy: Gây thiệt hại kinh tế, đe dọa an ninh lương thực và ổn định xã hội toàn cầu.',
+    ] },
+  ];
+  const checks = [];
+  const check = (name, condition) => { checks.push({ name, passed: Boolean(condition) }); if (!condition) throw new Error(name); };
+  let current = base;
+  for (const theme of [...themes, ...themes].concat('soft-blue')) {
+    current = reflowSlideTemplate(current, theme);
+    check(`${theme}: all bullets`, JSON.stringify(toSlidePageUpdate(current).bullets) === JSON.stringify(bullets));
+    check(`${theme}: unique ids`, new Set(current.elements.map((el) => el.id)).size === current.elements.length);
+    const restored = formatSlidePage({ ...toSlidePageUpdate(current), pageIndex: 1 });
+    check(`${theme}: reload keeps elements`, restored.elements.length === current.elements.length);
+    if (theme !== 'clean-white') check(`${theme}: grid`, current.elements.filter((el) => el.role === 'body').length === 4);
+  }
+  window.layoutChecks = checks;
+  function App() {
+    const [theme, setTheme] = useState('soft-blue');
+    const [width, setWidth] = useState(Math.min(960, window.innerWidth - 24));
+    React.useEffect(() => {
+      const resize = () => setWidth(Math.min(960, window.innerWidth - 24));
+      window.addEventListener('resize', resize);
+      return () => window.removeEventListener('resize', resize);
+    }, []);
+    return h(React.Fragment, null,
+      h('header', null, h('select', { value: theme, onChange: (e) => setTheme(e.target.value), 'aria-label': 'Theme' },
+        themes.map((t) => h('option', { key: t }, t))), h('span', null, `${checks.length} checks passed`)),
+      h('main', { 'data-theme': theme }, fixtures.map((slide, index) => h('section', { key: `${theme}-${index}`, 'data-slide': index },
+        h('div', { className: 'frame' }, h('div', { className: 'scaled', style: { transform: `scale(${width / 960})` } },
+          h(ElementCanvas, { slide: reflowSlideTemplate(slide, theme), theme, scale: width / 960, readonly: true })))))));
+  }
+  createRoot(document.getElementById('root')).render(h(App));
+</script>
+</html>
