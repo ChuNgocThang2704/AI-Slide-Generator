@@ -27,6 +27,11 @@ export const templateService = {
     return unwrap(response);
   },
 
+  async deleteCustom(templateId) {
+    const response = await apiClient.delete(`/template/custom/${templateId}`);
+    return unwrap(response);
+  },
+
   async match(templateId, slide) {
     const response = await apiClient.post(`/template/${templateId}/match`, {
       title: slide.title || '',

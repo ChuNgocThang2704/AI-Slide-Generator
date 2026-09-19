@@ -103,4 +103,47 @@ class TemplateServiceOwnershipTest {
                 org.mockito.ArgumentMatchers.any(Pageable.class)
         );
     }
+
+    @Test
+    void deletesOwnedCustomTemplateAndItsStoredFile() {
+        UUID templateId = UUID.randomUUID();
+        Template template = new Template();
+        template.setId(templateId);
+        template.setSourceType("CUSTOM_PPTX");
+        template.setCreatedBy("owner@example.com");
+        template.setS3Url("https://bucket.example/templates/custom/owned.pptx");
+        when(templateRepository.findById(templateId)).thenReturn(Optional.of(template));
+
+        templateService.deleteCustomTemplate(templateId);
+
+        verify(s3Service).deleteFile(template.getS3Url());
+        verify(templateRepository).delete(template);
+    }
+
+    @Test
+    void rejectsDeletingAnotherUsersOrBuiltInTemplate() {
+        Template otherUsersTemplate = new Template();
+        otherUsersTemplate.setId(UUID.randomUUID());
+        otherUsersTemplate.setSourceType("CUSTOM_PPTX");
+        otherUsersTemplate.setCreatedBy("other@example.com");
+        when(templateRepository.findById(otherUsersTemplate.getId())).thenReturn(Optional.of(otherUsersTemplate));
+
+        Template builtInTemplate = new Template();
+        builtInTemplate.setId(UUID.randomUUID());
+        builtInTemplate.setSourceType("BUILT_IN");
+        builtInTemplate.setCreatedBy("owner@example.com");
+        when(templateRepository.findById(builtInTemplate.getId())).thenReturn(Optional.of(builtInTemplate));
+
+        assertThatThrownBy(() -> templateService.deleteCustomTemplate(otherUsersTemplate.getId()))
+                .isInstanceOf(CustomException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.TEMPLATE_NOT_FOUND);
+        assertThatThrownBy(() -> templateService.deleteCustomTemplate(builtInTemplate.getId()))
+                .isInstanceOf(CustomException.class)
+                .extracting("errorCode")
+                .isEqualTo(ErrorCode.TEMPLATE_NOT_FOUND);
+
+        verify(s3Service, never()).deleteFile(org.mockito.ArgumentMatchers.anyString());
+        verify(templateRepository, never()).delete(org.mockito.ArgumentMatchers.any());
+    }
 }

@@ -97,4 +97,10 @@ public class TemplateController {
         templateService.deleteTemplates(ids);
         return ApiResponse.<Void>builder().build();
     }
+
+    @DeleteMapping("/custom/{id}")
+    public ApiResponse<Void> deleteCustomTemplate(@PathVariable UUID id) {
+        templateService.deleteCustomTemplate(id);
+        return ApiResponse.<Void>builder().build();
+    }
 }

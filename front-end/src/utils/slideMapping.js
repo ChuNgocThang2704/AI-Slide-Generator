@@ -1,5 +1,5 @@
 import { inferImageFit } from './imageFit';
-import { normalizeTableElements, orderedBodyElements } from './templateLayouts.js';
+import { normalizeBoundaryElements, normalizeTableElements, orderedBodyElements } from './templateLayouts.js';
 
 export function parseBullets(page) {
   if (Array.isArray(page?.bullets)) return page.bullets;
@@ -170,7 +170,7 @@ function serializeBullets(slide) {
   return Array.isArray(slide.bullets) ? slide.bullets : [];
 }
 
-export function formatSlidePage(page, presentationMode = 'presentation') {
+export function formatSlidePage(page, { presentationMode = 'presentation', theme } = {}) {
   const bullets = parseBullets(page);
   const type = backendLayoutToFrontend(page);
   const joinedText = bullets.join('\n');
@@ -206,7 +206,7 @@ export function formatSlidePage(page, presentationMode = 'presentation') {
     chart: page.chart || null,
     table: page.table || null,
     richText: page.richText || {},
-    elements: normalizeTableElements(elements),
+    elements: normalizeBoundaryElements(normalizeTableElements(elements), type, theme),
     imageFit,
     notes: page.notes || '',
     primaryVisual: page.primaryVisual || '',
@@ -237,7 +237,7 @@ function hasCustomBoundaryCanvas(slide) {
   ));
 }
 
-export function formatSlideDeck(pages, presentationMode = '') {
+export function formatSlideDeck(pages, presentationMode = '', theme) {
   const source = Array.isArray(pages) ? pages : [];
   const explicitMode = String(presentationMode || '').trim().toLowerCase();
   const pageMode = source
@@ -250,7 +250,7 @@ export function formatSlideDeck(pages, presentationMode = '') {
   const effectiveMode = explicitMode === 'lecture' || explicitMode === 'presentation'
     ? explicitMode
     : pageMode || (hasLectureMetadata ? 'lecture' : 'presentation');
-  const slides = source.map((page) => formatSlidePage(page, effectiveMode));
+  const slides = source.map((page) => formatSlidePage(page, { presentationMode: effectiveMode, theme }));
   if (!slides.length) return slides;
 
   const first = slides[0];
@@ -285,7 +285,7 @@ export function formatSlideDeck(pages, presentationMode = '') {
 }
 
 export function toSlidePageUpdate(slide) {
-  slide = { ...slide, elements: normalizeTableElements(slide.elements) };
+  slide = { ...slide, elements: normalizeBoundaryElements(normalizeTableElements(slide.elements), slide.type) };
   const elementTitle = slide.elements?.find((element) => element.role === 'title' && element.type === 'text');
   const bodyElements = orderedBodyElements(slide.elements);
   const plainText = (html) => slideTextLines(html).join(' ');

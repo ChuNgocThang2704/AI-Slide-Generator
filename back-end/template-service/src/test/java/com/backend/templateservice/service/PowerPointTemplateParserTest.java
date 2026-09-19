@@ -40,6 +40,11 @@ class PowerPointTemplateParserTest {
         );
 
         assertThat(match.getLayoutType()).isEqualTo("content");
+        assertThat(match.getPrimaryColor()).isEqualTo("#4472C4");
+        assertThat(match.getHeadingFont()).isEqualTo("Aptos Display");
+        assertThat(match.getBodyFont()).isEqualTo("Aptos");
+        assertThat(match.getTitleStyle()).containsKeys("fontFamily", "fontSize", "fontWeight", "color");
+        assertThat(match.getBodyStyle()).containsKeys("fontFamily", "fontSize", "fontWeight", "color");
         assertThat(match.getElements()).extracting(item -> item.get("role"))
                 .contains("background", "title", "body");
         assertThat(match.getElements().stream()

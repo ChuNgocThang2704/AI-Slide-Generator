@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
 import { createElementsFromSlide, createTextElement } from '../../utils/slideElements';
-import { normalizeTableElements } from '../../utils/templateLayouts';
+import { normalizeBoundaryElements, normalizeTableElements } from '../../utils/templateLayouts';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import EditableSlide, { THEMES } from './EditableSlide';
 import { TiptapInlineEditor } from './TiptapEditor';
@@ -69,13 +69,24 @@ export default function ElementCanvas({
   preserveTemplateStyles = false,
 }) {
   const imageInputRef = useRef(null);
-  const themeData = THEMES[theme] || THEMES['clean-white'];
+  const themeData = useMemo(() => {
+    const importedTheme = slide.elements?.find((element) => element.templateTheme)?.templateTheme;
+    const baseThemeData = THEMES[theme] || THEMES['clean-white'];
+    return importedTheme ? {
+      ...baseThemeData,
+      primary: importedTheme.primary || baseThemeData.primary,
+      text: importedTheme.text || baseThemeData.text,
+      textSub: importedTheme.textSub || baseThemeData.textSub,
+      fontTitle: importedTheme.fontTitle || baseThemeData.fontTitle,
+      fontBody: importedTheme.fontBody || baseThemeData.fontBody,
+    } : baseThemeData;
+  }, [slide.elements, theme]);
   const fallbackElements = useMemo(() => createElementsFromSlide(slide, theme), [slide, theme]);
   const elements = useMemo(() => {
     const source = Array.isArray(slide.elements) && (slide.elements.length || preserveTemplate)
       ? slide.elements
       : fallbackElements;
-    return normalizeTableElements(source).map((element) => {
+    return normalizeBoundaryElements(normalizeTableElements(source), slide.type, theme).map((element) => {
       const style = element.style || {};
       const legacyTitle = element.role === 'title' && Number(style.fontSize) === 36 && element.x === 64 && element.y === 48;
       const legacyBody = element.role === 'body' && Number(style.fontSize) === 20 && element.y === 140;
@@ -115,7 +126,7 @@ export default function ElementCanvas({
       }
       return themedStyle === style ? element : { ...element, style: themedStyle };
     });
-  }, [fallbackElements, preserveTemplate, preserveTemplateStyles, slide.elements, slide.imageUrl, themeData]);
+  }, [fallbackElements, preserveTemplate, preserveTemplateStyles, slide.elements, slide.imageUrl, slide.type, theme, themeData]);
   const [selectedId, setSelectedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [hasClipboard, setHasClipboard] = useState(Boolean(elementClipboard));
