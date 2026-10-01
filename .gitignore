@@ -118,3 +118,6 @@ htmlcov/
 
 # Second-lock password file for the 9Router dashboard (created on the server, never committed)
 docker/9router.htpasswd
+
+# Throwaway browser-test scripts and their saved logins; never part of the project
+front-end/.pw-scratch/

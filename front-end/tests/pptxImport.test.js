@@ -36,3 +36,50 @@ test('an empty manifest gives no slides', () => {
   assert.deepEqual(slidesFromImportedManifest({ layouts: [] }), []);
   assert.deepEqual(slidesFromImportedManifest(null), []);
 });
+
+test('a slide number becomes a page-number box and keeps the size the file gave it', () => {
+  const withNumber = {
+    layouts: [{
+      type: 'content',
+      backgroundColor: '#FFFFFF',
+      decor: [],
+      elements: [
+        { type: 'text', role: 'title', x: 100, y: 20, width: 400, height: 40, content: '<p>Tiêu đề</p>', style: { fontSize: 32 } },
+        { type: 'text', role: 'pageNumber', x: 864, y: 504, width: 48, height: 22, content: '<p>3</p>', style: { fontSize: 12 } },
+      ],
+    }],
+  };
+  const [slide] = slidesFromImportedManifest(withNumber);
+  const number = slide.elements.find((el) => el.role === 'pageNumber');
+  assert.ok(number, 'the slide number is kept as a page-number box');
+  assert.equal(number.content, '<p>3</p>');
+  assert.deepEqual([number.x, number.y], [864, 504]);
+  assert.equal(number.style.fontSize, 12);
+  assert.equal(number.style.fontSizeLocked, true);
+});
+
+test('a table in the file becomes an editor table with its own cells and column widths', () => {
+  const withTable = {
+    layouts: [{
+      type: 'table',
+      backgroundColor: '#FFFFFF',
+      decor: [],
+      elements: [
+        { type: 'text', role: 'title', x: 100, y: 20, width: 400, height: 40, content: '<p>Bảng</p>', style: {} },
+        {
+          type: 'table', role: 'table', x: 60, y: 120, width: 800, height: 300, content: '',
+          data: { headers: ['Mục', 'Giá trị'], rows: [['A', '1'], ['B', '2']], columnWidths: [3000000, 6000000] },
+        },
+      ],
+    }],
+  };
+  const [slide] = slidesFromImportedManifest(withTable);
+  const table = slide.elements.find((el) => el.type === 'table');
+  assert.ok(table, 'the table is kept as an element');
+  assert.deepEqual([table.x, table.y, table.width, table.height], [60, 120, 800, 300]);
+  assert.deepEqual(table.data.rows, [['A', '1'], ['B', '2']]);
+  assert.deepEqual(table.data.columnWidths, [3000000, 6000000]);
+  // It is also the slide's table, so the outline and the AI see its cells.
+  assert.equal(slide.table.headers[0], 'Mục');
+  assert.equal(slide.primaryVisual, 'table');
+});

@@ -33,6 +33,10 @@ Port 80 is externally reachable. Port 5173 is also published by Docker but requi
   `ssh -L 20128:localhost:20128 datn@<host>`, and browse `http://localhost:20128`: the dashboard hardcodes
   `http://localhost:20128/callback` as the OAuth return address, so a different local port, or the server's
   address, breaks the last step.
+- **Restart `api-gateway` after recreating a Java service** (`document-service`, `template-service`, ...). The gateway
+  resolves a service name once and keeps the container address it got, so after the service is recreated with a new
+  address every request to it fails with 500 (`Connection refused: document-service/172.18.x.x`) until the gateway
+  is restarted: `docker compose ... restart api-gateway`.
 - `ai-service` and `ai-worker` are **separate images**: rebuild both after changing `ai-service/`.
 - nginx resolves `ai-service` / `api-gateway` through Docker's DNS (`resolver 127.0.0.11`), so recreating those
   containers no longer leaves nginx pointing at a stale address (which showed up as 502 on `/outputs/images/`).

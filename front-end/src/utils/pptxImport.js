@@ -9,9 +9,12 @@
 import { buildTemplateArt } from './templateArt.js';
 import { newElementId } from './selection.js';
 
-const ROLE_MAP = { title: 'title', body: 'body' };
+const ROLE_MAP = { title: 'title', body: 'body', pageNumber: 'pageNumber' };
 
 function mapTextElement(element) {
+  const style = element.style ? { ...element.style } : {};
+  // A slide number keeps the size the file gave it instead of being auto-fitted like body text.
+  if (element.role === 'pageNumber') style.fontSizeLocked = true;
   return {
     id: newElementId(),
     type: 'text',
@@ -22,7 +25,22 @@ function mapTextElement(element) {
     height: Number(element.height) || 0,
     rotation: Number(element.rotation) || 0,
     content: element.content || '',
-    style: element.style ? { ...element.style } : {},
+    style,
+  };
+}
+
+// A table from the file, in the shape the editor's own tables use.
+function mapTableElement(element) {
+  return {
+    id: newElementId(),
+    type: 'table',
+    role: 'visual',
+    x: Number(element.x) || 0,
+    y: Number(element.y) || 0,
+    width: Number(element.width) || 0,
+    height: Number(element.height) || 0,
+    rotation: 0,
+    data: element.data,
   };
 }
 
@@ -45,12 +63,17 @@ export function slidesFromImportedManifest(manifest) {
     const elements = (layout.elements || [])
       .filter((element) => element.type === 'text' && String(element.content || '').trim())
       .map(mapTextElement);
+    const tables = (layout.elements || [])
+      .filter((element) => element.type === 'table' && element.data?.headers?.length)
+      .map(mapTableElement);
     return {
       id: null,
       type: layout.type || 'content',
       notes: '',
       richText,
-      elements,
+      elements: [...elements, ...tables],
+      // The slide's first table is also its table, which is what the AI and the outline read.
+      ...(tables.length ? { table: tables[0].data, primaryVisual: 'table' } : {}),
     };
   });
 }

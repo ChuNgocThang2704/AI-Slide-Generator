@@ -55,21 +55,38 @@ function htmlText(value) {
   return (holder.innerText || holder.textContent || '').replace(/\u00a0/g, ' ').trim();
 }
 
+// One paragraph per top-level block: a plain paragraph, or each item of a bullet or numbered list.
+// Reading the whole box as one string used to glue consecutive paragraphs together
+// ("...thôngKhoa..."), because a detached element has no line breaks between its blocks.
 function textRuns(value) {
   const holder = document.createElement('div');
   holder.innerHTML = String(value || '');
-  const listItems = Array.from(holder.querySelectorAll('li'));
-  if (listItems.length) {
-    const ordered = Boolean(listItems[0]?.closest('ol'));
-    return listItems.map((item, index) => ({
-      text: (item.innerText || item.textContent || '').trim(),
-      options: {
-        bullet: ordered ? { type: 'ul', startAt: index + 1 } : { type: 'ul' },
-        breakLine: index < listItems.length - 1,
-      },
-    }));
-  }
-  return htmlText(value);
+  const blocks = [];
+  Array.from(holder.children).forEach((child) => {
+    if (child.tagName === 'UL' || child.tagName === 'OL') {
+      const ordered = child.tagName === 'OL';
+      Array.from(child.querySelectorAll('li')).forEach((item) => {
+        blocks.push({
+          text: (item.innerText || item.textContent || '').trim(),
+          // pptxgenjs only knows a bullet character ({ indent } or true) and { type: 'number' };
+          // the { type: 'ul' } this used to pass is ignored, so no list ever got its bullets.
+          bullet: ordered ? { type: 'number' } : { indent: 18 },
+        });
+      });
+      return;
+    }
+    const text = (child.innerText || child.textContent || '').replace(/\u00a0/g, ' ').trim();
+    if (text) blocks.push({ text });
+  });
+  if (!blocks.length) return htmlText(value);
+  if (blocks.length === 1 && !blocks[0].bullet) return blocks[0].text;
+  return blocks.map((block, index) => ({
+    text: block.text,
+    options: {
+      ...(block.bullet ? { bullet: block.bullet } : {}),
+      breakLine: index < blocks.length - 1,
+    },
+  }));
 }
 
 async function imageData(projectId, element, cache) {
