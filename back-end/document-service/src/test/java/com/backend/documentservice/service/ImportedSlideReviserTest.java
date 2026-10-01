@@ -99,4 +99,37 @@ class ImportedSlideReviserTest {
         assertThat(reviser.pour(IMPORTED, onlyTitle, "T", List.of("a"))).isNull();
         assertThat(reviser.pour(IMPORTED, BOXES, "T", List.of())).isNull();
     }
+
+    private static final String TEXT_OVER_A_TABLE = """
+            [
+              {"id":"b","type":"text","role":"body","x":39,"y":99,"width":880,"height":60,
+               "content":"<ul><li>Ý ngắn</li></ul>","style":{"fontSize":20}},
+              {"id":"t","type":"table","role":"visual","x":171,"y":246,"width":317,"height":183,
+               "data":{"headers":["TID","Items"],"rows":[["1","Bread"]]}}
+            ]
+            """;
+
+    @Test
+    void longerWordsAreShrunkToStayClearOfATableUnderTheBox() throws Exception {
+        String sentence = "Dự đoán khả năng xuất hiện của một hoặc nhiều mục dựa trên sự hiện diện của các mục khác trong cùng giao dịch.";
+        ImportedSlideReviser.Poured poured = reviser.pour(
+                IMPORTED, TEXT_OVER_A_TABLE, "", List.of(sentence, sentence, sentence));
+
+        JsonNode body = mapper.readTree(poured.elementsJson()).get(0);
+        double size = body.path("style").path("fontSize").asDouble();
+        assertThat(size).isLessThan(20);                    // made smaller to clear the table...
+        assertThat(size).isGreaterThanOrEqualTo(12);        // ...but not below 60% of its size
+        // The table itself is not moved or changed.
+        JsonNode table = mapper.readTree(poured.elementsJson()).get(1);
+        assertThat(table.path("y").asInt()).isEqualTo(246);
+    }
+
+    @Test
+    void wordsThatFitKeepTheirSize() throws Exception {
+        ImportedSlideReviser.Poured poured = reviser.pour(
+                IMPORTED, TEXT_OVER_A_TABLE, "", List.of("Một ý ngắn", "Một ý ngắn khác"));
+
+        JsonNode body = mapper.readTree(poured.elementsJson()).get(0);
+        assertThat(body.path("style").path("fontSize").asDouble()).isEqualTo(20);
+    }
 }

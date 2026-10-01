@@ -615,6 +615,7 @@ public class ProjectService {
         List<String> otherLines = new java.util.ArrayList<>();
         for (JsonNode element : elements) {
             if (!"text".equals(element.path("type").asText(""))) continue;
+            if ("pageNumber".equals(element.path("role").asText(""))) continue;
             List<String> lines = plainTextLines(element.path("content").asText(""));
             if ("title".equals(element.path("role").asText(""))) {
                 titleLines.addAll(lines);
@@ -1141,6 +1142,17 @@ public class ProjectService {
                 .toLowerCase(java.util.Locale.ROOT);
     }
 
+    /** Whether a revised slide's table is the table the previous page already has (both none counts). */
+    private boolean sameTable(JsonNode revised, SlidePage previous) {
+        JsonNode before = readJsonOrNull(previous.getTable());
+        boolean hadTable = before != null && before.isObject();
+        boolean hasTable = revised != null && revised.isObject();
+        if (hadTable != hasTable) return false;
+        if (!hasTable) return true;
+        return foldSignature(slideContentSignature("", null, revised, null))
+                .equals(foldSignature(slideContentSignature("", null, before, null)));
+    }
+
     /** The previous page whose content equals {@code signature}; exact text first, then tolerant. */
     private SlidePage findPreviousPage(List<SlidePage> candidates, String signature, boolean tolerant) {
         String wanted = tolerant ? foldSignature(signature) : signature;
@@ -1240,17 +1252,20 @@ public class ProjectService {
                             .imageUrl(unchanged.getImageUrl())
                             .layout(unchanged.getLayout());
                 } else if (previousPages != null && previousPages.size() == generatedSlides.size()
-                        && chartJson == null && tableJson == null && (imageUrl == null || imageUrl.isBlank())) {
+                        && chartJson == null && (imageUrl == null || imageUrl.isBlank())) {
                     // A rewritten slide of a deck opened from a PPTX: pour the new words into the
                     // slide's own boxes, so it still looks like the file rather than the template.
+                    // Only when the revision left the slide's table as it was: a table the AI added,
+                    // changed or removed needs the slide laid out afresh.
                     SlidePage previous = previousPages.get(i);
-                    if (unmatchedPrevious.contains(previous)) {
+                    if (unmatchedPrevious.contains(previous) && sameTable(slideNode.path("table"), previous)) {
                         List<String> revisedBullets = new java.util.ArrayList<>();
                         slideNode.path("bullets").forEach(bullet -> revisedBullets.add(textOf(bullet)));
                         ImportedSlideReviser.Poured poured = new ImportedSlideReviser(objectMapper).pour(
                                 previous.getRichText(), previous.getElements(), title, revisedBullets);
                         if (poured != null) {
                             builder.elements(poured.elementsJson())
+                                    .table(previous.getTable())
                                     .richText(previous.getRichText())
                                     .layout(previous.getLayout())
                                     .bullets(objectMapper.writeValueAsString(poured.bullets()));

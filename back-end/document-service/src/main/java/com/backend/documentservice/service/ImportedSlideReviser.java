@@ -26,6 +26,13 @@ final class ImportedSlideReviser {
     /** A short note is at most one line this long; anything bigger counts as slide content. */
     private static final int SHORT_NOTE_CHARS = 40;
 
+    // Estimating how tall the new words stand, to keep them clear of what lies below the box.
+    private static final double PAGE_HEIGHT = 540;
+    private static final double CHAR_WIDTH = 0.52;   // average glyph width, as a fraction of the font size
+    private static final double LINE_HEIGHT = 1.3;
+    private static final double MIN_SCALE = 0.6;     // never shrink the text below this share of its size
+    private static final double MIN_ROOM_ABOVE_OBSTACLE = 24;
+
     /** The slide's new boxes, and the bullets that read the same as the body boxes it now has. */
     record Poured(String elementsJson, List<String> bullets) {}
 
@@ -77,6 +84,7 @@ final class ImportedSlideReviser {
                     String old = element.path("content").asText("");
                     boolean list = lines.size() > 1 || old.contains("<ul") || old.contains("<ol");
                     box.put("content", list ? list(lines) : "<p>" + escape(lines.get(0)) + "</p>");
+                    fitAboveWhatLiesBelow(box, stored, element, lines, list);
                     bullets.addAll(lines);
                 } else {
                     List<String> own = plainLines(element.path("content").asText(""));
@@ -91,6 +99,57 @@ final class ImportedSlideReviser {
         } catch (Exception exception) {
             return null;
         }
+    }
+
+    /**
+     * Shrinks the text of the main box when the new words would run into something below it.
+     *
+     * <p>A rewrite is often longer than the words it replaces, and the box was sized for the old
+     * ones; a table or a picture under it would then be covered. The text is scaled down just
+     * enough to fit the room above the nearest box that starts below it, but never below
+     * {@value #MIN_SCALE} of its size, since text too small to read is no better than overlap.
+     */
+    private static void fitAboveWhatLiesBelow(
+            ObjectNode box, JsonNode stored, JsonNode main, List<String> lines, boolean list) {
+        double x = box.path("x").asDouble();
+        double y = box.path("y").asDouble();
+        double width = box.path("width").asDouble();
+        if (width <= 0) return;
+
+        double limit = PAGE_HEIGHT;
+        for (JsonNode other : stored) {
+            if (other == main || !other.isObject()) continue;
+            double otherX = other.path("x").asDouble();
+            double otherWidth = other.path("width").asDouble();
+            boolean startsBelow = other.path("y").asDouble() > y + MIN_ROOM_ABOVE_OBSTACLE;
+            boolean overlapsSideways = otherX < x + width && otherX + otherWidth > x;
+            if (startsBelow && overlapsSideways) limit = Math.min(limit, other.path("y").asDouble());
+        }
+        double room = limit - y - 6;
+
+        JsonNode existing = box.get("style");
+        ObjectNode style = existing != null && existing.isObject() ? (ObjectNode) existing : box.putObject("style");
+        double size = style.path("fontSize").asDouble(18);
+        if (heightOf(lines, size, width, list) <= room) return;
+
+        double scale = MIN_SCALE;
+        for (double candidate = 0.95; candidate >= MIN_SCALE; candidate -= 0.05) {
+            if (heightOf(lines, size * candidate, width, list) <= room) {
+                scale = candidate;
+                break;
+            }
+        }
+        style.put("fontSize", Math.max(8, Math.round(size * scale)));
+    }
+
+    /** Roughly how tall the lines stand when set at {@code size} in a box {@code width} wide. */
+    private static double heightOf(List<String> lines, double size, double width, boolean list) {
+        double usable = Math.max(40, width - (list ? 2 * size : 0));
+        double total = 0;
+        for (String line : lines) {
+            total += Math.max(1, Math.ceil(line.length() * size * CHAR_WIDTH / usable)) * size * LINE_HEIGHT;
+        }
+        return total;
     }
 
     private JsonNode read(String json) {
