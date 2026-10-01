@@ -47,7 +47,7 @@ services:
       # Gemini called directly stays as the last resort if the gateway is down or exhausted.
       VLLM_API_BASE_URL: http://9router:20128
       # Preferred: the self-hosted LLM. 9Router (above) is the first fallback, direct Gemini the last.
-      LLM_PRIMARY_BASE_URL: ${LLM_PRIMARY_BASE_URL:-http://45.83.205.200:46627}
+      LLM_PRIMARY_BASE_URL: ${LLM_PRIMARY_BASE_URL:-}
       LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-Qwen3-VL-8B}
       VLLM_API_KEY: ${NINE_ROUTER_API_KEY:-}
       LLM_MODEL: ${NINE_ROUTER_MODEL:-free-combo}
@@ -62,7 +62,7 @@ services:
     environment:
       VLLM_API_BASE_URL: http://9router:20128
       # Preferred: the self-hosted LLM. 9Router (above) is the first fallback, direct Gemini the last.
-      LLM_PRIMARY_BASE_URL: ${LLM_PRIMARY_BASE_URL:-http://45.83.205.200:46627}
+      LLM_PRIMARY_BASE_URL: ${LLM_PRIMARY_BASE_URL:-}
       LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-Qwen3-VL-8B}
       VLLM_API_KEY: ${NINE_ROUTER_API_KEY:-}
       LLM_MODEL: ${NINE_ROUTER_MODEL:-free-combo}
