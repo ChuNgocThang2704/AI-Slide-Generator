@@ -1,0 +1,112 @@
+services:
+  postgres:
+    ports: !override ["127.0.0.1:5432:5432"]
+  mysql:
+    ports: !override ["127.0.0.1:3307:3306"]
+  redis:
+    ports: !override ["127.0.0.1:6380:6379"]
+  rabbitmq:
+    ports: !override ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
+  user-service:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  subscription-service:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  payment-service:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  statistic-service:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  document-service:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  template-service:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  notification-service:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  api-gateway:
+    mem_limit: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+  ai-service:
+    mem_limit: 768m
+    environment:
+      # The previously configured vLLM host is offline; use the configured Gemini API directly.
+      # LLM calls go to the 9Router gateway (combo of free providers with auto-fallback);
+      # Gemini called directly stays as the last resort if the gateway is down or exhausted.
+      VLLM_API_BASE_URL: http://9router:20128
+      # Preferred: the self-hosted LLM. 9Router (above) is the first fallback, direct Gemini the last.
+      LLM_PRIMARY_BASE_URL: ${LLM_PRIMARY_BASE_URL:-http://45.83.205.200:46627}
+      LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-Qwen3-VL-8B}
+      VLLM_API_KEY: ${NINE_ROUTER_API_KEY:-}
+      LLM_MODEL: ${NINE_ROUTER_MODEL:-free-combo}
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      IMAGE_VLM_JUDGE_MODEL: ${NINE_ROUTER_MODEL:-free-combo}
+      IMAGE_VLM_JUDGE_STRONG_MODEL: ${NINE_ROUTER_STRONG_MODEL:-ag/gemini-3.8-flash-high}
+      # Pictures are drawn by the gateway's image model now, not the Flux server the 0.75 style bar was tuned for.
+      IMAGE_VLM_JUDGE_MIN_STYLE: "0.65"
+      GCP_VERTEX_AI_ENABLE: "false"
+  ai-worker:
+    mem_limit: 1200m
+    environment:
+      VLLM_API_BASE_URL: http://9router:20128
+      # Preferred: the self-hosted LLM. 9Router (above) is the first fallback, direct Gemini the last.
+      LLM_PRIMARY_BASE_URL: ${LLM_PRIMARY_BASE_URL:-http://45.83.205.200:46627}
+      LLM_PRIMARY_MODEL: ${LLM_PRIMARY_MODEL:-Qwen3-VL-8B}
+      VLLM_API_KEY: ${NINE_ROUTER_API_KEY:-}
+      LLM_MODEL: ${NINE_ROUTER_MODEL:-free-combo}
+      OMP_NUM_THREADS: "2"
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      IMAGE_VLM_JUDGE_MODEL: ${NINE_ROUTER_MODEL:-free-combo}
+      IMAGE_VLM_JUDGE_STRONG_MODEL: ${NINE_ROUTER_STRONG_MODEL:-ag/gemini-3.8-flash-high}
+      # Pictures are drawn by the gateway's image model now, not the Flux server the 0.75 style bar was tuned for.
+      IMAGE_VLM_JUDGE_MIN_STYLE: "0.65"
+      GCP_VERTEX_AI_ENABLE: "false"
+      TOKENIZERS_PARALLELISM: "false"
+  frontend:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "5173:80"
+      # The 9Router dashboard, behind this nginx's basic auth (see azure-nginx.conf).
+      - "20128:20128"
+    volumes:
+      - ./front-end/dist:/usr/share/nginx/html:ro
+      - ./docker/azure-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/9router.htpasswd:/etc/nginx/9router.htpasswd:ro
+    networks:
+      - ai-slide-net
+
+  # OpenAI-compatible AI gateway: one endpoint in front of many providers, with tiered
+  # combos (best free model first, fall through to the next on quota/error).
+  # Not published: the only way in from outside is port 20128 on the frontend nginx, which asks
+  # for its own password first (see docker/azure-nginx.conf). Inside the compose network the
+  # services still reach it directly at http://9router:20128.
+  9router:
+    image: decolua/9router@sha256:efc6e88c963ddb035f8da26a74e156b927863cd05625b47f3587972bc865bd25
+    container_name: ai-9router
+    restart: unless-stopped
+    mem_limit: 384m
+    environment:
+      INITIAL_PASSWORD: ${NINE_ROUTER_PASSWORD:?set NINE_ROUTER_PASSWORD in .env}
+      REQUIRE_API_KEY: "true"
+      PORT: "20128"
+    volumes:
+      - nine-router-data:/app/data
+    networks:
+      - ai-slide-net
+
+volumes:
+  nine-router-data:

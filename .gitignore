@@ -115,3 +115,6 @@ service-account.json
 coverage/
 htmlcov/
 .codex-review/
+
+# Second-lock password file for the 9Router dashboard (created on the server, never committed)
+docker/9router.htpasswd
