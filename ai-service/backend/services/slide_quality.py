@@ -288,6 +288,20 @@ def _declared_visual(slide: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_FILLER_HEADINGS = {
+    "noi dung chinh", "noi dung", "goc nhin bo sung", "bo sung", "khac", "y chinh", "y khac", "phan 1", "phan 2",
+    "nhom 1", "nhom 2", "main content", "main points", "content", "additional perspective", "additional",
+    "other", "others", "group 1", "group 2", "part 1", "part 2",
+}
+
+
+def _is_filler_heading(heading: str) -> bool:
+    import unicodedata
+    folded = unicodedata.normalize("NFD", str(heading or "").casefold().replace("đ", "d"))
+    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
+    return " ".join(folded.replace(":", " ").split()) in _FILLER_HEADINGS
+
+
 def _apply_planned_composition(slide: Dict[str, Any], item: Dict[str, Any], visual: str) -> None:
     """Apply a renderer-supported non-asset composition without losing content."""
     if visual != "none":
@@ -329,6 +343,9 @@ def _apply_planned_composition(slide: Dict[str, Any], item: Dict[str, Any], visu
     left_heading = str(item.get("left_heading") or "").strip()[:48]
     right_heading = str(item.get("right_heading") or "").strip()[:48]
     if not left_heading or not right_heading or left_heading.casefold() == right_heading.casefold():
+        return
+    # A heading that says nothing about its group would be printed in front of every bullet.
+    if _is_filler_heading(left_heading) or _is_filler_heading(right_heading):
         return
 
     slide["bullets"] = [
@@ -397,7 +414,9 @@ async def build_visual_plan(
                 "balancing may later remove a lower-priority image.\n"
                 "- Return image_priority from 0.0 to 1.0 for every image choice: use higher values only when the "
                 "image materially explains the slide rather than merely decorating it.\n"
-                "- Do not force split columns merely for variety; both groups must have distinct meanings.\n"
+                "- Do not force split columns merely for variety; both groups must have distinct meanings, and each "
+                "heading must name what its group is about (never a filler such as Main content, Additional "
+                "perspective, Nội dung chính or Góc nhìn bổ sung).\n"
                 "- Do not choose chart/table from prose if the data structure is weak.\n"
                 "Return strict JSON only: {\"slides\":[{\"slide_index\":number,"
                 "\"visual\":\"none|image|chart|table\",\"composition\":\"standard|split_columns\","

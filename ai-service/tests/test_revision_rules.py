@@ -153,3 +153,14 @@ class SplitColumnsHeadingsTests(unittest.TestCase):
         }
         _apply_planned_composition(slide, item, "none")
         self.assertEqual(slide["bullets"], ["Nên — a", "Nên — b", "Tránh — c", "Tránh — d"])
+
+    def test_filler_headings_leave_the_bullets_plain(self):
+        from services.slide_quality import _apply_planned_composition
+
+        bullets = ["a", "b", "c", "d"]
+        slide = {"layout": "text_only", "bullets": list(bullets)}
+        item = {"composition": "split_columns", "left_heading": "Nội dung chính", "right_heading": "Góc nhìn bổ sung",
+                "left_indices": [0, 1], "right_indices": [2, 3]}
+        _apply_planned_composition(slide, item, "none")
+        self.assertEqual(slide["bullets"], bullets)
+        self.assertEqual(slide["layout"], "text_only")
