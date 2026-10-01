@@ -41,16 +41,3 @@ Port 80 is externally reachable. Port 5173 is also published by Docker but requi
 - nginx resolves `ai-service` / `api-gateway` through Docker's DNS (`resolver 127.0.0.11`), so recreating those
   containers no longer leaves nginx pointing at a stale address (which showed up as 502 on `/outputs/images/`).
 - The host has a 2 GB swapfile (`/swapfile`, enabled in `/etc/fstab`).
-
-## Self-hosted LLM (demo only)
-
-Day to day every LLM call goes through 9Router, so `LLM_PRIMARY_BASE_URL` is empty and no call
-tries the rented GPU host. For a demo, rent the GPU, then on the server:
-
-```bash
-echo 'LLM_PRIMARY_BASE_URL=http://<gpu-host>:<port>' >> .env      # LLM_PRIMARY_MODEL if it is not Qwen3-VL-8B
-docker compose -f docker-compose.yml -f docker-compose.azure.yml up -d ai-service ai-worker
-```
-
-After the demo remove that line and run the same `up -d` again. If the host is unreachable the
-app still works: it skips the host for 3 minutes (5 s connect attempt) and uses 9Router.
