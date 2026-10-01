@@ -136,3 +136,20 @@ class RevisionKeepsDeckTests(unittest.TestCase):
         balanced = extractor._balance_deck(self._slides())
         self.assertEqual(len(balanced), 6)
         self.assertEqual([s["bullets"] for s in balanced], [s["bullets"] for s in self._slides()])
+
+
+class SplitColumnsHeadingsTests(unittest.TestCase):
+    def test_composing_an_already_split_slide_does_not_stack_headings(self):
+        from services.slide_quality import _apply_planned_composition
+
+        slide = {
+            "layout": "split_columns",
+            "bullets": ["Nên — a", "Nên — b", "Tránh — c", "Tránh — d"],
+        }
+        item = {
+            "composition": "split_columns",
+            "left_heading": "Nên", "right_heading": "Tránh",
+            "left_indices": [0, 1], "right_indices": [2, 3],
+        }
+        _apply_planned_composition(slide, item, "none")
+        self.assertEqual(slide["bullets"], ["Nên — a", "Nên — b", "Tránh — c", "Tránh — d"])

@@ -293,7 +293,9 @@ def _apply_planned_composition(slide: Dict[str, Any], item: Dict[str, Any], visu
     if visual != "none":
         return
     current_layout = str(slide.get("layout") or "").strip().lower()
-    if current_layout in {"intro", "title", "thankyou", "thank_you", "text_table", "text_chart", "text_image"}:
+    # A slide already composed in columns carries its headings in its bullets ("Heading — point");
+    # composing it again prefixed every bullet once more, and the headings piled up with each edit.
+    if current_layout in {"intro", "title", "thankyou", "thank_you", "text_table", "text_chart", "text_image", "split_columns"}:
         return
     if str(item.get("composition") or "standard").strip().lower() != "split_columns":
         return

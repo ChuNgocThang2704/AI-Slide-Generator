@@ -1160,6 +1160,13 @@ async def _build_revised_slide_spec_payload(
                 precomputed_issues=technical_issues,
             )
 
+    # The title the user typed is final: the title-quality and coherence passes above may reword
+    # any title, and "Vận động đúng cách" is what they asked for, not a better one.
+    for idx, title in explicit_title_overrides.items():
+        slides = revised.get("slides") or []
+        if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+            slides[idx]["title"] = title
+
     revised = lock_presentation_mode(revised, existing_decision)
 
     from services.deck_contract import (
