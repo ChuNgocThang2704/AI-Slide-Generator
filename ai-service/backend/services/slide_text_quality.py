@@ -887,16 +887,31 @@ async def _review_speaker_notes(
     improved = copy.deepcopy(structured)
     changed: List[int] = []
     batch_size = max(1, _SPEAKER_NOTES_REVIEW_BATCH_SIZE)
-    for start in range(0, len(pending), batch_size):
-        batch = set(pending[start : start + batch_size])
-        improved, batch_changed = await _review_speaker_notes_batch(
+
+    # The batches cover different slides and only ever write their own slides' notes, so they run
+    # side by side (each on its own copy) and the notes they changed are merged back.
+    async def _run(batch: set):
+        return await _review_speaker_notes_batch(
             content_extractor,
-            improved,
+            copy.deepcopy(structured),
             source_language=source_language,
             provider=provider,
             candidate_indices=batch,
         )
-        changed.extend(batch_changed)
+
+    batches = [set(pending[start : start + batch_size]) for start in range(0, len(pending), batch_size)]
+    results = await asyncio.gather(*[_run(batch) for batch in batches], return_exceptions=True)
+    improved_slides = improved.get("slides") or []
+    for batch, result in zip(batches, results):
+        if isinstance(result, BaseException):
+            print(f"[slide_text_quality] speaker notes batch failed: {result!r}")
+            continue
+        batch_deck, batch_changed = result
+        batch_slides = batch_deck.get("slides") or []
+        for idx in batch_changed:
+            if idx in batch and 0 <= idx < len(improved_slides) and idx < len(batch_slides):
+                improved_slides[idx]["notes"] = batch_slides[idx].get("notes", improved_slides[idx].get("notes"))
+                changed.append(idx)
     return improved, sorted(set(changed))
 
 

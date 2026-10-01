@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
+import asyncio
 import os
 import httpx
 
@@ -210,20 +211,32 @@ async def fetch_external_image(
             # Giới hạn ở 3 ứng viên hàng đầu cho mỗi truy vấn để đảm bảo nhanh
             candidates = candidates[:3]
             
+            if vlm_validate_fn is not None:
+                # The few candidates of one search are downloaded and judged side by side (the
+                # judge is a vision call of several seconds each); the first one in search order
+                # that passes is taken, the same photo the one-by-one loop would have chosen.
+                candidates = candidates[: max(0, judge_budget - judged)]
+
+                async def _check(meta: Dict[str, Any]):
+                    downloaded = await _download_image(client, str(meta.get("image_url") or ""))
+                    if not downloaded:
+                        return None, False
+                    return downloaded, bool(await vlm_validate_fn(downloaded["bytes"], meta))
+
+                checked = await asyncio.gather(*[_check(meta) for meta in candidates], return_exceptions=True)
+                judged += sum(1 for item in checked if not isinstance(item, BaseException) and item[0] is not None)
+                for meta, outcome in zip(candidates, checked):
+                    if isinstance(outcome, BaseException):
+                        continue
+                    downloaded, is_valid = outcome
+                    if downloaded is not None and is_valid:
+                        return {**meta, **downloaded}
+                continue
+
             for meta in candidates:
                 downloaded = await _download_image(client, str(meta.get("image_url") or ""))
                 if not downloaded:
                     continue
-                
-                # Kiểm tra gọi lại (callback) độ liên quan/an toàn của VLM nếu được cung cấp
-                if vlm_validate_fn is not None:
-                    if judged >= judge_budget:
-                        return None
-                    judged += 1
-                    is_valid = await vlm_validate_fn(downloaded["bytes"], meta)
-                    if not is_valid:
-                        continue
-                        
                 return {
                     **meta,
                     **downloaded,
