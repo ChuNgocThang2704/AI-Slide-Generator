@@ -52,7 +52,7 @@ jwt:
 
 app:
   subscription-service:
-    url: ${SUBSCRIPTION_SERVICE_URL} # URL đích để kích hoạt gói khi thanh toán xong
+    url: ${APP_SUBSCRIPTION_SERVICE_URL} # URL đích để kích hoạt gói khi thanh toán xong
 ```
 
 ---

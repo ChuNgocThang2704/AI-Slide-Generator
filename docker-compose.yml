@@ -165,7 +165,7 @@ services:
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       STRIPE_CURRENCY: ${STRIPE_CURRENCY:-usd}
       JWT_SIGNER_KEY: ${JWT_SIGNER_KEY}
-      SUBSCRIPTION_SERVICE_URL: ${SUBSCRIPTION_SERVICE_URL_DOCKER:-http://subscription-service:8084/api/subscription}
+      APP_SUBSCRIPTION_SERVICE_URL: ${APP_SUBSCRIPTION_SERVICE_URL_DOCKER:-http://subscription-service:8084/api/subscription}
     depends_on:
       subscription-service:
         condition: service_started
