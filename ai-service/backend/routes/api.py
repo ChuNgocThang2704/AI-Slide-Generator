@@ -953,6 +953,14 @@ async def _build_revised_slide_spec_payload(
         # Existing slides are immutable during an add operation. Rebuild from
         # the saved originals and insert only the newly generated candidates.
         rebuilt = [dict(slide) for slide in old_slides if isinstance(slide, dict)]
+        # A deck that ends on a closing slide gets its new content in front of it, not after it.
+        last_old = old_slides[-1] if old_slides and isinstance(old_slides[-1], dict) else {}
+        if (
+            str(last_old.get("layout") or "").strip().lower() in {"thankyou", "thank_you", "closing"}
+            and min(added_slide_indices) >= len(rebuilt)
+            and len(rebuilt) >= 2
+        ):
+            added_slide_indices = [idx - 1 for idx in added_slide_indices]
         for offset, target_idx in enumerate(added_slide_indices):
             if offset >= len(additions):
                 break
