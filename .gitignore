@@ -121,3 +121,6 @@ docker/9router.htpasswd
 
 # Throwaway browser-test scripts and their saved logins; never part of the project
 front-end/.pw-scratch/
+
+# Claude Code local settings
+.claude/
