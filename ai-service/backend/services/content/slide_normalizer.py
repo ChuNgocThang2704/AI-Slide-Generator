@@ -724,6 +724,13 @@ class SlideNormalizerMixin:
         if not slides:
             return slides
 
+        # A revision keeps the deck it was given: the user's slide count and their untouched slides'
+        # bullets are theirs, so nothing is merged, dropped or lent between slides here.
+        from services.generation_context import GenerationMode, extractor_context
+        context = extractor_context(self)
+        if context is not None and context.mode == GenerationMode.REVISION:
+            return slides
+
         # 1. Loại trùng theo tiêu đề khớp chính xác: giữ slide đầu tiên, gộp bullet nếu tìm thấy tiêu đề trùng lặp
         seen_titles: Dict[str, int] = {}
         deduped: List[Dict[str, Any]] = []

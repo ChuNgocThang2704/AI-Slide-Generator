@@ -9,6 +9,7 @@ import { hasOwnOrnaments, themeOrnaments } from '../utils/themeOrnaments';
 import { isBackdrop } from '../utils/templateArt';
 import { ICON_COMPONENTS } from '../components/slides/iconMap';
 import { withGeneratedThemes } from '../utils/generatedTheme';
+import { fitTextToBox } from '../utils/textFit';
 
 const PX_PER_INCH = 72;
 const SLIDE_W = 13.333333;
@@ -455,6 +456,17 @@ function addEditableTable(pptxSlide, element, slideData, theme) {
     ? table.columnWidths.map((value) => Math.max(1, Number(value) || 1))
     : headers.map(() => 1);
   const widthTotal = rawWidths.reduce((sum, value) => sum + value, 0);
+  // The size the editor's table settles on for this much text (StructuredVisual.jsx), so the
+  // exported table reads the way it does on screen instead of at a fixed small size.
+  const density = Math.max(headers.length, rows.length);
+  const cellFont = Math.min(15, ...[...headers, ...rows.flat()].map((value) => fitTextToBox(String(value ?? ''), {
+    width: Math.max(72, 810 / Math.max(1, headers.length)),
+    height: Math.max(30, 330 / Math.max(2, rows.length + 1)),
+    min: 7.5,
+    max: density <= 4 ? 15 : 13,
+    lineHeight: 1.3,
+    padding: 10,
+  })));
   const height = Math.max(0.4, toInches(element.height));
   const rawHeights = Array.isArray(table.rowHeights) && table.rowHeights.length === rows.length + 1
     ? table.rowHeights.map((value) => Math.max(1, Number(value) || 1))
@@ -470,7 +482,7 @@ function addEditableTable(pptxSlide, element, slideData, theme) {
     ...(rawHeights ? { rowH: rawHeights.map((value) => height * value / heightTotal) } : {}),
     border: { type: 'solid', color: cleanColor(theme.textSub), pt: 0.6, transparency: 65 },
     fontFace: 'Arial',
-    fontSize: 9,
+    fontSize: Math.round(cellFont * 2) / 2,
     color: theme.text,
     margin: rawHeights ? 0.03 : 0.06,
     autoFit: false,

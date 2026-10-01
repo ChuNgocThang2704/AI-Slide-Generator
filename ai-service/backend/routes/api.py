@@ -2047,6 +2047,13 @@ async def revise_slide_spec(
             requested_slide_count,
             raw_content=prompt,
         )
+        # "Thêm 2 slide ..." names how many to add, not how many the deck should have: reading it as a
+        # target count squeezed the deck down to 2 slides before the addition even started.
+        if target_slides_override and (
+            _revision_prompt_add_slide_count(prompt)
+            or _revision_prompt_delete_slide_indices(prompt, source_slide_count)
+        ):
+            target_slides_override = None
         if not target_indices and target_slides_override and target_slides_override != source_slide_count:
             previous_structured = await revision_extractor._force_slide_count_exact(
                 previous_structured,

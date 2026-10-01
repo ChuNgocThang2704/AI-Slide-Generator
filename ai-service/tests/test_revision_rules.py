@@ -112,3 +112,27 @@ class RevisionRulesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RevisionKeepsDeckTests(unittest.TestCase):
+    """A revision must hand back every slide it was given, however alike two of them read."""
+
+    def _slides(self):
+        words = "giấc ngủ sâu phục hồi trí nhớ học tập sức khỏe thể chất tinh thần"
+        return [
+            {"title": f"Slide {i}", "bullets": [f"{words} ý {i}", f"{words} điều {i}"], "notes": ""}
+            for i in range(6)
+        ]
+
+    def test_revision_does_not_merge_or_drop_slides(self):
+        from services.content.slide_normalizer import SlideNormalizerMixin
+        from services.generation_context import GenerationContext, GenerationMode, bind_legacy_extractor_state
+
+        class Extractor(SlideNormalizerMixin):
+            pass
+
+        extractor = Extractor()
+        bind_legacy_extractor_state(extractor, GenerationContext(task_id="t", mode=GenerationMode.REVISION))
+        balanced = extractor._balance_deck(self._slides())
+        self.assertEqual(len(balanced), 6)
+        self.assertEqual([s["bullets"] for s in balanced], [s["bullets"] for s in self._slides()])
