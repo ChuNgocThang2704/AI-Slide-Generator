@@ -205,6 +205,163 @@ class PowerPointTemplateParserTest {
                 .noneMatch(item -> item.getContent() != null && item.getContent().contains("Tieu de that"));
     }
 
+    @Test
+    void openedDeckKeepsTheFilesOwnBullets() throws Exception {
+        String slide = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Plain box"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="609600"/><a:ext cx="5000000" cy="800000"/></a:xfrm></p:spPr>
+                      <p:txBody><a:bodyPr/><a:lstStyle/>
+                        <a:p><a:r><a:t>Dong mot</a:t></a:r></a:p>
+                        <a:p><a:r><a:t>Dong hai</a:t></a:r></a:p>
+                      </p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Bulleted box"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="1800000"/><a:ext cx="5000000" cy="500000"/></a:xfrm></p:spPr>
+                      <p:txBody><a:bodyPr/><a:lstStyle/>
+                        <a:p><a:pPr><a:buChar char="&#8226;"/></a:pPr><a:r><a:t>Co dau dong</a:t></a:r></a:p>
+                      </p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="4" name="Body, no bullet"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/>
+                        <a:p><a:pPr><a:buNone/></a:pPr><a:r><a:t>Khong dau dong</a:t></a:r></a:p>
+                      </p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="5" name="Body, inherits"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/>
+                        <a:p><a:r><a:t>Ke thua dau dong</a:t></a:r></a:p>
+                      </p:txBody>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sld>
+                """;
+        TemplateManifest opened = new PowerPointTemplateParser()
+                .parseWithAssets(withSlide(placeholderDeckPptx(), slide), true).manifest();
+        List<String> contents = opened.getLayouts().get(0).getElements().stream()
+                .filter(item -> "text".equals(item.getType()))
+                .map(TemplateManifest.Element::getContent)
+                .toList();
+
+        // A plain text box has no bullet unless the file gives one: two lines stay two lines.
+        assertThat(contents).contains("<p>Dong mot</p><p>Dong hai</p>");
+        // An explicit bullet character is kept even on a single line.
+        assertThat(contents).contains("<ul><li>Co dau dong</li></ul>");
+        // A body placeholder takes its layout's bullet unless the paragraph switches it off.
+        assertThat(contents).contains("<p>Khong dau dong</p>");
+        assertThat(contents).contains("<ul><li>Ke thua dau dong</li></ul>");
+    }
+
+    @Test
+    void openedDeckKeepsItsSlideNumberAsAPageNumberBox() throws Exception {
+        String slide = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Tieu de that</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Slide Number"/><p:cNvSpPr/><p:nvPr><p:ph type="sldNum" idx="12"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{00000000-1234-1234-1234-123412341234}" type="slidenum"><a:rPr lang="en-US"/><a:t>3</a:t></a:fld></a:p></p:txBody>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sld>
+                """;
+        byte[] deck = withSlide(placeholderDeckPptx(), slide);
+
+        List<TemplateManifest.Element> texts = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest()
+                .getLayouts().get(0).getElements().stream().filter(item -> "text".equals(item.getType())).toList();
+        TemplateManifest.Element number = texts.stream()
+                .filter(item -> "pageNumber".equals(item.getRole())).findFirst().orElseThrow();
+        assertThat(number.getContent()).isEqualTo("<p>3</p>");
+        // It sits where the slide's layout puts the slide number (bottom right).
+        assertThat(number.getX()).isBetween(863d, 865d);
+        assertThat(number.getY()).isBetween(503d, 505d);
+        // The number is never mistaken for the slide's title, which stays the real heading.
+        assertThat(texts).filteredOn(item -> "title".equals(item.getRole())).singleElement()
+                .satisfies(item -> assertThat(item.getContent()).contains("Tieu de that"));
+
+        // A template upload never keeps slide numbers.
+        TemplateManifest asTemplate = new PowerPointTemplateParser().parseWithAssets(deck, false).manifest();
+        assertThat(asTemplate.getLayouts().get(0).getElements())
+                .noneMatch(item -> "pageNumber".equals(item.getRole()));
+    }
+
+    @Test
+    void openedDeckKeepsItsTableCellsAndColumnWidths() throws Exception {
+        String slide = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:graphicFrame>
+                      <p:nvGraphicFramePr><p:cNvPr id="4" name="Table 3"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+                      <p:xfrm><a:off x="609600" y="1524000"/><a:ext cx="9144000" cy="1828800"/></p:xfrm>
+                      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+                        <a:tbl>
+                          <a:tblPr firstRow="1"/>
+                          <a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="6144000"/></a:tblGrid>
+                          <a:tr h="370840">
+                            <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Muc</a:t></a:r></a:p></a:txBody></a:tc>
+                            <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Gia tri</a:t></a:r></a:p></a:txBody></a:tc>
+                          </a:tr>
+                          <a:tr h="370840">
+                            <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Mot</a:t></a:r></a:p><a:p><a:r><a:t>dong hai</a:t></a:r></a:p></a:txBody></a:tc>
+                            <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>10</a:t></a:r></a:p></a:txBody></a:tc>
+                          </a:tr>
+                        </a:tbl>
+                      </a:graphicData></a:graphic>
+                    </p:graphicFrame>
+                  </p:spTree></p:cSld>
+                </p:sld>
+                """;
+        byte[] deck = withSlide(placeholderDeckPptx(), slide);
+
+        List<TemplateManifest.Element> elements = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest()
+                .getLayouts().get(0).getElements();
+        TemplateManifest.Element table = elements.stream()
+                .filter(item -> "table".equals(item.getType())).findFirst().orElseThrow();
+        assertThat(table.getData().get("headers")).isEqualTo(List.of("Muc", "Gia tri"));
+        // A cell's paragraphs share one line.
+        assertThat(table.getData().get("rows")).isEqualTo(List.of(List.of("Mot dong hai", "10")));
+        assertThat(table.getData().get("columnWidths")).isEqualTo(List.of(3000000d, 6144000d));
+        assertThat(table.getX()).isBetween(47d, 49d);
+        // The cells are not also read as a text box of their own.
+        assertThat(elements).filteredOn(item -> "text".equals(item.getType())).isEmpty();
+
+        // A template upload keeps no table.
+        assertThat(new PowerPointTemplateParser().parseWithAssets(deck, false).manifest().getLayouts().get(0).getElements())
+                .noneMatch(item -> "table".equals(item.getType()));
+    }
+
+    /** The same package with another slide in place of its first one. */
+    private byte[] withSlide(byte[] pptx, String slideXml) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (java.util.zip.ZipInputStream input = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(pptx));
+             ZipOutputStream zip = new ZipOutputStream(output)) {
+            ZipEntry entry;
+            while ((entry = input.getNextEntry()) != null) {
+                byte[] content = input.readAllBytes();
+                add(zip, entry.getName(), "ppt/slides/slide1.xml".equals(entry.getName())
+                        ? slideXml.getBytes(StandardCharsets.UTF_8) : content);
+            }
+        }
+        return output.toByteArray();
+    }
+
     private byte[] placeholderDeckPptx() throws Exception {
         String presentation = """
                 <?xml version="1.0" encoding="UTF-8"?>
@@ -247,6 +404,10 @@ class PowerPointTemplateParserTest {
                     <p:sp>
                       <p:nvSpPr><p:cNvPr id="3" name="Content"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr>
                       <p:spPr><a:xfrm><a:off x="609600" y="1828800"/><a:ext cx="10972800" cy="4114800"/></a:xfrm></p:spPr>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="4" name="Slide number"/><p:cNvSpPr/><p:nvPr><p:ph type="sldNum" idx="12"/></p:nvPr></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="10972800" y="6400800"/><a:ext cx="609600" cy="274320"/></a:xfrm></p:spPr>
                     </p:sp>
                   </p:spTree></p:cSld>
                 </p:sldLayout>

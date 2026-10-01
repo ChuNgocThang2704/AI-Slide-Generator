@@ -1,5 +1,6 @@
 package com.backend.templateservice.dto.manifest;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -76,6 +77,9 @@ public class TemplateManifest {
         private String src;
         private String fill;
         private String borderColor;
+        /** A table's cells ({@code headers}, {@code rows}, {@code columnWidths}); only set on a table. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        private Map<String, Object> data;
         @Builder.Default
         private Map<String, Object> style = new LinkedHashMap<>();
     }

@@ -298,6 +298,7 @@ public class PowerPointTemplateParser {
                 .filter(item -> "text".equals(item.getType()))
                 .toList();
         TemplateManifest.Element title = textElements.stream()
+                .filter(item -> !"pageNumber".equals(item.getRole()))
                 .max(Comparator
                         .comparingDouble(this::fontSize)
                         .thenComparingDouble(item -> item.getWidth() * item.getHeight())
@@ -309,16 +310,27 @@ public class PowerPointTemplateParser {
         // collectVisuals resolve every one of them, not just a single representative one), so
         // they're dropped here rather than duplicated as a second, blanked copy.
         if (keepContent) {
-            return textElements.stream()
-                    .filter(element -> !String.valueOf(element.getContent()).isBlank())
-                    .map(element -> {
-                        TemplateManifest.Element copy = copyElement(element);
-                        copy.setRole(element == title ? "title" : "body");
+            List<TemplateManifest.Element> tables = visibleElements.stream()
+                    .filter(item -> "table".equals(item.getType()) && item.getData() != null)
+                    .map(item -> {
+                        TemplateManifest.Element copy = copyElement(item);
                         copy.setPlaceholder(false);
                         copy.setLocked(false);
                         return copy;
                     })
                     .toList();
+            List<TemplateManifest.Element> kept = textElements.stream()
+                    .filter(element -> !String.valueOf(element.getContent()).isBlank())
+                    .map(element -> {
+                        TemplateManifest.Element copy = copyElement(element);
+                        copy.setRole("pageNumber".equals(element.getRole()) ? "pageNumber"
+                                : element == title ? "title" : "body");
+                        copy.setPlaceholder(false);
+                        copy.setLocked(false);
+                        return copy;
+                    })
+                    .toList();
+            return java.util.stream.Stream.concat(kept.stream(), tables.stream()).toList();
         }
 
         TemplateManifest.Element imagePlaceholder = visibleElements.stream()
@@ -411,7 +423,11 @@ public class PowerPointTemplateParser {
 
             PlaceholderInfo placeholder = readPlaceholder(shape);
             String role = roleForPlaceholder(placeholder.type);
-            if (placeholder.ignore) continue;
+            // A deck being opened keeps its slide numbers (as the editor's own page-number boxes);
+            // a template keeps none, and date, footer and header are never kept.
+            boolean slideNumber = "sldNum".equals(placeholder.type) && (keepText || placeholdersOut != null);
+            if (slideNumber) role = "pageNumber";
+            if (placeholder.ignore && !slideNumber) continue;
             TemplateManifest.Element inherited = inheritedPlaceholders.getOrDefault(
                     placeholder.key(), inheritedPlaceholders.get(role)
             );
@@ -422,12 +438,15 @@ public class PowerPointTemplateParser {
             if (anchor == null) continue;
 
             String elementType = "text";
+            Map<String, Object> tableData = null;
             boolean hasImageFill = firstDescendant(shape, "blip") != null;
             if ("pic".equals(kind) || hasImageFill || "image".equals(role)) {
                 elementType = "image";
                 role = "image";
             } else if ("graphicFrame".equals(kind)) {
-                elementType = switch (role) {
+                tableData = keepText ? readTable(shape) : null;
+                if (tableData != null) role = "table";
+                elementType = tableData != null ? "table" : switch (role) {
                     case "chart" -> "chart";
                     case "table" -> "table";
                     default -> "shape";
@@ -445,7 +464,8 @@ public class PowerPointTemplateParser {
             }
             String fill = readShapeFill(shape, theme);
             String border = readLineColor(shape, theme);
-            String content = placeholder.present && !keepText ? "" : readTextHtml(shape, role);
+            // A table's words live in its cells (tableData), not in a text box of their own.
+            String content = tableData != null || (placeholder.present && !keepText) ? "" : readTextHtml(shape, role);
 
             TemplateManifest.Element built = TemplateManifest.Element.builder()
                     .id("tpl-" + sequence++ + "-" + UUID.randomUUID().toString().substring(0, 8))
@@ -462,6 +482,7 @@ public class PowerPointTemplateParser {
                     .content(content)
                     .fill(fill)
                     .borderColor(border)
+                    .data(tableData)
                     .style(style)
                     .build();
             result.add(built);
@@ -471,6 +492,59 @@ public class PowerPointTemplateParser {
             }
         }
         return result;
+    }
+
+    /**
+     * The cells of a PowerPoint table, in the shape the editor's tables use: the first row as the
+     * headers, the rest as rows, and the columns' relative widths. Null when the frame holds no table.
+     */
+    private Map<String, Object> readTable(Element frame) {
+        Element table = firstDescendant(frame, "tbl");
+        if (table == null) return null;
+        List<List<String>> grid = new ArrayList<>();
+        for (Element row : descendants(table, "tr")) {
+            List<String> cells = new ArrayList<>();
+            for (Element cell : childElements(row)) {
+                if ("tc".equals(cell.getLocalName())) cells.add(cellText(cell));
+            }
+            if (!cells.isEmpty()) grid.add(cells);
+        }
+        if (grid.isEmpty()) return null;
+
+        int columns = grid.get(0).size();
+        List<List<String>> normalized = new ArrayList<>();
+        for (List<String> row : grid) {
+            List<String> padded = new ArrayList<>(row.subList(0, Math.min(columns, row.size())));
+            while (padded.size() < columns) padded.add("");
+            normalized.add(padded);
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("headers", normalized.get(0));
+        data.put("rows", new ArrayList<>(normalized.subList(1, normalized.size())));
+
+        Element columnGrid = firstChild(table, "tblGrid");
+        if (columnGrid != null) {
+            List<Double> widths = new ArrayList<>();
+            for (Element column : childElements(columnGrid)) {
+                if ("gridCol".equals(column.getLocalName())) widths.add((double) longAttr(column, "w", 0));
+            }
+            if (widths.size() == columns && widths.stream().allMatch(width -> width > 0)) {
+                data.put("columnWidths", widths);
+            }
+        }
+        return data;
+    }
+
+    /** A table cell's text, its paragraphs on one line. */
+    private String cellText(Element cell) {
+        return descendants(cell, "p").stream()
+                .map(paragraph -> descendants(paragraph, "t").stream()
+                        .map(Element::getTextContent)
+                        .filter(value -> value != null && !value.isEmpty())
+                        .reduce("", String::concat)
+                        .trim())
+                .filter(text -> !text.isEmpty())
+                .collect(java.util.stream.Collectors.joining(" "));
     }
 
     /** The placeholders of the layout a slide uses, by key, for the slide to inherit position and style from. */
@@ -654,6 +728,7 @@ public class PowerPointTemplateParser {
                 .src(source.getSrc())
                 .fill(source.getFill())
                 .borderColor(source.getBorderColor())
+                .data(source.getData())
                 .style(new LinkedHashMap<>(source.getStyle()))
                 .build();
     }
@@ -1088,21 +1163,67 @@ public class PowerPointTemplateParser {
      * text becomes a bulleted list when it has more than one paragraph, matching how most
      * placeholders are actually used.
      */
+    /**
+     * One {@code <p>} per paragraph, with consecutive bulleted paragraphs grouped into a list.
+     *
+     * <p>Whether a paragraph carries a bullet is read from the file: an explicit bullet character
+     * or numbering is a bullet, {@code buNone} is not, and a paragraph that says nothing inherits.
+     * A plain text box inherits no bullet, so two lines of a text box stay two plain lines; a body
+     * placeholder inherits its layout's bullet, which is a bullet except for a subtitle.
+     */
     private String readTextHtml(Element shape, String role) {
-        List<String> paragraphs = descendants(shape, "p").stream()
-                .map(paragraph -> descendants(paragraph, "t").stream()
-                        .map(Element::getTextContent)
-                        .filter(value -> value != null && !value.isEmpty())
-                        .reduce((left, right) -> left + right)
-                        .orElse(""))
-                .filter(text -> !text.isBlank())
-                .map(this::escapeHtml)
-                .toList();
+        boolean bulletByDefault = bodyPlaceholderBullets(shape, role);
+        List<Boolean> bulleted = new ArrayList<>();
+        List<String> paragraphs = new ArrayList<>();
+        for (Element paragraph : descendants(shape, "p")) {
+            String text = descendants(paragraph, "t").stream()
+                    .map(Element::getTextContent)
+                    .filter(value -> value != null && !value.isEmpty())
+                    .reduce((left, right) -> left + right)
+                    .orElse("");
+            if (text.isBlank()) continue;
+            paragraphs.add(escapeHtml(text));
+            bulleted.add(paragraphBullet(paragraph, bulletByDefault));
+        }
         if (paragraphs.isEmpty()) return "";
-        if ("title".equals(role) || paragraphs.size() == 1) {
+        if ("title".equals(role)) {
             return paragraphs.stream().map(text -> "<p>" + text + "</p>").reduce("", String::concat);
         }
-        return "<ul>" + paragraphs.stream().map(text -> "<li>" + text + "</li>").reduce("", String::concat) + "</ul>";
+        StringBuilder html = new StringBuilder();
+        boolean inList = false;
+        for (int index = 0; index < paragraphs.size(); index++) {
+            if (bulleted.get(index)) {
+                if (!inList) html.append("<ul>");
+                inList = true;
+                html.append("<li>").append(paragraphs.get(index)).append("</li>");
+            } else {
+                if (inList) html.append("</ul>");
+                inList = false;
+                html.append("<p>").append(paragraphs.get(index)).append("</p>");
+            }
+        }
+        if (inList) html.append("</ul>");
+        return html.toString();
+    }
+
+    /** Whether a paragraph that names no bullet of its own gets one from the placeholder it sits in. */
+    private boolean bodyPlaceholderBullets(Element shape, String role) {
+        Element placeholder = firstDescendant(shape, "ph");
+        if (placeholder == null || "title".equals(role) || "pageNumber".equals(role)) return false;
+        String type = placeholder.getAttribute("type");
+        return !List.of("subTitle", "ctrTitle", "title").contains(type);
+    }
+
+    private boolean paragraphBullet(Element paragraph, boolean bulletByDefault) {
+        Element properties = firstChild(paragraph, "pPr");
+        if (properties == null) return bulletByDefault;
+        if (firstChild(properties, "buNone") != null) return false;
+        if (firstChild(properties, "buChar") != null
+                || firstChild(properties, "buAutoNum") != null
+                || firstChild(properties, "buBlip") != null) {
+            return true;
+        }
+        return bulletByDefault;
     }
 
     private String escapeHtml(String value) {
