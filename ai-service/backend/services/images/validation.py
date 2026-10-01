@@ -1,10 +1,14 @@
 from __future__ import annotations
 import base64
+import os
 import json
 import re
+import time
 from typing import Any, Dict, List, Optional
 import httpx
 from services.provider_health import mark_vllm_unavailable, vllm_circuit_open
+
+_GEMINI_JUDGE_DOWN_UNTIL = [0.0]  # monotonic deadline: Gemini judge returned 5xx/429, skip escalating to it
 from pathlib import Path
 import io
 from PIL import Image, ImageChops, ImageFilter, ImageStat
@@ -24,6 +28,7 @@ from config import (
     IMAGE_VLM_JUDGE_MIN_RELEVANCE,
     IMAGE_VLM_JUDGE_MIN_STYLE,
     IMAGE_VLM_JUDGE_MODEL,
+    IMAGE_VLM_JUDGE_STRONG_MODEL,
     IMAGE_VLM_JUDGE_TIMEOUT_SEC,
     GEMINI_API_KEY,
     GEMINI_MODEL,
@@ -268,26 +273,43 @@ async def _vlm_judge_image(
     if not use_vertex and not use_vllm and not GEMINI_API_KEY:
         return None
     async def _escalate_to_gemini(reason: str) -> Optional[Dict[str, Any]]:
+        """Ask a stronger judge about a verdict the first pass was unsure of.
+
+        The gateway is tried first with its stronger model, the same order the text pipeline
+        uses: it holds the working quota, while the direct Gemini call needs its own key and
+        has been answering 503. Direct Gemini stays as the last resort.
+        """
+        if not (allow_escalation and use_vllm):
+            return None
+
+        async def _second_opinion(stronger_model: str) -> Optional[Dict[str, Any]]:
+            print(f"[vlm_judge] escalating review to {stronger_model}: {reason}")
+            return await _vlm_judge_image(
+                client,
+                image_bytes=image_bytes,
+                prompt=prompt,
+                slide=slide,
+                semantic=semantic,
+                min_relevance=min_relevance,
+                max_artifact=max_artifact,
+                min_style=min_style,
+                is_stock_photo=is_stock_photo,
+                model_override=stronger_model,
+                allow_escalation=False,
+            )
+
+        result = None
+        gateway_strong = (IMAGE_VLM_JUDGE_STRONG_MODEL or "").strip()
+        if gateway_strong and gateway_strong != model and not gateway_strong.lower().startswith("gemini"):
+            result = await _second_opinion(gateway_strong)
+
         gemini_ready = bool(
             GEMINI_MODEL
             and (GEMINI_API_KEY or (GCP_VERTEX_AI_ENABLE and GCP_PROJECT_ID))
         )
-        if not (allow_escalation and use_vllm and gemini_ready):
-            return None
-        print(f"[vlm_judge] escalating Qwen review to Gemini: {reason}")
-        result = await _vlm_judge_image(
-            client,
-            image_bytes=image_bytes,
-            prompt=prompt,
-            slide=slide,
-            semantic=semantic,
-            min_relevance=min_relevance,
-            max_artifact=max_artifact,
-            min_style=min_style,
-            is_stock_photo=is_stock_photo,
-            model_override=GEMINI_MODEL,
-            allow_escalation=False,
-        )
+        if result is None and gemini_ready and time.monotonic() >= _GEMINI_JUDGE_DOWN_UNTIL[0]:
+            result = await _second_opinion(GEMINI_MODEL)
+
         if result is not None:
             result["escalated_from"] = model
             result["escalation_reason"] = reason
@@ -411,6 +433,7 @@ async def _vlm_judge_image(
             ],
             "temperature": 0.0,
             "max_tokens": 320,
+            "stream": False,
         }
         url = VLLM_API_BASE_URL.rstrip("/")
         if not url.endswith("/v1"):
@@ -421,6 +444,10 @@ async def _vlm_judge_image(
             credential = f"{VLLM_BASIC_AUTH_USER}:{VLLM_BASIC_AUTH_PASS}"
             auth_encoded = base64.b64encode(credential.encode("utf-8")).decode("ascii")
             headers["Authorization"] = f"Basic {auth_encoded}"
+        # An OpenAI-compatible gateway (9Router) takes a Bearer key instead of basic auth.
+        gateway_key = os.getenv("VLLM_API_KEY", "").strip()
+        if gateway_key:
+            headers["Authorization"] = f"Bearer {gateway_key}"
     elif use_vertex:
         payload["generationConfig"]["thinkingConfig"] = {
             "thinkingBudget": 0
@@ -436,9 +463,10 @@ async def _vlm_judge_image(
             f"projects/{GCP_PROJECT_ID}/locations/{GCP_REGION}/publishers/google/models/{model}:generateContent"
         )
     else:
+        headers["x-goog-api-key"] = GEMINI_API_KEY
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={GEMINI_API_KEY}"
+            f"{model}:generateContent"
         )
     try:
         if use_vllm:
@@ -464,7 +492,9 @@ async def _vlm_judge_image(
                 timeout=httpx.Timeout(float(IMAGE_VLM_JUDGE_TIMEOUT_SEC), connect=10.0),
             )
             if resp.status_code != 200:
-                print(f"[vlm_judge] Gemini/Vertex request failed (status={resp.status_code}): {resp.text}")
+                print(f"[vlm_judge] Gemini/Vertex request failed (status={resp.status_code}): {resp.text[:200]}")
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    _GEMINI_JUDGE_DOWN_UNTIL[0] = time.monotonic() + 300.0  # stop escalating into an outage
                 return None
             data = resp.json()
             candidates = data.get("candidates") or []

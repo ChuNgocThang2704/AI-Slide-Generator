@@ -8,6 +8,9 @@ from routes.api import (
     _structured_content_from_spec_payload,
 )
 from services.deck_contract import (
+    LEGACY_FINALIZATION_POLICY,
+    LOCKED_FINALIZATION_POLICY,
+    _lock_final_deck,
     assert_deck_structure_locked,
     assign_stable_slide_ids,
     deck_structure_signature,
@@ -49,6 +52,23 @@ class DeckContractTests(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             assert_deck_structure_locked(deck)
+
+    def test_both_finalization_policies_use_the_same_identity_lock_contract(self):
+        for policy in (LEGACY_FINALIZATION_POLICY, LOCKED_FINALIZATION_POLICY):
+            deck = _lock_final_deck(self._deck(), desired_count=3, policy=policy)
+
+            self.assertTrue(deck["_structure_locked"])
+            self.assertEqual(len(deck["_structure_signature"]), 3)
+            self.assertEqual(
+                tuple(deck["_structure_signature"]),
+                deck_structure_signature(deck),
+            )
+
+    def test_finalization_policies_keep_historical_review_limits_explicit(self):
+        self.assertEqual(LEGACY_FINALIZATION_POLICY.coverage_max_passes, 2)
+        self.assertFalse(LEGACY_FINALIZATION_POLICY.strict_pre_review_count)
+        self.assertEqual(LOCKED_FINALIZATION_POLICY.coverage_max_passes, 1)
+        self.assertTrue(LOCKED_FINALIZATION_POLICY.strict_pre_review_count)
 
     def test_visual_maps_are_converted_to_slide_ids(self):
         deck = assign_stable_slide_ids(self._deck())

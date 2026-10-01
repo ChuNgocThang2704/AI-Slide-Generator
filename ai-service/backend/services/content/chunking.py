@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 import json
 
@@ -14,11 +15,51 @@ from config import (
     LLM_QUALITY_MODE,
     LLM_SUBCHUNK_TIMEOUT_SEC,
 )
+from services.content_plan import content_plan_from_sections
+
+
+def _planning_score(value: Any, default: float = 0.5) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
 from services.content.errors import TaskCancelledError
 from services.content.prompts import MAX_BULLETS_PER_SLIDE
 
 
 class ChunkingMixin:
+    async def _generate_from_content_plan(
+        self,
+        merged_summary: Dict[str, str],
+        target_slides: int,
+        content_plan,
+    ) -> Dict[str, Any]:
+        """Use hierarchical planning first and retain the legacy pipeline as fallback."""
+        from services.deck_planner import generate_outline_first_deck
+
+        try:
+            planned = await generate_outline_first_deck(
+                self,
+                source_text=merged_summary["content"],
+                user_instruction=str(getattr(self, "_user_instruction", "") or ""),
+                target_slides=target_slides,
+                presentation_mode=str(getattr(self, "_presentation_mode", "presentation") or "presentation"),
+                language=str(getattr(self, "_slide_lang_hint", "auto") or "auto"),
+                content_plan=content_plan.to_dict(),
+            )
+            planned["_content_plan"] = content_plan.to_dict()
+            print("[content_plan] hierarchical outline authored and locked")
+            return planned
+        except Exception as error:
+            print(f"[content_plan] planner failed; using legacy long-document pipeline: {error}")
+            legacy = await self._expand_group_generate_refine_pipeline(merged_summary, target_slides)
+            legacy = await self._force_slide_count_exact(legacy, target_slides)
+            legacy["_content_plan"] = content_plan.to_dict()
+            legacy["_content_plan_fallback"] = True
+            return legacy
+
     def _estimate_summary_bullets(self, content: str, fast_mode: bool = False) -> int:
         """Ước lượng số lượng gạch đầu dòng (bullet points) tóm tắt cho bước map (map step)."""
         length = len(content or "")
@@ -54,8 +95,10 @@ class ChunkingMixin:
             "- Do not use double-quote characters inside title/bullets (breaks JSON).\n"
             "- One idea per bullet—do not merge unrelated ideas.\n"
             f"- For long passages: return at least 4 bullets. At most {bullet_limit} bullets.\n"
+            "- Score importance from 0.0 to 1.0 based on relevance to the user's goal and source-wide significance.\n"
+            "- Score complexity from 0.0 to 1.0 based on explanation difficulty, not text length.\n"
             "- Return ONLY JSON, no markdown fences or extra commentary.\n"
-            "- Schema: {\"title\": \"section name\", \"bullets\": [\"...\"]}\n"
+            "- Schema: {\"title\": \"section name\", \"bullets\": [\"...\"], \"importance\": 0.0, \"complexity\": 0.0}\n"
         )
         user_msg = (
             "Summarize this document chunk for the final slide step.\n\n"
@@ -100,6 +143,8 @@ class ChunkingMixin:
                 fast_mode=fast_mode,
             )
             title = str(summary.get("title") or "Nội dung chính").strip()[:120]
+            importance = _planning_score(summary.get("importance"))
+            complexity = _planning_score(summary.get("complexity"))
             raw_bullets = summary.get("bullets", [])
             if isinstance(raw_bullets, str):
                 raw_bullets = [raw_bullets]
@@ -135,10 +180,17 @@ class ChunkingMixin:
                         if len(b2) >= len(bullets):
                             title = str(summary2.get("title") or title).strip()[:120]
                             bullets = b2
+                            importance = _planning_score(summary2.get("importance"), importance)
+                            complexity = _planning_score(summary2.get("complexity"), complexity)
                             print(f"  (chunk summary retry → {len(bullets)} bullets)")
                 except Exception as re:
                     print(f"  (chunk summary retry skipped: {re})")
-            return {"title": title or "Nội dung chính", "bullets": bullets}
+            return {
+                "title": title or "Nội dung chính",
+                "bullets": bullets,
+                "importance": importance,
+                "complexity": complexity,
+            }
         except Exception as e:
             print(f"Summary fallback due to error: {e}")
             return self._fallback_summary(chunk_content, max_bullets=max_bullets)
@@ -709,10 +761,14 @@ class ChunkingMixin:
             merged_summary = self._merge_chunk_summaries([summary_result])
             slide_plan = self._estimate_reduce_slide_plan([summary_result], merged_summary["content"])
             target_slides = int(target_slides_override or slide_plan.get("target") or 10)
-            final_result = await self._expand_group_generate_refine_pipeline(
-                merged_summary, target_slides
+            content_plan = content_plan_from_sections(
+                deck_goal=merged_summary.get("title") or "Create a coherent presentation",
+                sections=[{**summary_result, "chunk_index": 0}],
+                target_slides=target_slides,
             )
-            final_result = await self._force_slide_count_exact(final_result, target_slides)
+            final_result = await self._generate_from_content_plan(
+                merged_summary, target_slides, content_plan
+            )
             if merged_summary.get("title") and final_result.get("title") == "Bài thuyết trình":
                 final_result["title"] = merged_summary["title"]
             return final_result
@@ -737,6 +793,18 @@ class ChunkingMixin:
                 plist = await self._summarize_chunk_with_retries(
                     chunk, idx, n_chunks, should_stop=should_stop
                 )
+                page_numbers = sorted(
+                    {
+                        int(value)
+                        for value in re.findall(r"(?im)^\s*PAGE\s+(\d+)\b", chunk)
+                    }
+                )
+                for section in plist:
+                    if not isinstance(section, dict):
+                        continue
+                    section.setdefault("chunk_index", idx)
+                    if page_numbers:
+                        section.setdefault("source_pages", page_numbers)
             return idx, plist
 
         indexed = await asyncio.gather(
@@ -763,11 +831,21 @@ class ChunkingMixin:
         if should_stop and await should_stop():
             raise TaskCancelledError("Task cancelled by user")
         target_slides = int(target_slides_override or slide_plan.get("target") or 10)
-
-        final_result = await self._expand_group_generate_refine_pipeline(
-            merged_summary, target_slides
+        content_plan = content_plan_from_sections(
+            deck_goal=merged_summary.get("title") or "Create a coherent presentation",
+            sections=[
+                {
+                    **section,
+                    "chunk_index": section.get("chunk_index", index),
+                }
+                for index, section in enumerate(summary_sections)
+            ],
+            target_slides=target_slides,
         )
-        final_result = await self._force_slide_count_exact(final_result, target_slides)
+
+        final_result = await self._generate_from_content_plan(
+            merged_summary, target_slides, content_plan
+        )
         if merged_summary.get("title") and final_result.get("title") == "Bài thuyết trình":
             final_result["title"] = merged_summary["title"]
 

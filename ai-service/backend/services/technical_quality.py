@@ -95,6 +95,7 @@ def _technical_issue(index: int, message: str, snippet: str) -> Dict[str, Any]:
         "index": index,
         "type": "factual_accuracy",
         "severity": "high",
+        "target_fields": ["bullets"],
         "instruction": (
             "Repair the syntactically complete Python example using source evidence. Keep it as one multiline code block "
             "with correct indentation, complete compound-statement bodies, and executable syntax. "

@@ -144,6 +144,25 @@ def _default_embedder(model_name: str) -> Callable[[Sequence[str]], List[Sequenc
     return embed
 
 
+def embed_texts(
+    texts: Sequence[str],
+    *,
+    model_name: str,
+    embedder: Optional[Callable[[Sequence[str]], Sequence[Sequence[float]]]] = None,
+) -> List[Sequence[float]]:
+    """Public embedding boundary shared by retrieval and quality checks."""
+    values = [str(text or "") for text in texts]
+    if not values:
+        return []
+    provider = embedder or _default_embedder(model_name)
+    inputs = [f"passage: {value}" for value in values] if "e5" in model_name.lower() and embedder is None else values
+    return list(provider(inputs))
+
+
+def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+    return _cosine(left, right)
+
+
 class HybridSourceRetriever:
     def __init__(
         self,

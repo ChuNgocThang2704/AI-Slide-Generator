@@ -6,7 +6,6 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 import os
 
-from filename_utils import pptx_path_for_task
 from config import (
     FREE_IMAGE_LIMIT,
     IMAGE_GEN_API_BASE_URL,
@@ -358,7 +357,11 @@ class RedisQueue:
                 plan=(task_data.get("plan") or "pro"),
                 should_stop=should_stop,
                 target_slide_indices=task_data.get("target_slide_indices") or [],
+                context_slide_number=task_data.get("context_slide_number"),
+                user_authored=bool(task_data.get("adopted")),
             )
+            if task_data.get("adopted"):
+                spec_payload["adopted"] = True  # later revisions of this deck stay user-authored
             spec_payload["source_task_id"] = task_data.get("source_task_id")
             spec_payload["revision_prompt"] = revision_prompt
 
@@ -389,361 +392,6 @@ class RedisQueue:
                 result={"error": exc_to_error_message(e)},
             )
 
-    async def _process_slide_full(self, task_id: str, task_data: Dict[str, Any]):
-        """Xử lý tạo slide full: extract → text quality → chart/table → (ảnh) → PPTX."""
-        from services.content_extractor import ContentExtractor, TaskCancelledError
-        from services.slide_generator import SlideGenerator
-        from config import LLM_MODEL
-        from routes.api import (
-            _apply_explicit_chart_type_targets,
-            _explicit_chart_type_targets_from_prompt,
-            _explicit_slide_instruction_from_prompt,
-            _explicit_visual_targets_from_prompt,
-        )
-
-        try:
-            await self.update_task_status(task_id, "processing", progress=10)
-
-            raw_content = task_data.get("raw_content")
-            plan_norm = (task_data.get("plan") or "pro").strip().lower()
-            free_mode = plan_norm == "free"
-
-            slide_count_raw = task_data.get("slide_count")
-            slide_count_int = None
-            if slide_count_raw is not None:
-                try:
-                    slide_count_int = int(slide_count_raw)
-                except Exception:
-                    slide_count_int = None
-
-            target_slides_override = (
-                slide_count_int if (slide_count_int and slide_count_int > 0)
-                else (FREE_SLIDE_LIMIT if free_mode else None)
-            )
-            force_exact_slide_count = target_slides_override is not None
-            resolved_image_limit = _resolve_plan_image_limit(
-                plan_norm,
-                target_slides_override,
-                task_data.get("image_limit"),
-            )
-
-            doc_title_hint = task_data.get("doc_title_hint")
-
-            # ── Extract & structure ───────────────────────────────────
-            await self.update_task_status(task_id, "processing", progress=20)
-            print(f"[worker] Task {task_id}: extract_and_structure (model={LLM_MODEL})...")
-            content_extractor = ContentExtractor(model_name=LLM_MODEL)
-
-            async def on_chunk(done: int, total: int):
-                if total <= 0:
-                    return
-                progress = 20 + int(35 * done / total)  # 20 → 55
-                await self.update_task_status(
-                    task_id, "processing", progress=progress,
-                    result={"chunks": {"done": done, "total": total}},
-                )
-
-            async def should_stop() -> bool:
-                return await self.is_task_cancelled(task_id)
-
-            structured_content = await content_extractor.extract_and_structure(
-                raw_content,
-                progress_cb=on_chunk,
-                should_stop=should_stop,
-                target_slides_override=target_slides_override,
-                force_exact_slide_count=force_exact_slide_count,
-                user_instruction=task_data.get("user_instruction"),
-                doc_title_hint=doc_title_hint,
-            )
-            user_instruction = str(task_data.get("user_instruction") or "").strip()
-            instruction_text = user_instruction or str(raw_content or "")
-            if (
-                user_instruction
-                and not structured_content.get("_outline_locked")
-                and _has_explicit_slide_outline(user_instruction)
-            ):
-                structured_content = await content_extractor.revise_slide_deck(
-                    structured_content,
-                    "Follow this numbered slide outline exactly. Preserve the requested slide order, count, visual type, labels, values, columns, and rows. "
-                    "Do not split, merge, reorder, or omit any requested slide.\n\n" + user_instruction,
-                )
-                if force_exact_slide_count and target_slides_override:
-                    structured_content = await content_extractor._force_slide_count_exact(
-                        structured_content, int(target_slides_override)
-                    )
-
-            # ── Text quality pass ─────────────────────────────────────
-            from services.slide_text_quality import improve_slide_text_quality
-            from services.slide_quality import build_visual_plan, improve_deck_source_grounding
-            if not structured_content.get("_outline_locked"):
-                structured_content = await improve_slide_text_quality(
-                    content_extractor,
-                    structured_content,
-                    task_id=task_id,
-                    max_refines=8,
-                    source_language=(
-                        content_extractor._detect_output_language_hint(raw_content or "")
-                        if raw_content
-                        else getattr(content_extractor, "_slide_lang_hint", "auto")
-                    ),
-                )
-            if (not structured_content.get("_outline_locked") and force_exact_slide_count
-                    and target_slides_override and isinstance(structured_content, dict)):
-                structured_content = await content_extractor._force_slide_count_exact(
-                    structured_content, int(target_slides_override)
-                )
-            if (not structured_content.get("_explicit_slide_mode")
-                    and not structured_content.get("_outline_locked")):
-                structured_content = await improve_deck_source_grounding(
-                    content_extractor,
-                    structured_content,
-                    raw_content or "",
-                    task_id=task_id,
-                )
-                if force_exact_slide_count and target_slides_override and isinstance(structured_content, dict):
-                    structured_content = await content_extractor._force_slide_count_exact(
-                        structured_content, int(target_slides_override)
-                    )
-            if await self.is_task_cancelled(task_id):
-                return
-
-            # ── Chart & Table specs ───────────────────────────────────
-            await self.update_task_status(task_id, "processing", progress=58)
-            from services.slide_charts import build_chart_specs_for_slides
-            from services.slide_tables import build_table_specs_for_slides
-            from services.deck_contract import (
-                assert_deck_structure_locked,
-                finalize_deck_for_visuals,
-            )
-
-            structured_content = await finalize_deck_for_visuals(
-                content_extractor,
-                structured_content,
-                raw_content=raw_content or "",
-                user_instruction=instruction_text,
-                task_id=task_id,
-                plan=plan_norm,
-                target_slides=target_slides_override,
-            )
-            locked_signature = assert_deck_structure_locked(structured_content)
-
-            visual_context = "\n\n".join(
-                part
-                for part in (
-                    f"USER REQUEST:\n{instruction_text}" if instruction_text else "",
-                    f"SOURCE CONTENT:\n{raw_content}" if raw_content else "",
-                )
-                if part
-            )
-            visual_plan = await build_visual_plan(
-                content_extractor,
-                structured_content,
-                visual_context,
-                want_images=_task_wants_images(task_data),
-            )
-            visual_plan.update(
-                _explicit_visual_targets_from_prompt(
-                    instruction_text,
-                    len(structured_content.get("slides") or []),
-                )
-            )
-
-            table_specs = await build_table_specs_for_slides(
-                content_extractor, structured_content,
-                task_id=task_id, should_stop=should_stop,
-                raw_content=visual_context,
-                visual_plan=visual_plan,
-            )
-            chart_specs = await build_chart_specs_for_slides(
-                content_extractor, structured_content,
-                task_id=task_id, should_stop=should_stop,
-                table_indices=set(table_specs.keys()),
-                raw_content=visual_context,
-                visual_plan=visual_plan,
-            )
-            _apply_explicit_chart_type_targets(
-                chart_specs,
-                _explicit_chart_type_targets_from_prompt(
-                    instruction_text,
-                    len(structured_content.get("slides") or []),
-                ),
-            )
-            note_slides = structured_content.get("slides") or []
-            for idx, spec in table_specs.items():
-                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
-                    note_slides[idx]["table"] = spec
-                    note_slides[idx].pop("chart", None)
-                    note_slides[idx]["layout"] = "text_table"
-            for idx, spec in chart_specs.items():
-                if 0 <= idx < len(note_slides) and isinstance(note_slides[idx], dict):
-                    note_slides[idx]["chart"] = spec
-                    note_slides[idx].pop("table", None)
-                    note_slides[idx]["layout"] = "text_chart"
-            assert_deck_structure_locked(structured_content, locked_signature)
-            # ── Image generation (tuỳ chọn) ───────────────────────────
-            want_img = _task_wants_images(task_data)
-
-            image_paths = None
-            if want_img:
-                print(f"[worker] Task {task_id}: sinh anh ({IMAGE_GEN_API_BASE_URL})...")
-                await self.update_task_status(
-                    task_id, "processing", progress=68,
-                    result={"images": {"done": 0, "total": 0}},
-                )
-                from services.images import build_image_paths_for_slides
-
-                async def on_image_progress(done: int, total: int):
-                    # Map 68%→79% theo từng slide ảnh hoàn thành
-                    pct = 68 + int(11 * done / total) if total > 0 else 68
-                    await self.update_task_status(
-                        task_id, "processing", progress=pct,
-                        result={"images": {"done": done, "total": total}},
-                    )
-
-                try:
-                    image_paths = await build_image_paths_for_slides(
-                        content_extractor, structured_content, task_id,
-                        chart_specs=chart_specs, table_specs=table_specs,
-                        image_limit=resolved_image_limit,
-                        should_stop=should_stop,
-                        progress_cb=on_image_progress,
-                        plan=plan_norm,
-                        target_indices=sorted(image_target_indices) or None,
-                        force_target_indices=sorted(
-                            idx
-                            for idx, visual in _explicit_visual_targets_from_prompt(
-                                instruction_text,
-                                len(structured_content.get("slides") or []),
-                            ).items()
-                            if str(visual or "").strip().lower() == "image"
-                        ),
-                        force_instructions={
-                            idx: _explicit_slide_instruction_from_prompt(instruction_text, idx)
-                            for idx, visual in _explicit_visual_targets_from_prompt(
-                                instruction_text,
-                                len(structured_content.get("slides") or []),
-                            ).items()
-                            if str(visual or "").strip().lower() == "image"
-                        },
-                        visual_plan=visual_plan,
-                        source_file_path=task_data.get("source_file_path"),
-                    )
-                except Exception as image_error:
-                    print(
-                        f"[worker] Task {task_id}: image generation failed, continue without images: {image_error!r}"
-                    )
-                    image_paths = None
-
-            if await self.is_task_cancelled(task_id):
-                return
-
-            # ── Hậu xử lý văn bản cho các slide bị hụt ảnh ────────────
-            if want_img:
-                try:
-                    slides = structured_content.get("slides") or []
-                    missing_indices = []
-                    for idx, slide in enumerate(slides):
-                        if not isinstance(slide, dict):
-                            continue
-                        ai_layout = str(slide.get("layout") or "").strip().lower()
-                        needs_visual = ai_layout in ("text_image", "timeline", "split_columns", "big_quote")
-                        has_img_result = bool(image_paths and image_paths.get(idx))
-                        if needs_visual and not has_img_result:
-                            missing_indices.append(idx)
-                            
-                    if missing_indices and hasattr(content_extractor, "_expand_slide_bullets_for_no_image"):
-                        print(f"[worker] Task {task_id}: Expanding text for slides {missing_indices} due to missing image...")
-                        await content_extractor._expand_slide_bullets_for_no_image(
-                            structured_content, missing_indices
-                        )
-                except Exception as post_img_err:
-                    print(f"[worker] Task {task_id}: Post-image text expansion failed: {post_img_err!r}")
-
-            # ── Generate PPTX ─────────────────────────────────────────
-            assert_deck_structure_locked(structured_content, locked_signature)
-            await self.update_task_status(task_id, "processing", progress=80)
-            slide_generator = SlideGenerator()
-            st_raw = task_data.get("slide_theme")
-            slide_preset = SlideGenerator.normalize_slide_preset(st_raw) or "modern"
-            output_dir = Path(task_data.get("output_dir") or OUTPUT_DIR)
-            output_path = pptx_path_for_task(
-                output_dir, structured_content.get("title", ""), task_id
-            )
-            await slide_generator.create_slide(
-                structured_content,
-                output_path,
-                generate_images=bool(image_paths),
-                image_paths=image_paths,
-                chart_specs=chart_specs,
-                table_specs=table_specs,
-                preset=slide_preset,
-            )
-
-            await self.update_task_status(
-                task_id, "completed", progress=100,
-                result={
-                    "download_url": f"/outputs/{output_path.name}",
-                    "view_url": f"/api/view-slide/{task_id}",
-                },
-            )
-            print(f"[worker] Task {task_id}: done -> {output_path.name}")
-
-        except TaskCancelledError:
-            await self.update_task_status(
-                task_id, "cancelled", progress=0,
-                result={"message": "Task cancelled by user"},
-            )
-        except Exception as e:
-            print(f"[worker] Task {task_id} error: {e}")
-            await self.update_task_status(
-                task_id, "error", progress=0,
-                result={"error": exc_to_error_message(e)},
-            )
-
-    async def _process_slide_with_images(self, task_id: str, task_data: Dict[str, Any]):
-        """Tạo PPTX từ nội dung đã được structure sẵn (không cần extract)."""
-        from services.slide_generator import SlideGenerator
-
-        try:
-            await self.update_task_status(task_id, "processing", progress=30)
-
-            content = task_data.get("content")
-            if not content:
-                raise ValueError("task_data missing 'content'")
-
-            output_dir = Path(task_data.get("output_dir") or OUTPUT_DIR)
-            title = content.get("title", "") if isinstance(content, dict) else ""
-            output_path = pptx_path_for_task(output_dir, title, task_id)
-
-            st_raw = task_data.get("slide_theme")
-            slide_preset = SlideGenerator.normalize_slide_preset(st_raw) or "modern"
-
-            await self.update_task_status(task_id, "processing", progress=70)
-            slide_generator = SlideGenerator()
-            await slide_generator.create_slide(
-                content,
-                output_path,
-                generate_images=False,
-                image_paths=None,
-                preset=slide_preset,
-            )
-
-            await self.update_task_status(
-                task_id, "completed", progress=100,
-                result={
-                    "download_url": f"/outputs/{output_path.name}",
-                    "view_url": f"/api/view-slide/{task_id}",
-                },
-            )
-            print(f"[worker] Task {task_id}: done (with_images path) -> {output_path.name}")
-
-        except Exception as e:
-            print(f"[worker] Task {task_id} error: {e}")
-            await self.update_task_status(
-                task_id, "error", progress=0,
-                result={"error": exc_to_error_message(e)},
-            )
-
     async def _process_slide_spec(self, task_id: str, task_data: Dict[str, Any]):
         """Xử lý tạo slide spec trong Redis worker."""
         from services.content_extractor import ContentExtractor, TaskCancelledError
@@ -757,7 +405,8 @@ class RedisQueue:
             _resolve_plan_image_limit,
         )
         from services.slide_text_quality import improve_slide_text_quality
-        from services.slide_quality import build_visual_plan, improve_deck_source_grounding
+        from services.slide_quality import build_visual_plan
+        from services.generation_workflow import ground_finalize_and_lock
 
         try:
             await self.update_task_status(task_id, "processing", progress=10)
@@ -829,6 +478,7 @@ class RedisQueue:
                     target_slides_override=target_slides_override,
                     force_exact_slide_count=force_exact_slide_count,
                     user_instruction=task_data.get("user_instruction"),
+                    source_is_document=bool(task_data.get("source_is_document")),
                 )
 
                 if not structured_content.get("_outline_locked"):
@@ -851,14 +501,6 @@ class RedisQueue:
 
             await self.update_task_status(task_id, "processing", progress=55)
 
-            if (not structured_content.get("_explicit_slide_mode")
-                    and not structured_content.get("_outline_locked")):
-                structured_content = await improve_deck_source_grounding(
-                    content_extractor,
-                    structured_content,
-                    raw_content or "",
-                    task_id=task_id,
-                )
             if await self.is_task_cancelled(task_id):
                 return
 
@@ -866,12 +508,9 @@ class RedisQueue:
             await self.update_task_status(task_id, "processing", progress=58)
             from services.slide_charts import build_chart_specs_for_slides
             from services.slide_tables import build_table_specs_for_slides
-            from services.deck_contract import (
-                assert_deck_structure_locked,
-                finalize_deck_for_visuals,
-            )
+            from services.deck_contract import assert_deck_structure_locked
 
-            structured_content = await finalize_deck_for_visuals(
+            structured_content, locked_signature = await ground_finalize_and_lock(
                 content_extractor,
                 structured_content,
                 raw_content=raw_content or "",
@@ -880,7 +519,9 @@ class RedisQueue:
                 plan=plan_norm,
                 target_slides=target_slides_override,
             )
-            locked_signature = assert_deck_structure_locked(structured_content)
+            slide_count_notice = task_data.get("slide_count_notice")
+            if slide_count_notice and isinstance(structured_content, dict):
+                structured_content["_slide_count_notice"] = slide_count_notice
 
             visual_context = "\n\n".join(
                 part

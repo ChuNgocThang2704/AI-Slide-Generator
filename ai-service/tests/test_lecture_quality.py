@@ -522,6 +522,38 @@ class LectureQualityTests(unittest.TestCase):
         self.assertEqual(restored["slides"][0]["presentation_mode"], "lecture")
         self.assertEqual(restored["slides"][0]["source_pages"], [4])
 
+    def test_spec_payload_surfaces_slide_count_reduction_notice(self):
+        structured = {
+            "title": "Sparse Source Deck",
+            "_slide_count_notice": "Reduced from 8 to 5 slides: source has too few facts.",
+            "slides": [{"title": "Intro", "bullets": ["Overview"]}],
+        }
+        payload = _build_slide_spec_payload(
+            task_id="sparse-test",
+            structured_content=structured,
+            chart_specs={},
+            table_specs={},
+            image_paths={},
+        )
+        self.assertEqual(
+            payload["notices"],
+            [{"type": "slide_count_reduced", "message": "Reduced from 8 to 5 slides: source has too few facts."}],
+        )
+
+    def test_spec_payload_has_no_notices_when_nothing_was_reduced(self):
+        structured = {
+            "title": "Normal Deck",
+            "slides": [{"title": "Intro", "bullets": ["Overview"]}],
+        }
+        payload = _build_slide_spec_payload(
+            task_id="normal-test",
+            structured_content=structured,
+            chart_specs={},
+            table_specs={},
+            image_paths={},
+        )
+        self.assertEqual(payload["notices"], [])
+
     def test_lecture_prompt_requires_pedagogy_without_inventing_sources(self):
         prompt = lecture_prompt_block()
         self.assertIn("learning objectives", prompt)

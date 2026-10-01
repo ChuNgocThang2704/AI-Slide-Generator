@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import asyncio
 import uuid
 import json
 import httpx
@@ -10,7 +10,7 @@ import unicodedata
 
 from services.file_processor import FileProcessor
 from services.content_extractor import ContentExtractor, TaskCancelledError
-from services.slide_generator import SlideGenerator
+from services.theme_palette import detect_theme, normalize_slide_preset
 from services.redis_queue import RedisQueue, exc_to_error_message
 from config import (
     LLM_MODEL,
@@ -20,12 +20,14 @@ from config import (
     REDIS_OFFLOAD_WHEN_WORKER_ALIVE,
     REDIS_QUEUE_MIN_CHARS,
 )
-from filename_utils import pptx_path_for_task, resolve_pptx_by_task_id
 from services.slide_charts import build_chart_specs_for_slides
 from services.slide_tables import build_table_specs_for_slides
 from services.images import build_image_paths_for_slides
 from services.slide_text_quality import improve_slide_text_quality
-from services.slide_quality import build_visual_plan, improve_deck_source_grounding
+from services.slide_quality import build_visual_plan
+from services.generation_workflow import ground_finalize_and_lock
+from services.generation_context import GenerationContext, GenerationMode, bind_legacy_extractor_state
+from services.grounding_policy import sparse_document_slide_cap
 from services.plan_limits import (
     as_bool_flag as _as_bool_flag,
     enforce_plan_slide_limit as _enforce_plan_slide_limit,
@@ -39,6 +41,7 @@ from services.text_utils import plain_slide_text as _plain_slide_text
 from services.revision_rules import (
     apply_explicit_chart_type_targets as _apply_explicit_chart_type_targets,
     explicit_chart_type_targets_from_prompt as _explicit_chart_type_targets_from_prompt,
+    refers_to_current_slide as _refers_to_current_slide,
     explicit_slide_instruction_from_prompt as _explicit_slide_instruction_from_prompt,
     explicit_visual_targets_from_prompt as _explicit_visual_targets_from_prompt,
     fold_revision_text as _fold_revision_text,
@@ -63,21 +66,25 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 file_processor: Optional[FileProcessor] = None
 content_extractor: Optional[ContentExtractor] = None
-slide_generator: Optional[SlideGenerator] = None
 redis_queue: Optional[RedisQueue] = None
 
 
 def initialize_api_services(queue: Optional[RedisQueue] = None) -> None:
     """Initialize stateful API services during the FastAPI lifespan."""
-    global file_processor, content_extractor, slide_generator, redis_queue
+    global file_processor, content_extractor, redis_queue
     if file_processor is None:
         file_processor = FileProcessor()
     if content_extractor is None:
         content_extractor = ContentExtractor(model_name=LLM_MODEL)
-    if slide_generator is None:
-        slide_generator = SlideGenerator()
     if redis_queue is None:
         redis_queue = queue or RedisQueue()
+
+
+def _new_task_content_extractor(task_id: str = "") -> ContentExtractor:
+    """Create an isolated extractor because generation state is request-scoped."""
+    extractor = ContentExtractor(model_name=LLM_MODEL)
+    extractor._telemetry_task_id = str(task_id or "")
+    return extractor
 
 
 def _detect_generate_images_request(text: str) -> bool:
@@ -105,10 +112,9 @@ def _image_url_from_path(path_str: str) -> Optional[str]:
         return None
 
 
-# Khớp phụ đề / footer trong `slide_generator` (PPTX).
 _TITLE_SLIDE_SUBTITLE = "Tạo bởi LecGen"
 _CONTENT_SLIDE_FOOTER = "LecGen"
-# `SlideGenerator.create_slide`: tách slide khi nhiều bullet (max 6 / slide vật lý).
+# Hint cho frontend: slide có nhiều bullet quá mức này nên được coi là dày nội dung.
 _MAX_BULLETS_BEFORE_PPTX_SPLIT = 6
 
 _SLIDE_SPEC_VERSION = "1.3"
@@ -126,13 +132,12 @@ def _mime_from_image_path(path_str: str) -> Optional[str]:
 
 
 def _resolve_visual_theme(structured_content: dict, slide_theme: Optional[str]) -> Tuple[str, Optional[str]]:
-    """Trả về (color_theme_key, slide_preset_or_none) — logic tương tự create_slide."""
+    """Trả về (color_theme_key, slide_preset_or_none)."""
     preset_raw = (slide_theme or "").strip().lower() or None
-    resolved = SlideGenerator.normalize_slide_preset(preset_raw)
+    resolved = normalize_slide_preset(preset_raw)
     if resolved:
         return resolved, resolved
-    generator = slide_generator or SlideGenerator()
-    return generator._detect_theme(structured_content.get("title", "")), None
+    return detect_theme(structured_content.get("title", "")), None
 
 
 def _infer_slide_layout(
@@ -365,6 +370,10 @@ def _build_slide_spec_payload(
         out_slides.append(row)
 
     deck_title = str(structured_content.get("title") or "")
+    notices: List[Dict[str, str]] = []
+    slide_count_notice = structured_content.get("_slide_count_notice")
+    if slide_count_notice:
+        notices.append({"type": "slide_count_reduced", "message": str(slide_count_notice)})
     return {
         "task_id": task_id,
         "status": "completed",
@@ -377,6 +386,7 @@ def _build_slide_spec_payload(
             "subtitle": _TITLE_SLIDE_SUBTITLE,
         },
         "content_slide_footer": _CONTENT_SLIDE_FOOTER,
+        "notices": notices,
         "deck": {
             "title": deck_title,
             "presentation_mode": structured_content.get("presentation_mode") or "presentation",
@@ -388,6 +398,44 @@ def _build_slide_spec_payload(
             "slides": out_slides,
         },
     }
+
+
+def _apply_current_spec(source_result: Dict[str, Any], current_spec: Optional[str]) -> Dict[str, Any]:
+    """Use the deck as it stands in the editor as the revision's starting point.
+
+    The stored AI result is the deck as first generated. Revising from it would
+    resurrect deleted slides and drop every manual edit, so the caller sends the
+    live deck and only the slide fields the revision needs are taken from it.
+    """
+    if not current_spec or not str(current_spec).strip():
+        return source_result
+    try:
+        parsed = json.loads(current_spec)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="current_spec must be valid JSON")
+    if isinstance(parsed, dict):
+        parsed = parsed.get("slides")
+    if not isinstance(parsed, list) or not parsed:
+        return source_result
+
+    slides: List[Dict[str, Any]] = []
+    for idx, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        # The editor calls the cover "title"; the generator's layout name is "intro".
+        if str(row.get("layout") or "").strip().lower() == "title":
+            row["layout"] = "intro"
+        row.setdefault("slide_id", f"slide-{idx + 1:03d}")
+        slides.append(row)
+    if not slides:
+        return source_result
+
+    merged = dict(source_result)
+    deck = dict(merged.get("deck") or {})
+    deck["slides"] = slides
+    merged["deck"] = deck
+    return merged
 
 
 def _structured_content_from_spec_payload(spec_payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -723,8 +771,16 @@ async def _build_revised_slide_spec_payload(
     should_stop,
     target_slide_indices: Optional[List[int]] = None,
     context_slide_number: Optional[int] = None,
+    content_extractor_instance: Optional[ContentExtractor] = None,
+    user_authored: bool = False,
 ) -> Dict[str, Any]:
     from services.presentation_mode import lock_presentation_mode
+
+    # Keep the optional fallback for internal callers while request paths pass an
+    # isolated instance. The local binding prevents accidental use of shared state.
+    content_extractor = content_extractor_instance or globals()["content_extractor"]
+    if content_extractor is None:
+        content_extractor = _new_task_content_extractor(task_id)
 
     existing_mode = str(
         previous_structured_content.get("presentation_mode") or "presentation"
@@ -739,10 +795,18 @@ async def _build_revised_slide_spec_payload(
             "provider": "existing_deck",
             "reason": "Preserved from the deck being revised.",
         }
-    content_extractor._presentation_mode = existing_mode
-    content_extractor._lecture_mode = existing_mode == "lecture"
-    content_extractor._mode_decision = existing_decision
     old_slides = previous_structured_content.get("slides") or []
+    bind_legacy_extractor_state(
+        content_extractor,
+        GenerationContext(
+            task_id=task_id,
+            mode=GenerationMode.REVISION,
+            user_instruction=revision_prompt,
+            target_slides=max(2, len(old_slides)),
+            output_language=str(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            presentation_mode=existing_mode,
+        ).evolve(mode_decision=existing_decision),
+    )
     explicit_add_count = _revision_prompt_add_slide_count(revision_prompt)
     explicit_visual_targets = _explicit_visual_targets_from_prompt(
         revision_prompt,
@@ -780,6 +844,15 @@ async def _build_revised_slide_spec_payload(
     # The semantic revision plan owns the edit scope. Preserve hints are applied
     # later by restoring every slide outside plan_targets; a heuristic parser must
     # never erase a target that the planner identified explicitly.
+    # "This slide" plus an open slide in the editor is unambiguous; the planner
+    # LLM has picked the cover for it, so the explicit context wins.
+    if (
+        context_slide_number
+        and 1 <= context_slide_number <= len(old_slides)
+        and _refers_to_current_slide(revision_prompt)
+    ):
+        plan_targets = [context_slide_number - 1]
+        revision_plan = {**revision_plan, "target_slide_numbers": [context_slide_number]}
     if not plan_targets and target_slide_indices:
         plan_targets = list(target_slide_indices)
     if not plan_targets and not planner_succeeded:
@@ -1075,13 +1148,17 @@ async def _build_revised_slide_spec_payload(
         from services.deck_coherence import improve_deck_coherence
         from services.technical_quality import validate_technical_content
         revised, technical_issues = validate_technical_content(revised)
-        revised = await improve_deck_coherence(
-            content_extractor,
-            revised,
-            task_id=task_id,
-            allowed_indices=plan_targets or None,
-            precomputed_issues=technical_issues,
-        )
+        # The coherence pass re-narrates a slide to fit the deck's story. That is a fair polish for
+        # a deck the AI wrote, but on a deck the user brought (an opened PPTX) it turned a chapter
+        # list into a different slide altogether, after the rewrite that was actually asked for.
+        if not user_authored:
+            revised = await improve_deck_coherence(
+                content_extractor,
+                revised,
+                task_id=task_id,
+                allowed_indices=plan_targets or None,
+                precomputed_issues=technical_issues,
+            )
 
     revised = lock_presentation_mode(revised, existing_decision)
 
@@ -1247,9 +1324,17 @@ async def _build_revised_slide_spec_payload(
         raw_content=revision_prompt or "",
         visual_plan=visual_plan,
     )
+    default_chart_target = (
+        context_slide_number - 1
+        if context_slide_number
+        else target_slide_indices[0]
+        if target_slide_indices and len(target_slide_indices) == 1
+        else None
+    )
     explicit_chart_type_targets = _explicit_chart_type_targets_from_prompt(
         revision_prompt,
         len(revised.get("slides") or []),
+        default_slide_index=default_chart_target,
     )
     _apply_explicit_chart_type_targets(
         chart_specs,
@@ -1450,7 +1535,8 @@ async def extract_content(task_id: str = Form(...)):
             raise HTTPException(status_code=404, detail="File not found")
 
         content = await file_processor.process_file(file_path)
-        structured_content = await content_extractor.extract_and_structure(content)
+        task_extractor = _new_task_content_extractor(task_id)
+        structured_content = await task_extractor.extract_and_structure(content)
 
         return {
             "task_id": task_id,
@@ -1518,6 +1604,18 @@ async def generate_slide_spec(
             raw_content=raw_content,
             count_detection_content=text_for_detection,
         )
+        slide_count_notice: Optional[str] = None
+        if file_content and target_slides_override:
+            # A sparse uploaded document can't fill many slides without
+            # duplicating or inventing content; shrink the count instead.
+            requested_slide_count = target_slides_override
+            target_slides_override = sparse_document_slide_cap(raw_content, target_slides_override)
+            resolved_slide_count = target_slides_override
+            if target_slides_override < requested_slide_count:
+                slide_count_notice = (
+                    f"Tài liệu nguồn không có đủ dữ kiện để tạo {requested_slide_count} slide như yêu cầu "
+                    f"mà không lặp lại hoặc bịa thêm nội dung, nên hệ thống đã tạo {target_slides_override} slide."
+                )
         force_exact_slide_count = target_slides_override is not None
 
         # Tự động phát hiện yêu cầu sinh ảnh từ prompt text nếu tham số generate_images là false
@@ -1539,6 +1637,9 @@ async def generate_slide_spec(
             source_file_path_bg: Optional[str],
         ):
             try:
+                # ContentExtractor keeps source/language/mode/progress state, so it
+                # must never be shared by concurrent background generations.
+                content_extractor = _new_task_content_extractor(task_id_bg)
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
 
                 async def should_stop() -> bool:
@@ -1584,6 +1685,7 @@ async def generate_slide_spec(
                         target_slides_override=target_slides_override,
                         force_exact_slide_count=force_exact_slide_count,
                         user_instruction=user_instruction,
+                        source_is_document=bool(file_content),
                     )
 
                     if await should_stop():
@@ -1607,19 +1709,7 @@ async def generate_slide_spec(
                                 structured, int(target_slides_override)
                             )
 
-                if (not structured.get("_explicit_slide_mode")
-                        and not structured.get("_outline_locked")):
-                    structured = await improve_deck_source_grounding(
-                        content_extractor,
-                        structured,
-                        raw_content_bg or "",
-                        task_id=task_id_bg,
-                    )
-                from services.deck_contract import (
-                    assert_deck_structure_locked,
-                    finalize_deck_for_visuals,
-                )
-                structured = await finalize_deck_for_visuals(
+                structured, locked_signature = await ground_finalize_and_lock(
                     content_extractor,
                     structured,
                     raw_content=raw_content_bg or "",
@@ -1628,7 +1718,8 @@ async def generate_slide_spec(
                     plan=plan_norm,
                     target_slides=target_slides_override,
                 )
-                locked_signature = assert_deck_structure_locked(structured)
+                if slide_count_notice:
+                    structured["_slide_count_notice"] = slide_count_notice
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=68)
                 visual_context_bg = "\n\n".join(
                     part
@@ -1780,6 +1871,8 @@ async def generate_slide_spec(
                 "generate_images": "true" if want_images_flag else "false",
                 "image_limit": resolved_image_limit,
                 "source_file_path": source_file_path,
+                "source_is_document": bool(file_content),
+                "slide_count_notice": slide_count_notice,
             }
             await redis_queue.add_task(task_id, task_data)
             return {
@@ -1812,6 +1905,56 @@ async def generate_slide_spec(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/api/adopt-slide-spec")
+async def adopt_slide_spec(
+    spec: str = Form(...),
+    title: str = Form(""),
+    slide_theme: Optional[str] = Form(None),
+):
+    """Register an existing deck as a completed spec task, and return that task's id.
+
+    The revise endpoint starts from a completed json_spec task. A deck opened from a PPTX file
+    never had one, and a generated deck loses its own after the task TTL expires, so the AI
+    assistant refused to edit either. Adopting the deck as it stands gives both a source to
+    revise from; nothing is generated here, the slides are taken exactly as sent.
+    """
+    try:
+        adopted = _apply_current_spec({"deck": {"title": title, "slides": []}}, spec)
+        try:
+            structured = _structured_content_from_spec_payload(adopted)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        if title.strip():
+            structured["title"] = title.strip()
+
+        rows = structured.get("slides") or []
+        chart_specs = {idx: row["chart"] for idx, row in enumerate(rows) if isinstance(row.get("chart"), dict)}
+        table_specs = {idx: row["table"] for idx, row in enumerate(rows) if isinstance(row.get("table"), dict)}
+
+        task_id = str(uuid.uuid4())
+        spec_payload = _build_slide_spec_payload(
+            task_id=task_id,
+            structured_content=structured,
+            chart_specs=chart_specs,
+            table_specs=table_specs,
+            # The slides carry their image URLs already (template assets, uploads); passing them
+            # as generated paths would rewrite those URLs into this task's output directory.
+            image_paths=None,
+            slide_theme=slide_theme,
+        )
+        spec_payload["adopted"] = True
+        await redis_queue.update_task_status(task_id, "completed", progress=100, result=spec_payload)
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "slide_count": len(spec_payload.get("deck", {}).get("slides") or []),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/revise-slide-spec")
 async def revise_slide_spec(
     background_tasks: BackgroundTasks,
@@ -1825,6 +1968,7 @@ async def revise_slide_spec(
     slide_index: Optional[int] = Form(None),
     slide_number: Optional[int] = Form(None),
     context_slide_number: Optional[int] = Form(None),
+    current_spec: Optional[str] = Form(None),
     target_slide_indices: Optional[str] = Form(None),
     target_slide_numbers: Optional[str] = Form(None),
 ):
@@ -1847,6 +1991,8 @@ async def revise_slide_spec(
                 detail="source_task_id does not contain a JSON slide spec result",
             )
 
+        source_result = _apply_current_spec(source_result, current_spec)
+        source_adopted = bool(source_result.get("adopted"))
         previous_structured = _structured_content_from_spec_payload(source_result)
         plan_norm = (plan or "pro").strip().lower()
         source_slide_count = len(previous_structured.get("slides") or [])
@@ -1874,6 +2020,15 @@ async def revise_slide_spec(
         if explicit_title_targets:
             target_indices = sorted(set(target_indices) | explicit_title_targets)
         scope_norm = (revision_scope or "auto").strip().lower()
+        # "this slide" with an active slide in the editor means exactly that slide,
+        # not whatever the planner guesses from the wording.
+        if (
+            scope_norm == "auto"
+            and not target_indices
+            and context_slide_number
+            and _refers_to_current_slide(prompt)
+        ):
+            target_indices = [context_slide_number - 1]
         if scope_norm in {"deck", "full", "all"}:
             target_indices = []
         elif scope_norm in {"slide", "partial"} and not target_indices:
@@ -1882,14 +2037,18 @@ async def revise_slide_spec(
                 detail="revision_scope=slide requires slide_number, slide_index, target_slide_numbers, or a prompt mentioning a slide.",
             )
 
-        requested_slide_count = slide_count if slide_count is not None else source_slide_count
+        # Only an explicit request (form field or "N slides" in the prompt) is
+        # checked against the plan. The deck's existing size must not block a
+        # revision: an 11-slide deck on FREE made every edit fail with "11 > 10".
+        requested_slide_count = slide_count
+        revision_extractor = _new_task_content_extractor(source_task_id)
         target_slides_override, _resolved_slide_count = _validate_plan_limits(
             plan_norm,
             requested_slide_count,
             raw_content=prompt,
         )
         if not target_indices and target_slides_override and target_slides_override != source_slide_count:
-            previous_structured = await content_extractor._force_slide_count_exact(
+            previous_structured = await revision_extractor._force_slide_count_exact(
                 previous_structured,
                 int(target_slides_override),
             )
@@ -1933,7 +2092,11 @@ async def revise_slide_spec(
                     should_stop=should_stop,
                     target_slide_indices=target_indices,
                     context_slide_number=context_slide_number,
+                    content_extractor_instance=_new_task_content_extractor(task_id_bg),
+                    user_authored=source_adopted,
                 )
+                if source_adopted:
+                    spec_payload["adopted"] = True  # later revisions of this deck stay user-authored
                 spec_payload["source_task_id"] = source_task_id
                 spec_payload["revision_prompt"] = revision_prompt_bg
 
@@ -1969,10 +2132,12 @@ async def revise_slide_spec(
                     "previous_content": previous_structured,
                     "revision_prompt": prompt,
                     "target_slide_indices": target_indices,
+                    "context_slide_number": context_slide_number,
                     "plan": plan_norm,
                     "slide_theme": slide_preset,
                     "generate_images": "true" if want_images_flag else "false",
                     "image_limit": resolved_image_limit,
+                    "adopted": source_adopted,
                 },
             )
             return {
@@ -2010,17 +2175,91 @@ async def revise_slide_spec(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/view-slide/{task_id}")
-async def view_slide(task_id: str):
-    slide_path = resolve_pptx_by_task_id(OUTPUT_DIR, task_id)
-    if not slide_path or not slide_path.is_file():
-        raise HTTPException(status_code=404, detail="Slide not found")
 
-    return FileResponse(
-        slide_path,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=slide_path.name,
+_BRIEF_TYPEFACES = {"friendly": 0, "elegant-serif": 1, "tech": 2, "classic-serif": 3, "modern-sans": 4, "bold-rounded": 5, "futuristic": 6, "sci-fi": 7}
+_BRIEF_DECOR = ["orbs", "frame", "waves", "dots", "rings", "stripe"]
+_BRIEF_COVERS = ["centered", "left", "split", "hero"]
+_BRIEF_ACCENTS = ["analogous", "analogous-alt", "contrast"]
+_BRIEF_SATURATION = ["soft", "medium", "vivid"]
+
+
+def _clean_theme_brief(raw: Any) -> Optional[Dict[str, Any]]:
+    """Validate an LLM design brief; anything outside the allowed vocabulary is clamped or dropped."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        hue = int(round(float(raw.get("hue")))) % 360
+    except (TypeError, ValueError):
+        return None
+
+    def pick(key: str, allowed: List[str], default: str) -> str:
+        value = str(raw.get(key) or "").strip().lower()
+        return value if value in allowed else default
+
+    mood = "dark" if str(raw.get("mood") or "").strip().lower() == "dark" else "light"
+    label = re.sub(r"\s+", " ", str(raw.get("label") or "")).strip()[:60]
+    return {
+        "hue": hue,
+        "mood": mood,
+        "saturation": pick("saturation", _BRIEF_SATURATION, "medium"),
+        "typeface": pick("typeface", list(_BRIEF_TYPEFACES), "modern-sans"),
+        "decor": pick("decor", _BRIEF_DECOR, "orbs"),
+        "cover": pick("cover", _BRIEF_COVERS, "left"),
+        "accent": pick("accent", _BRIEF_ACCENTS, "analogous"),
+        "label": label,
+    }
+
+
+@router.post("/api/theme-brief")
+async def theme_brief(subject: str = Form(...)):
+    """Art-direct a presentation template from its subject: colour, mood, type and ornament.
+
+    The result is a small validated vocabulary, never free-form CSS, so the caller can
+    always turn it into a readable template.
+    """
+    text = (subject or "").strip()[:1500]
+    if len(text) < 3:
+        raise HTTPException(status_code=400, detail="subject is required")
+
+    system = (
+        "You are an art director designing the visual identity of a slide template for one presentation. "
+        "Read the subject, decide what it feels like, and answer with ONE JSON object and nothing else.\n"
+        "Fields:\n"
+        '- "hue": integer 0-359 on the colour wheel (0 red, 25 orange, 45 gold, 75 lime, 140 green, 170 teal, '
+        "190 cyan, 215 blue, 250 indigo, 275 purple, 330 pink). Pick the colour people associate with the subject.\n"
+        '- "mood": "dark" (technology, space, luxury, finance, night, cinema) or "light" (education, health, food, kids, nature, daily life).\n'
+        '- "saturation": one of ' + ", ".join(_BRIEF_SATURATION) + ".\n"
+        '- "typeface": one of ' + ", ".join(_BRIEF_TYPEFACES) + " (serif for history, law, luxury; tech/futuristic for technology; friendly/bold-rounded for kids, food).\n"
+        '- "decor": one of ' + ", ".join(_BRIEF_DECOR) + ".\n"
+        '- "cover": one of ' + ", ".join(_BRIEF_COVERS) + ".\n"
+        '- "accent": one of ' + ", ".join(_BRIEF_ACCENTS) + " (contrast = a second colour opposite the main one).\n"
+        '- "label": at most 8 Vietnamese words describing the look, for example "Ấm áp như hạt cà phê rang".\n'
+        "No markdown, no explanation."
     )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "Subject: " + text},
+    ]
+    extractor = _new_task_content_extractor("theme-brief")
+    try:
+        raw_brief = await asyncio.wait_for(
+            extractor._request_json_dict(
+                messages,
+                target_slides=1,
+                fast_mode=True,
+                compose_mode=False,
+                structured_output=None,
+                call_purpose="theme_brief",
+            ),
+            timeout=30,
+        )
+    except Exception as exc:
+        print(f"[theme_brief] failed: {exc}")
+        return {"ok": False}
+    brief = _clean_theme_brief(raw_brief)
+    if not brief:
+        return {"ok": False}
+    return {"ok": True, "brief": brief}
 
 
 @router.get("/api/status/{task_id}")

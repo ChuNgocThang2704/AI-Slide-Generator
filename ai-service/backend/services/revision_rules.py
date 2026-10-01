@@ -44,12 +44,39 @@ def explicit_visual_targets_from_prompt(text: str, slide_count: int) -> Dict[int
             targets[idx] = "table"
     return targets
 
-def explicit_chart_type_targets_from_prompt(text: str, slide_count: int) -> Dict[int, str]:
+def _chart_type_from_window(window: str) -> Optional[str]:
+    if not re.search(r"\b(?:bieu\s*do|chart|graph)\b", window):
+        return None
+    if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", window):
+        return "line"
+    if re.search(r"\b(?:tron|pie|thi\s+phan)\b", window):
+        return "pie"
+    if re.search(r"\b(?:cot|column|bar)\b", window):
+        return "bar"
+    return None
+
+
+def explicit_chart_type_targets_from_prompt(
+    text: str,
+    slide_count: int,
+    default_slide_index: Optional[int] = None,
+) -> Dict[int, str]:
+    """Map "slide N ... line chart" phrases to a chart type per slide.
+
+    When the prompt names no slide at all (the editor sends the active slide as
+    a separate field), ``default_slide_index`` is the slide it refers to.
+    """
     folded = fold_revision_text(text)
     if not folded or slide_count <= 0:
         return {}
 
     targets: Dict[int, str] = {}
+    has_slide_marker = bool(re.search(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded))
+    if not has_slide_marker and default_slide_index is not None and 0 <= default_slide_index < slide_count:
+        chart_type = _chart_type_from_window(folded)
+        if chart_type:
+            targets[default_slide_index] = chart_type
+        return targets
     for match in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*(\d+)\b", folded):
         try:
             idx = int(match.group(1)) - 1
@@ -72,6 +99,18 @@ def explicit_chart_type_targets_from_prompt(text: str, slide_count: int) -> Dict
         elif re.search(r"\b(?:cot|column|bar)\b", window):
             targets[idx] = "bar"
     return targets
+
+def refers_to_current_slide(text: str) -> bool:
+    """True for deictic requests such as "rut gon slide nay" / "this slide"."""
+    folded = fold_revision_text(text)
+    if not folded:
+        return False
+    return bool(re.search(
+        r"\b(?:slide|trang|bieu\s*do|bang|tieu\s*de|noi\s*dung|anh|hinh)\s+(?:nay|hien\s+tai|dang\s+(?:mo|chon|xem))\b"
+        r"|\b(?:this|current)\s+(?:slide|page|chart|table|image)\b",
+        folded,
+    ))
+
 
 def explicit_slide_instruction_from_prompt(text: str, slide_index: int) -> str:
     marker_re = re.compile(

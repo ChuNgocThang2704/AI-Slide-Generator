@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from services.content.json_utils import parse_json_response
+from services.quality_issues import normalize_quality_issue
 
 _ENABLED = os.getenv("DECK_COHERENCE_JUDGE_ENABLE", "true").lower() in ("1", "true", "yes")
 _MAX_REFINES = max(0, int(os.getenv("DECK_COHERENCE_MAX_REFINES", "3")))
@@ -16,27 +17,6 @@ _SOURCE_EVIDENCE_MAX_CHARS = max(
     int(os.getenv("DECK_COHERENCE_SOURCE_MAX_CHARS", "30000")),
 )
 _DEBUG_DIR = Path("outputs") / "debug"
-_ALLOWED_ISSUES = {
-    "duplicate_content",
-    "off_topic",
-    "weak_progression",
-    "missing_transition",
-    "contradiction",
-    "visual_mismatch",
-    "missing_requirement",
-    "factual_accuracy",
-    "missing_example",
-    "objective_mismatch",
-    "unsupported_claim",
-    "incomplete_coverage",
-    "weak_support",
-    "role_mismatch",
-    "incomplete_example",
-    "list_title_mismatch",
-    "format_artifact",
-    "weak_closing",
-    "overloaded_slide",
-}
 _TEACHING_SUPPORT_ROLES = {
     "worked_example",
     "demonstration",
@@ -49,41 +29,6 @@ _ALLOWED_LECTURE_ROLES = {
     *_TEACHING_SUPPORT_ROLES,
     "summary",
 }
-_ISSUE_ALIASES = {
-    "duplicate": "duplicate_content",
-    "duplication": "duplicate_content",
-    "redundancy": "duplicate_content",
-    "redundant_content": "duplicate_content",
-    "topic_drift": "off_topic",
-    "poor_progression": "weak_progression",
-    "weak_narrative": "weak_progression",
-    "transition": "missing_transition",
-    "inconsistency": "contradiction",
-    "visual_inconsistency": "visual_mismatch",
-    "missing_user_requirement": "missing_requirement",
-    "missing_requested_content": "missing_requirement",
-    "factual_error": "factual_accuracy",
-    "incorrect_fact": "factual_accuracy",
-    "inaccurate": "factual_accuracy",
-    "weak_example": "missing_example",
-    "missing_worked_example": "missing_example",
-    "learning_objective_mismatch": "objective_mismatch",
-    "unsupported_absolute": "unsupported_claim",
-    "missing_component": "incomplete_coverage",
-    "incomplete_list": "incomplete_coverage",
-    "partial_framework": "incomplete_coverage",
-    "insufficient_evidence": "weak_support",
-    "weak_evidence": "weak_support",
-    "pedagogical_role_mismatch": "role_mismatch",
-    "incomplete_code_example": "incomplete_example",
-    "incomplete_worked_example": "incomplete_example",
-    "plural_title_mismatch": "list_title_mismatch",
-    "markdown_artifact": "format_artifact",
-    "weak_summary": "weak_closing",
-    "excessive_density": "overloaded_slide",
-}
-
-
 def _clean_json_text(text: str) -> str:
     cleaned = str(text or "").strip()
     if cleaned.startswith("```"):
@@ -189,28 +134,12 @@ def _normalized_requirement_spec(structured: Dict[str, Any]) -> List[Dict[str, A
 
 
 def _clean_issue(item: Any, slide_count: int, allowed_indices: Optional[Set[int]]) -> Optional[Dict[str, Any]]:
-    if not isinstance(item, dict):
+    issue = normalize_quality_issue(
+        item, slide_count=slide_count, allowed_indices=allowed_indices
+    )
+    if issue is None or issue.severity.value not in {"high", "medium"}:
         return None
-    try:
-        index = int(item.get("index"))
-    except (TypeError, ValueError):
-        return None
-    if index < 0 or index >= slide_count:
-        return None
-    if allowed_indices is not None and index not in allowed_indices:
-        return None
-    issue_type = str(item.get("type") or "").strip().lower()
-    issue_type = _ISSUE_ALIASES.get(issue_type, issue_type)
-    severity = str(item.get("severity") or "low").strip().lower()
-    instruction = str(item.get("instruction") or "").strip()[:500]
-    if issue_type not in _ALLOWED_ISSUES or severity not in {"high", "medium"} or not instruction:
-        return None
-    return {
-        "index": index,
-        "type": issue_type,
-        "severity": severity,
-        "instruction": instruction,
-    }
+    return issue.to_dict()
 
 
 async def _judge(
@@ -527,10 +456,23 @@ async def _refine(
         return structured, []
     slides = structured.get("slides") or []
     targets = []
+    target_fields_by_index: Dict[int, Set[str]] = {}
     for issue in issues:
         index = issue["index"]
         if 0 <= index < len(slides) and isinstance(slides[index], dict):
-            targets.append({**_slide_summary(slides[index], index), "instruction": issue["instruction"]})
+            fields = {
+                str(field)
+                for field in (issue.get("target_fields") or ["title", "bullets", "notes"])
+            }
+            target_fields_by_index.setdefault(index, set()).update(fields)
+            targets.append({
+                **_slide_summary(slides[index], index),
+                "issue": {
+                    "type": issue.get("type"),
+                    "instruction": issue["instruction"],
+                    "target_fields": sorted(fields),
+                },
+            })
     payload = {
         "deck_title": str(structured.get("title") or ""),
         "presentation_mode": str(structured.get("presentation_mode") or "presentation"),
@@ -564,8 +506,8 @@ async def _refine(
                 "form 'Label: number'. You may create an illustrative numeric series only when user_instruction "
                 "explicitly permits illustrative, sample, simulated, or hypothetical data; then clearly label one "
                 "bullet as illustrative. Otherwise never invent chart values. "
-                "Do not change slide count, "
-                "layout, table, chart, or image. Return complete replacement title, bullets, and notes only for targets. "
+                "Do not change slide count, layout, table, chart, or image. For each target, change only fields named "
+                "in issue.target_fields; copy every other returned field exactly from the supplied target. "
                 "Fulfill the corresponding locked_outline purpose, required_components, and semantic role in the "
                 "actual replacement content. Do not merely change the pedagogical_role label. Remove manual bullet "
                 "markers and Markdown artifacts. A plural classification title requires multiple substantive members; "
@@ -614,7 +556,9 @@ async def _refine(
         old_bullets = improved_slides[index].get("bullets") or []
         if not clean_bullets or (old_bullets and len(clean_bullets) < min(2, len(old_bullets))):
             continue
-        improved_slides[index]["title"] = title[:160]
+        allowed_fields = target_fields_by_index.get(index, {"title", "bullets", "notes"})
+        if "title" in allowed_fields:
+            improved_slides[index]["title"] = title[:160]
         role = str(improved_slides[index].get("pedagogical_role") or "").strip().lower()
         layout = str(improved_slides[index].get("layout") or "").strip().lower()
         if layout in {"intro", "title"}:
@@ -625,11 +569,13 @@ async def _refine(
             bullet_limit = 10
         else:
             bullet_limit = 8
-        improved_slides[index]["bullets"] = clean_bullets[:bullet_limit]
-        if notes:
+        if "bullets" in allowed_fields:
+            improved_slides[index]["bullets"] = clean_bullets[:bullet_limit]
+        if "notes" in allowed_fields and notes:
             improved_slides[index]["notes"] = notes
         if (
-            str(improved.get("presentation_mode") or "").strip().lower() == "lecture"
+            "pedagogical_role" in allowed_fields
+            and str(improved.get("presentation_mode") or "").strip().lower() == "lecture"
             and new_role in _ALLOWED_LECTURE_ROLES
         ):
             improved_slides[index]["pedagogical_role"] = new_role

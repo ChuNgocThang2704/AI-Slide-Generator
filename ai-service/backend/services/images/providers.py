@@ -1,7 +1,10 @@
 from __future__ import annotations
+import asyncio
 import base64
 import json
+import os
 import re
+import time
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
 import httpx
@@ -34,6 +37,72 @@ from .semantics import (
 
 
 
+# --- Image generation through the OpenAI-compatible gateway (9Router) ---------------------------
+# One endpoint in front of several providers: it picks a working image-capable model itself and
+# moves on when one is out of quota, which the direct Flux / Imagen calls below cannot do.
+_GATEWAY_IMAGE_SLOTS = asyncio.Semaphore(2)  # a few at a time: many parallel calls trip provider rate limits
+
+
+_gateway_blocked_until = 0.0  # circuit breaker: monotonic time before which the gateway is not tried
+
+
+def _trip_gateway_breaker(status: int, body: str) -> None:
+    """Stop hammering an image model that is out of quota (it can stay so for days)."""
+    global _gateway_blocked_until
+    if status not in (401, 402, 403, 404, 429, 500, 502, 503):
+        return
+    cooldown = float(os.getenv("IMAGE_GATEWAY_COOLDOWN_SEC", "600"))
+    if "quota" in body.lower() or "exhausted" in body.lower():
+        cooldown = max(cooldown, 3600.0)
+    _gateway_blocked_until = time.monotonic() + cooldown
+    print(f"[slide_images] gateway images paused for {int(cooldown)}s after status {status}")
+
+
+def gateway_images_enabled(plan_tier: str = "") -> bool:
+    if time.monotonic() < _gateway_blocked_until:
+        return False
+    if os.getenv("IMAGE_GATEWAY_ENABLE", "true").strip().lower() not in ("1", "true", "yes"):
+        return False
+    if plan_tier == "free" and os.getenv("IMAGE_GATEWAY_FOR_FREE", "true").strip().lower() not in ("1", "true", "yes"):
+        return False
+    from config import VLLM_API_BASE_URL
+    return bool((VLLM_API_BASE_URL or "").strip() and os.getenv("VLLM_API_KEY", "").strip())
+
+
+async def _try_gateway_image(client: httpx.AsyncClient, *, prompt: str, size: str = "1024x1024") -> Optional[bytes]:
+    """One image from the gateway, or None (any failure — the caller falls back to stock/other AI)."""
+    from config import VLLM_API_BASE_URL
+    base = (VLLM_API_BASE_URL or "").strip().rstrip("/")
+    key = os.getenv("VLLM_API_KEY", "").strip()
+    if not base or not key:
+        return None
+    model = os.getenv("IMAGE_GATEWAY_MODEL", "").strip() or os.getenv("NINE_ROUTER_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip()
+    try:
+        async with _GATEWAY_IMAGE_SLOTS:
+            resp = await client.post(
+                f"{base}/v1/images/generations",
+                json={"model": model, "prompt": prompt[:1800], "n": 1, "size": size},
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=httpx.Timeout(float(os.getenv("IMAGE_GATEWAY_TIMEOUT_SEC", "120")), connect=10.0),
+            )
+        if resp.status_code != 200:
+            print(f"[slide_images] gateway image request failed (status={resp.status_code}): {resp.text[:200]}")
+            _trip_gateway_breaker(resp.status_code, resp.text)
+            return None
+        item = ((resp.json().get("data") or [None])[0]) or {}
+        if item.get("b64_json"):
+            return base64.b64decode(item["b64_json"])
+        if item.get("url"):
+            got = await client.get(item["url"], timeout=60.0)
+            return got.content if got.status_code == 200 else None
+    except Exception as error:  # network, timeout, bad JSON: never break slide generation over a picture
+        print(f"[slide_images] gateway image error: {type(error).__name__}: {str(error)[:160]}")
+    return None
+
+
+_imagen_blocked_until = 0.0  # Imagen refused us (404/403): stop retrying for an hour
+
+
 async def _try_secondary_ai_image_fallback(
     client: httpx.AsyncClient,
     *,
@@ -46,6 +115,13 @@ async def _try_secondary_ai_image_fallback(
     Thay thế Together/FLUX vốn thường xuyên gặp lỗi giới hạn tần suất (rate-limit).
     Sử dụng Google Cloud Vertex AI nếu được bật, nếu không sẽ chuyển sang AI Studio.
     """
+    if gateway_images_enabled():
+        gateway_raw = await _try_gateway_image(client, prompt=prompt)
+        if gateway_raw:
+            return gateway_raw
+    global _imagen_blocked_until
+    if time.monotonic() < _imagen_blocked_until:
+        return None
     model = (IMAGE_FALLBACK_MODEL or "").strip()
     if not model or model.startswith("black-forest-labs") or model.startswith("imagen-3.0"):
         model = "imagen-4.0-fast-generate-001"
@@ -157,6 +233,8 @@ async def _try_secondary_ai_image_fallback(
                 f"[slide_images] Gemini Imagen fallback HTTP {resp.status_code} ({attempt_model}): "
                 f"{resp.text[:300]}"
             )
+            if resp.status_code in (400, 401, 403, 404):
+                _imagen_blocked_until = time.monotonic() + 3600.0
             continue
         data = resp.json()
         
@@ -352,6 +430,64 @@ def _stock_photo_providers(content_type: str, risk: Optional[str]) -> List[str]:
     return ["pexels", "wikimedia"]
 
 
+async def _stock_query_completion(client: httpx.AsyncClient, prompt: str) -> str:
+    """Write the stock-photo search queries, through the gateway first.
+
+    This is an ordinary text call, so it follows the same order as the rest of the pipeline: the
+    9Router gateway, which holds the working quota, and a direct Gemini call only after it. It
+    used to go straight to Gemini, so an exhausted or missing key left the slide searching with
+    nothing but its weak keyword queries.
+    """
+    from config import VLLM_API_BASE_URL
+    base = (VLLM_API_BASE_URL or "").strip().rstrip("/")
+    key = os.getenv("VLLM_API_KEY", "").strip()
+    if base and key:
+        try:
+            resp = await client.post(
+                f"{base}/v1/chat/completions",
+                json={
+                    "model": os.getenv("LLM_MODEL", "").strip() or "free-combo",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 512,
+                    "stream": False,
+                },
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=45.0,
+            )
+            if resp.status_code == 200:
+                text = str(((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+                if text:
+                    return text
+            else:
+                print(f"[stock_photos] gateway query generation failed (status={resp.status_code})")
+        except Exception as error:
+            print(f"[stock_photos] gateway query generation error: {type(error).__name__}")
+
+    if not GEMINI_API_KEY:
+        return ""
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{(GEMINI_MODEL or 'gemini-2.5-flash').strip()}:generateContent"
+    )
+    req = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 512,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
+    try:
+        resp = await client.post(url, json=req, headers={"x-goog-api-key": GEMINI_API_KEY}, timeout=20.0)
+        if resp.status_code != 200:
+            return ""
+        parts = (((resp.json().get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
+        return "\n".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
+    except Exception:
+        return ""
+
+
 async def _gemini_stock_photo_queries(
     client: httpx.AsyncClient,
     slide: Dict[str, Any],
@@ -360,8 +496,6 @@ async def _gemini_stock_photo_queries(
     risk: Optional[str],
 ) -> List[str]:
     """Tạo các truy vấn tìm kiếm ảnh stock/tham chiếu ngắn bằng tiếng Anh cho các trường hợp ngữ nghĩa yếu."""
-    if not GEMINI_API_KEY:
-        return []
     title = str(slide.get("title") or "").strip()
     bullets = slide.get("bullets") or slide.get("content") or []
     if isinstance(bullets, str):
@@ -382,25 +516,10 @@ async def _gemini_stock_photo_queries(
         f"entities: {semantic.get('entities') or []}\n"
         f"slide_text:\n{bullet_text[:1200]}"
     )
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{(GEMINI_MODEL or 'gemini-2.5-flash').strip()}:generateContent?key={GEMINI_API_KEY}"
-    )
-    req = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.1,
-            "maxOutputTokens": 512,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }
+    text = await _stock_query_completion(client, prompt)
+    if not text:
+        return []
     try:
-        resp = await client.post(url, json=req, timeout=20.0)
-        if resp.status_code != 200:
-            return []
-        data = resp.json()
-        parts = (((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
-        text = "\n".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.MULTILINE).strip()
         parsed = json.loads(text)
     except Exception:

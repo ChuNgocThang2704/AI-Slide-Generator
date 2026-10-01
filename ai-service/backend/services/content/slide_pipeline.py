@@ -1386,11 +1386,20 @@ class SlidePipelineMixin:
                 if str(item).strip()
             ]
             folded_intro = self._fold_language_text(" ".join(intro_bullets))
+            intro_text = " ".join(intro_bullets).strip()
+            definition_copy = (
+                len(intro_bullets) != 1
+                or len(intro_text) > 150
+                or ":" in intro_text[:40]
+                or any(marker in folded_intro for marker in (
+                    "dinh nghia", "khai niem la", "duoc dinh nghia", "definition", "is defined as"
+                ))
+            )
             wrong_mode_copy = not lecture_mode and any(
                 marker in folded_intro
                 for marker in ("bai giang", "lecture overview", "lecture introduction")
             )
-            if not intro_bullets or wrong_mode_copy:
+            if not intro_bullets or wrong_mode_copy or definition_copy:
                 intro_slide["bullets"] = [cover_fallback]
             if not str(intro_slide.get("notes") or "").strip():
                 intro_slide["notes"] = cover_notes
@@ -1703,7 +1712,9 @@ class SlidePipelineMixin:
             + "You are a premium presentation editor.\n\n"
             + "TASK: Conduct a comprehensive revision of the generated slide deck JSON to guarantee professional quality.\n\n"
             + "DECK BOUNDARIES: Keep the exact slide count. Rewrite slide 1 as a cover with layout='intro', "
-            "the deck topic as title, and at most two concise subtitle bullets. Rewrite the final slide as a "
+            "the deck topic as title, and exactly one concise scope-preview subtitle bullet (8-16 words). "
+            "The subtitle previews the whole deck; it must not define the topic, state a fact, repeat the title, "
+            "use a label such as Definition/Overview, or contain a colon. Rewrite the final slide as a "
             "closing with layout='thankyou', one or two key takeaways plus an optional Q&A invitation, and at most four bullets. "
             "Do not append extra slides.\n\n"
             + "CRITICAL QUALITY RULES:\n"

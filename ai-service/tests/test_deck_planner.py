@@ -58,6 +58,72 @@ def test_outline_first_locks_exact_count_and_requirements():
     assert len(extractor.messages) == 2
 
 
+def test_outline_first_passes_content_plan_to_planner_and_author():
+    outline = [
+        {"index": index + 1, "title": f"Slide {index + 1}", "purpose": "One purpose", "required_components": [], "pedagogical_role": "concept", "layout_hint": "text_only"}
+        for index in range(4)
+    ]
+    outline[0]["layout_hint"] = "intro"
+    outline[-1].update({"layout_hint": "thankyou", "pedagogical_role": "summary"})
+    slides = [
+        {"title": item["title"], "bullets": ["Complete content."], "notes": "Notes.", "layout": item["layout_hint"], "pedagogical_role": item["pedagogical_role"]}
+        for item in outline
+    ]
+    plan = {
+        "deck_goal": "Explain two topics",
+        "sections": [
+            {"id": "a", "topic": "Core", "importance": 1.0, "complexity": 0.8, "source_refs": [{"chunk_index": 0}], "recommended_slides": 2}
+        ],
+    }
+    extractor = FakeExtractor([
+        {"deck_title": "Deck", "requirement_spec": [], "outline": outline},
+        {"title": "Deck", "presentation_mode": "presentation", "learning_objectives": [], "slides": slides},
+    ])
+
+    asyncio.run(generate_outline_first_deck(
+        extractor, source_text="Source", user_instruction="Request", target_slides=4,
+        presentation_mode="presentation", language="en", content_plan=plan,
+    ))
+
+    planner_payload = json.loads(extractor.messages[0][1]["content"])
+    author_payload = json.loads(extractor.messages[1][1]["content"])
+    assert planner_payload["content_plan"] == plan
+    assert author_payload["content_plan"] == plan
+    assert planner_payload["grounding_policy"]["mode"] == "prompt"
+    assert author_payload["grounding_policy"] == planner_payload["grounding_policy"]
+
+
+def test_document_author_repairs_numeric_claim_absent_from_source():
+    outline = [
+        {"index": 1, "title": "Results", "purpose": "Report result", "required_components": [], "pedagogical_role": "concept", "layout_hint": "intro"},
+        {"index": 2, "title": "Summary", "purpose": "Summarize", "required_components": [], "pedagogical_role": "summary", "layout_hint": "thankyou"},
+    ]
+    unsupported = [
+        {"title": "Results", "bullets": ["Accuracy reached 99%."], "notes": "", "pedagogical_role": "concept"},
+        {"title": "Summary", "bullets": ["The result was 99%."], "notes": "", "pedagogical_role": "summary"},
+    ]
+    grounded = [
+        {"title": "Results", "bullets": ["Accuracy reached 91%."], "notes": "", "pedagogical_role": "concept"},
+        {"title": "Summary", "bullets": ["The documented result was 91%."], "notes": "", "pedagogical_role": "summary"},
+    ]
+    extractor = FakeExtractor([
+        {"deck_title": "Results", "requirement_spec": [], "outline": outline},
+        {"title": "Results", "slides": unsupported},
+        {"title": "Results", "slides": grounded},
+    ])
+    extractor._is_document_mode = True
+
+    deck = asyncio.run(generate_outline_first_deck(
+        extractor, source_text="The measured accuracy was 91%.", user_instruction="Summarize the result.",
+        target_slides=2, presentation_mode="presentation", language="en",
+    ))
+
+    assert len(extractor.messages) == 3
+    assert deck["slides"][0]["bullets"] == ["Accuracy reached 91%."]
+    assert "99%" in extractor.messages[2][-1]["content"]
+    assert "_grounding_warnings" not in deck
+
+
 def test_outline_first_rejects_wrong_outline_count():
     invalid_plan = {
         "deck_title": "Bad",

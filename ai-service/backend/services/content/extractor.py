@@ -38,7 +38,7 @@ from services.content.json_utils import (
     try_fix_json as _try_fix_json_util,
 )
 from services.content.input_processing import InputProcessingMixin
-from services.content.llm_client import LLMClientMixin
+from services.content.llm_client import LLMClientMixin, llm_gateway_headers
 from services.content.slide_normalizer import SlideNormalizerMixin
 from services.content.slide_pipeline import SlidePipelineMixin
 from services.lecture_quality import (
@@ -53,6 +53,8 @@ from services.content.image_extraction import ImageExtractionMixin
 from services.presentation_mode import classify_presentation_mode, lock_presentation_mode
 from services.source_retrieval import retrieve_source_pages
 from services.deck_planner import generate_outline_first_deck
+from services.llm_telemetry import infer_call_purpose, monotonic_start, record_llm_call
+from services.generation_context import GenerationContext, GenerationMode, bind_legacy_extractor_state
 
 
 try:
@@ -247,6 +249,10 @@ class ContentExtractor(
         self._focused_source_content: str = ""
         # Tiến độ extract (progress_cb): đếm mỗi lần vLLM trả JSON hợp lệ.
         self._extract_progress: Optional[Dict[str, Any]] = None
+        self._generation_context = GenerationContext()
+
+    def _set_generation_context(self, context: GenerationContext) -> None:
+        bind_legacy_extractor_state(self, context)
 
     async def _ensure_auto_min_slide_count(
         self,
@@ -642,6 +648,7 @@ class ContentExtractor(
         should_stop: Optional[Callable[[], Awaitable[bool]]] = None,
         user_instruction: Optional[str] = None,
         doc_title_hint: Optional[str] = None,
+        source_is_document: bool = False,
     ) -> Dict[str, Any]:
         """
         Trích xuất và cấu trúc hóa nội dung thành format phù hợp cho slide.
@@ -668,15 +675,26 @@ class ContentExtractor(
             }
         """
         target_slides = int(target_slides_override or 10)
-        self._user_instruction = user_instruction or ""
-        self._doc_title_hint = doc_title_hint or ""
-        self._source_content = raw_content or ""
-        self._focused_source_content = self._source_content
+        context = GenerationContext(
+            task_id=str(getattr(self, "_telemetry_task_id", "") or ""),
+            source_text=raw_content or "",
+            focused_source_text=raw_content or "",
+            user_instruction=user_instruction or "",
+            doc_title_hint=doc_title_hint or "",
+            target_slides=target_slides,
+            force_exact_slide_count=force_exact_slide_count,
+        )
+        self._set_generation_context(context)
         self._mode_decision = await classify_presentation_mode(
             self, self._source_content, self._user_instruction
         )
         self._presentation_mode = str(self._mode_decision.get("mode") or "presentation")
         self._lecture_mode = self._presentation_mode == "lecture"
+        context = context.evolve(
+            presentation_mode=self._presentation_mode,
+            mode_decision=self._mode_decision,
+        )
+        self._set_generation_context(context)
         print(
             "[mode_classifier] "
             f"mode={self._presentation_mode} confidence={self._mode_decision.get('confidence')} "
@@ -695,6 +713,7 @@ class ContentExtractor(
 
         explicit_deck = self._parse_explicit_slide_blocks(raw_content)
         if explicit_deck:
+            self._set_generation_context(context.evolve(mode=GenerationMode.EXPLICIT_SLIDES))
             print(f"Detected explicit slide blocks: {len(explicit_deck.get('slides') or [])} slide(s)")
             structured = self._normalize_structured_content(explicit_deck)
             if force_exact_slide_count and target_slides_override:
@@ -704,7 +723,13 @@ class ContentExtractor(
             return self._finalize_presentation_mode(structured)
 
         # Nếu đầu vào là câu lệnh ngắn/dàn ý, tự động sinh nội dung chi tiết trước
-        self._is_document_mode = not self._is_prompt_input(raw_content)
+        # An uploaded file remains authoritative even when it is shorter than
+        # the heuristic 800-character prompt threshold.
+        self._is_document_mode = source_is_document or not self._is_prompt_input(raw_content)
+        context = context.evolve(
+            mode=GenerationMode.DOCUMENT if self._is_document_mode else GenerationMode.PROMPT
+        )
+        self._set_generation_context(context)
         if self._is_document_mode:
             print("[pipeline] document mode: expand will be skipped to preserve technical detail")
             if self._user_instruction:
@@ -720,6 +745,8 @@ class ContentExtractor(
                     )
                     raw_content = focused_content
                     self._focused_source_content = focused_content
+                    context = context.evolve(focused_source_text=focused_content)
+                    self._set_generation_context(context)
 
         if (self.vllm_available or self.gemini_available) and not self._is_document_mode:
             print(f"Detected prompt/outline input. Pre-generating detailed content for {target_slides} slides...")
@@ -864,6 +891,8 @@ class ContentExtractor(
             self._user_instruction,
             locked_mode=getattr(self, "_presentation_mode", ""),
         )
+        context = context.evolve(output_language=self._slide_lang_hint)
+        self._set_generation_context(context)
 
     def _resolve_deck_title(
         self,
@@ -1054,6 +1083,7 @@ class ContentExtractor(
         fast_mode: bool = False,
         compose_mode: bool = False,
         structured_output: Optional[str] = None,
+        call_purpose: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Gọi vLLM chat và parse JSON object đầu tiên trong response.
 
@@ -1061,6 +1091,7 @@ class ContentExtractor(
             None — không guided JSON.
             \"slide_deck\" | \"expanded_text\" | \"sections\" | \"bullet\" | \"bullets\".
         """
+        purpose = call_purpose or infer_call_purpose()
         _model, _msgs, _opts = self.model_name, messages, self._build_llm_options(
             target_slides=target_slides,
             fast_mode=fast_mode,
@@ -1082,6 +1113,7 @@ class ContentExtractor(
 
         base_payload: Dict[str, Any] = {
             "model": _model,
+            "stream": False,
             "messages": _msgs,
             "temperature": float(_opts.get("temperature", 0.1)),
             "top_p": float(_opts.get("top_p", 0.9)),
@@ -1108,14 +1140,29 @@ class ContentExtractor(
         )
 
         async def _vllm_chat_once(p: Dict[str, Any]) -> tuple:
-            async with httpx.AsyncClient(timeout=timeout_cfg) as client:
-                resp = await client.post(
-                    f"{self.vllm_base_url}/v1/chat/completions",
-                    json=p,
-                    auth=self.vllm_basic_auth,
+            attempt_started = monotonic_start()
+            try:
+                async with httpx.AsyncClient(timeout=timeout_cfg) as client:
+                    resp = await client.post(
+                        f"{self.vllm_base_url}/v1/chat/completions",
+                        json=p,
+                        headers=llm_gateway_headers(),
+                        auth=self.vllm_basic_auth,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                record_llm_call(
+                    self, purpose=purpose, provider="vllm", model=_model,
+                    started_at=attempt_started, status="success", max_tokens=int(p.get("max_tokens") or max_tokens),
+                    json_mode=True,
                 )
-                resp.raise_for_status()
-                data = resp.json()
+            except Exception as error:
+                record_llm_call(
+                    self, purpose=purpose, provider="vllm", model=_model,
+                    started_at=attempt_started, status="error", max_tokens=int(p.get("max_tokens") or max_tokens),
+                    json_mode=True, error=error,
+                )
+                raise
             choice0 = data.get("choices", [{}])[0]
             txt = (choice0.get("message") or {}).get("content", "") or ""
             fr = choice0.get("finish_reason")
@@ -1165,6 +1212,8 @@ class ContentExtractor(
                 max_tokens=max_tokens,
                 temperature=float(_opts.get("temperature", 0.1)),
                 json_mode=True,
+                call_purpose=purpose,
+                fallback_from="vllm",
             )
             finish_reason = "stop"
 
@@ -1351,7 +1400,8 @@ class ContentExtractor(
             "- Never end with ... or …\n"
             f"- Each slide: 3–5 bullets. Slide title: 3–8 words.\n"
             f"- You MUST return EXACTLY {target_slides} slides. If running out of tokens: close JSON cleanly—do not leave half sentences.\n"
-            "- Slide 1 must be a cover with layout='intro', the deck topic as title, and no more than two short subtitle bullets.\n"
+            "- Slide 1 must be a cover with layout='intro', the deck topic as title, and exactly one 8-16 word subtitle bullet that previews the whole deck's scope.\n"
+            "- The cover subtitle must not define the topic, state a detail/fact, repeat the title, use a label such as Definition/Overview, or contain a colon.\n"
             "- The final slide must use layout='thankyou' and contain a concise closing or Q&A invitation with no more than two bullets.\n"
             "- Both cover and closing are included in the exact requested slide count; do not append them as extra slides.\n"
             "- No duplicated content across slides.\n"

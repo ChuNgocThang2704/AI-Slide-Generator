@@ -37,11 +37,6 @@ def create_app() -> FastAPI:
     output_dir.mkdir(exist_ok=True)
 
     app.mount("/outputs", StaticFiles(directory=str(output_dir)), name="outputs")
-    ui_dir = base_dir / "frontend" / "public"
-    if ui_dir.is_dir():
-        app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")
-    else:
-        print("[main] Warning: frontend/public directory not found, skipping UI mount.")
 
     app.include_router(api_router)
     return app

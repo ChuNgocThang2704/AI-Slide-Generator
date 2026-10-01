@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from services.content.json_utils import parse_json_response
+from services.grounding_policy import policy_for_extractor, unsupported_numeric_anchors
 
 
 _INTRO_LAYOUTS = {"intro", "title"}
@@ -22,6 +23,24 @@ def _clean_json(text: str) -> str:
     if value.endswith("```"):
         value = value[:-3]
     return value.strip()
+
+
+def _deck_claim_texts(deck: Any) -> List[str]:
+    if not isinstance(deck, dict):
+        return []
+    texts: List[str] = []
+    for slide in deck.get("slides") or []:
+        if not isinstance(slide, dict):
+            continue
+        texts.extend([str(slide.get("title") or ""), str(slide.get("notes") or "")])
+        texts.extend(str(value) for value in (slide.get("bullets") or []))
+        table = slide.get("table")
+        if isinstance(table, dict):
+            texts.extend(str(value) for value in (table.get("headers") or []))
+            for row in table.get("rows") or []:
+                if isinstance(row, list):
+                    texts.extend(str(value) for value in row)
+    return texts
 
 
 def _valid_outline(
@@ -108,38 +127,57 @@ async def generate_outline_first_deck(
     target_slides: int,
     presentation_mode: str,
     language: str,
+    content_plan: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Plan once, lock the outline, then author content against that plan."""
     target_slides = max(2, int(target_slides))
     source = str(source_text or "")[:30000]
+    grounding_policy = policy_for_extractor(content_extractor, source)
+    sparse_document_guidance = (
+        "SPARSE DOCUMENT: The source has few distinct facts. Allocate the exact slide count across supported "
+        "facts and different views of those same facts; a chart or table may show the same data without asserting "
+        "a new cause. Use explicitly labelled discussion questions if needed. Do not create a slide about causes, "
+        "strategy, challenges, lessons, or future plans unless the source actually states them. "
+        if grounding_policy.source_is_authoritative and len(source.split()) < 120 else ""
+    )
     planner_payload = {
         "source": source,
         "user_instruction": str(user_instruction or ""),
         "target_slides": target_slides,
         "presentation_mode": presentation_mode,
         "output_language": language,
+        "grounding_policy": grounding_policy.to_dict(),
     }
+    if isinstance(content_plan, dict) and content_plan.get("sections"):
+        planner_payload["content_plan"] = content_plan
     planner_messages = [{
         "role": "system",
         "content": (
             "You are a senior presentation architect. Convert the complete user instruction into an atomic "
             "requirement_spec, then design an exact-count outline before any slide prose is written. Treat every "
             "named topic, example, comparison, error, correction, formula, data item, exercise, audience constraint, "
-            "language, scope, and requested depth as mandatory. Ground the plan in source; do not invent facts. "
+            "language, scope, and requested depth as mandatory. "
+            f"{grounding_policy.instruction_block()} "
+            f"{sparse_document_guidance}"
             "requirement_spec must contain the user's explicit requirements and requirements necessarily implied by "
             "the requested scope. Do not promote every optional source detail into a mandatory requirement. Put "
             "useful source enrichment in outline.required_components instead. "
-            "The first outline item must use layout_hint=intro. The last must use layout_hint=thankyou and "
+            "The first outline item must use layout_hint=intro and plan one short cover subtitle that previews the deck scope, "
+            "never a definition, factual detail, title repetition, label, or colon. The last must use layout_hint=thankyou and "
             "pedagogical_role=summary; it may synthesize, recommend a next step, or invite questions, but must not "
             "introduce a new lesson topic or exercise. In lecture mode with at least six slides, include a separate "
             "learning_objectives item after the introduction (never merge objectives into the cover), at least one "
             "worked_example/demonstration/practice item, and a knowledge_check "
-            "or practice item after its prerequisite concepts. Allocate one "
+            "or practice item after its prerequisite concepts. Allocate one clear purpose per slide. "
             "In presentation mode, do not add a learning-objectives slide, knowledge check, practice, or worked "
             "example unless the user explicitly requests it. Allocate the available body slides to every named "
             "analysis topic, comparison, roadmap, metric, and recommendation before adding enrichment. Never merge "
             "two explicitly requested major sections merely to make room for an unrequested teaching device. "
-            "clear purpose per slide and ensure every atomic requirement is assigned to at least one slide index. "
+            "Ensure every atomic requirement is assigned to at least one slide index. "
+            "When content_plan is provided, use its importance, complexity, source_refs, and recommended_slides as "
+            "the section coverage budget. Cover every section with recommended_slides > 0; do not allocate slides "
+            "from source text length alone. Sections with zero allocation must not be silently merged into an "
+            "unrelated topic; include them only when another section's purpose genuinely covers them. "
             "Return strict JSON only: {\"deck_title\":string,\"requirement_spec\":[{\"id\":string,"
             "\"description\":string,\"required_components\":[string],\"assigned_slide_indices\":[number],"
             "\"priority\":\"mandatory|supporting\"}],"
@@ -198,7 +236,10 @@ async def generate_outline_first_deck(
         "deck_title": plan.get("deck_title"),
         "requirement_spec": plan.get("requirement_spec") or [],
         "locked_outline": plan["outline"],
+        "grounding_policy": grounding_policy.to_dict(),
     }
+    if isinstance(content_plan, dict) and content_plan.get("sections"):
+        author_payload["content_plan"] = content_plan
     author_messages = [{
         "role": "system",
         "content": (
@@ -208,6 +249,8 @@ async def generate_outline_first_deck(
             "the conclusion. Use source as authority. Preserve output_language throughout. For technical examples, "
             "put each code/formula/input/output line in its own bullet and include the full requested mechanism and "
             "result. Common mistakes must include corrections. Knowledge checks must contain actual questions. "
+            f"{grounding_policy.instruction_block()} "
+            f"{sparse_document_guidance}"
             "Honor every explicit quantity literally (for example, three questions means exactly three distinct "
             "questions). Never emit Markdown language fences or standalone language labels such as 'python'. "
             "Never prefix bullet strings with '-', '*', bullet glyphs, or manual numbering such as '1.' because the "
@@ -238,7 +281,17 @@ async def generate_outline_first_deck(
         json_mode=True,
     )
     deck = parse_json_response(raw_deck, clean_result_text=_clean_json)
-    if not _valid_authored_deck(deck, target_slides):
+    unsupported_numbers = unsupported_numeric_anchors(
+        _deck_claim_texts(deck), grounding_policy
+    )
+    if not _valid_authored_deck(deck, target_slides) or unsupported_numbers:
+        grounding_repair = ""
+        if unsupported_numbers:
+            grounding_repair = (
+                " Remove or replace these numeric claims because they are absent from authoritative source/user "
+                f"evidence: {json.dumps(list(unsupported_numbers), ensure_ascii=False)}. Use only numeric anchors "
+                f"from grounding_policy: {json.dumps(list(grounding_policy.numeric_anchors), ensure_ascii=False)}."
+            )
         repair_author_messages = [
             *author_messages,
             {"role": "assistant", "content": str(raw_deck or "")},
@@ -251,7 +304,7 @@ async def generate_outline_first_deck(
                     "bullets, ordinary slides 3-6, closing 2-5, and example/check slides no more than 8 concise "
                     "lines. Keep image-oriented slides below roughly 760 visible characters. Group naturally related "
                     "facts with short semantic labels and move secondary detail to notes. Preserve complete meaning "
-                    "while removing excess detail. Return strict JSON only."
+                    f"while removing excess detail.{grounding_repair} Return strict JSON only."
                 ),
             },
         ]
@@ -262,6 +315,30 @@ async def generate_outline_first_deck(
             json_mode=True,
         )
         deck = parse_json_response(repaired_deck_raw, clean_result_text=_clean_json)
+        remaining_unsupported = unsupported_numeric_anchors(
+            _deck_claim_texts(deck), grounding_policy
+        )
+        if remaining_unsupported:
+            warnings = []
+            for slide_index, slide in enumerate(deck.get("slides") or []):
+                values = unsupported_numeric_anchors(
+                    _deck_claim_texts({"slides": [slide]}), grounding_policy
+                )
+                if not values:
+                    continue
+                warnings.append({
+                    "index": slide_index,
+                    "slide_index": slide_index,
+                    "type": "unsupported_numeric_claim",
+                    "severity": "high",
+                    "target_fields": ["bullets", "notes"],
+                    "instruction": (
+                        "Remove or replace numeric claims absent from authoritative evidence: "
+                        + ", ".join(values)
+                    ),
+                    "evidence": "Allowed numeric anchors: " + ", ".join(grounding_policy.numeric_anchors),
+                })
+            deck["_grounding_warnings"] = warnings
         if not _valid_authored_deck(deck, target_slides):
             if not _valid_authored_deck(deck, target_slides, enforce_density=False):
                 raise ValueError("outline author did not satisfy the locked deck contract after repair")

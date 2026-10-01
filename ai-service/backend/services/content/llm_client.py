@@ -2,19 +2,57 @@
 
 from __future__ import annotations
 
+import os
+import time
 from typing import Any, Dict, List
 
 # pyrefly: ignore [missing-import]
 import httpx
 from services.provider_health import mark_vllm_unavailable, vllm_circuit_open
+from services.llm_telemetry import infer_call_purpose, monotonic_start, record_llm_call
 
-from config import (
-    GEMINI_TIMEOUT_SEC,
-    VLLM_TIMEOUT_SEC,
-    GCP_VERTEX_AI_ENABLE,
-    GCP_PROJECT_ID,
-    GCP_REGION,
-)
+from config_groups import LLM_CONFIG
+
+
+def llm_gateway_headers() -> Dict[str, str]:
+    """Bearer key for an OpenAI-compatible gateway (e.g. 9Router) in front of the LLM providers."""
+    key = os.getenv("VLLM_API_KEY", "").strip()
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
+_PRIMARY_HOST_DOWN_UNTIL = [0.0]  # monotonic deadline: the self-hosted LLM host failed, go straight to the gateway
+
+
+async def _primary_host_completion(payload: Dict[str, Any], basic_auth: Any) -> str | None:
+    """One completion from the self-hosted LLM (LLM_PRIMARY_BASE_URL), or None so the caller uses the gateway.
+
+    The self-hosted model is the preferred one; the gateway (9Router) is the first fallback and direct
+    Gemini the last. A failed host is skipped for LLM_PRIMARY_COOLDOWN_SEC so a dead host costs one
+    short connect attempt, not one per call.
+    """
+    base = os.getenv("LLM_PRIMARY_BASE_URL", "").strip().rstrip("/")
+    if not base or time.monotonic() < _PRIMARY_HOST_DOWN_UNTIL[0]:
+        return None
+    body = dict(payload)
+    body["model"] = os.getenv("LLM_PRIMARY_MODEL", "").strip() or body.get("model")
+    key = os.getenv("LLM_PRIMARY_API_KEY", "").strip()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0)) as client:
+            resp = await client.post(
+                f"{base}/v1/chat/completions",
+                json=body,
+                headers={"Authorization": f"Bearer {key}"} if key else {},
+                auth=basic_auth,
+            )
+            resp.raise_for_status()
+            text = ((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        if text.strip():
+            return text
+    except Exception as error:
+        _PRIMARY_HOST_DOWN_UNTIL[0] = time.monotonic() + float(os.getenv("LLM_PRIMARY_COOLDOWN_SEC", "180"))
+        print(f"[LLMClient] primary LLM host failed ({type(error).__name__}); using the gateway for the next "
+              f"{os.getenv('LLM_PRIMARY_COOLDOWN_SEC', '180')}s")
+    return None
 
 
 class LLMClientMixin:
@@ -38,19 +76,37 @@ class LLMClientMixin:
         temperature: float = 0.55,
         json_mode: bool = False,
         provider: str = "auto",
+        call_purpose: str | None = None,
+        model_override: str | None = None,
     ) -> str:
         """Thực hiện một lượt hoàn thành trò chuyện (chat completion) và trả về văn bản thuần túy."""
         provider = (provider or "auto").strip().lower()
+        purpose = call_purpose or infer_call_purpose()
         if vllm_circuit_open():
             self.vllm_available = False
         if provider == "gemini":
+            # The "escalate to a stronger model" passes also go through the gateway first
+            # (its stronger combo, if one is configured); the direct Gemini call below is
+            # only reached if the gateway is down or exhausted, so it stays the last resort.
+            if self.vllm_available and self.vllm_base_url and llm_gateway_headers():
+                strong = os.getenv("NINE_ROUTER_STRONG_MODEL", "").strip() or None
+                return await self._llm_completion_plain_text(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    json_mode=json_mode,
+                    provider="vllm",
+                    call_purpose=purpose,
+                    model_override=strong,
+                )
             return await self._gemini_completion_plain_text(
                 messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 json_mode=json_mode,
+                call_purpose=purpose,
             )
-        model_name = self.model_name
+        model_name = model_override or self.model_name
         if self.vllm_available and provider in {"auto", "vllm", "vllm_only"}:
             nothink_msgs = list(messages)
 
@@ -62,13 +118,14 @@ class LLMClientMixin:
                     text = (text[:start] + text[end:]).strip()
                 return text
 
-            timeout_cfg = httpx.Timeout(min(120.0, float(VLLM_TIMEOUT_SEC)), connect=25.0)
+            timeout_cfg = httpx.Timeout(min(120.0, float(LLM_CONFIG.vllm_timeout_sec)), connect=25.0)
             payload: Dict[str, Any] = {
                 "model": model_name,
                 "messages": nothink_msgs,
                 "temperature": float(temperature),
                 "top_p": 0.92,
                 "max_tokens": int(max_tokens),
+                "stream": False,
             }
             if json_mode:
                 payload["response_format"] = {"type": "json_object"}
@@ -76,18 +133,34 @@ class LLMClientMixin:
                 payload["extra_body"] = {
                     "chat_template_kwargs": {"enable_thinking": False}
                 }
+            if model_override is None:
+                primary_text = await _primary_host_completion(payload, self.vllm_basic_auth)
+                if primary_text is not None:
+                    return _strip_think(primary_text)
             try:
+                attempt_started = monotonic_start()
                 async with httpx.AsyncClient(timeout=timeout_cfg) as client:
                     resp = await client.post(
                         f"{self.vllm_base_url}/v1/chat/completions",
                         json=payload,
+                        headers=llm_gateway_headers(),
                         auth=self.vllm_basic_auth,
                     )
                     resp.raise_for_status()
                     data = resp.json()
                 text = (data.get("choices", [{}])[0].get("message") or {}).get("content", "") or ""
+                record_llm_call(
+                    self, purpose=purpose, provider="vllm", model=model_name,
+                    started_at=attempt_started, status="success", max_tokens=max_tokens,
+                    json_mode=json_mode,
+                )
                 return _strip_think(text)
             except Exception as e:
+                record_llm_call(
+                    self, purpose=purpose, provider="vllm", model=model_name,
+                    started_at=attempt_started, status="error", max_tokens=max_tokens,
+                    json_mode=json_mode, error=e,
+                )
                 is_connection_error = isinstance(e, httpx.RequestError) or "connection" in str(e).lower() or "timeout" in str(e).lower()
                 if is_connection_error:
                     print(f"[LLMClient] vLLM connection failed: {e}. Disabling vLLM for this session.")
@@ -102,6 +175,8 @@ class LLMClientMixin:
                         max_tokens=max_tokens,
                         temperature=temperature,
                         json_mode=json_mode,
+                        call_purpose=purpose,
+                        fallback_from="vllm",
                     )
                 raise
 
@@ -112,6 +187,8 @@ class LLMClientMixin:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 json_mode=json_mode,
+                call_purpose=purpose,
+                fallback_from="vllm",
             )
         if provider in {"vllm", "vllm_only"}:
             raise RuntimeError("vLLM is not available for the requested review pass.")
@@ -121,6 +198,7 @@ class LLMClientMixin:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 json_mode=json_mode,
+                call_purpose=purpose,
             )
         return ""
 
@@ -144,8 +222,10 @@ class LLMClientMixin:
         max_tokens: int,
         temperature: float,
         json_mode: bool = False,
+        call_purpose: str | None = None,
+        fallback_from: str | None = None,
     ) -> str:
-        use_vertex = GCP_VERTEX_AI_ENABLE and GCP_PROJECT_ID
+        use_vertex = LLM_CONFIG.vertex_enabled and LLM_CONFIG.gcp_project_id
         if not use_vertex and not self.gemini_available:
             raise RuntimeError("Gemini fallback is not configured.")
         prompt_text = self._messages_to_gemini_text(messages)
@@ -160,15 +240,16 @@ class LLMClientMixin:
                 raise RuntimeError("Vertex AI enabled but failed to obtain access token.")
             headers["Authorization"] = f"Bearer {token}"
             url = (
-                f"https://{GCP_REGION}-aiplatform.googleapis.com/v1/"
-                f"projects/{GCP_PROJECT_ID}/locations/{GCP_REGION}/publishers/google/models/{self.gemini_model}:generateContent"
+                f"https://{LLM_CONFIG.gcp_region}-aiplatform.googleapis.com/v1/"
+                f"projects/{LLM_CONFIG.gcp_project_id}/locations/{LLM_CONFIG.gcp_region}/publishers/google/models/{self.gemini_model}:generateContent"
             )
         else:
+            headers["x-goog-api-key"] = self.gemini_api_key
             url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{self.gemini_model}:generateContent?key={self.gemini_api_key}"
+                f"{self.gemini_model}:generateContent"
             )
-        timeout_cfg = httpx.Timeout(float(GEMINI_TIMEOUT_SEC), connect=25.0)
+        timeout_cfg = httpx.Timeout(float(LLM_CONFIG.gemini_timeout_sec), connect=25.0)
         
         # Tăng giới hạn token cho dự phòng Gemini để ngăn chặn việc bị cắt cụt văn bản
         max_output_tokens = max(2048, int(max_tokens * 1.5))
@@ -193,10 +274,26 @@ class LLMClientMixin:
             payload["generationConfig"]["thinkingConfig"] = {
                 "thinkingBudget": 0
             }
-        async with httpx.AsyncClient(timeout=timeout_cfg) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        purpose = call_purpose or infer_call_purpose()
+        attempt_started = monotonic_start()
+        try:
+            async with httpx.AsyncClient(timeout=timeout_cfg) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            record_llm_call(
+                self, purpose=purpose, provider="vertex" if use_vertex else "gemini",
+                model=self.gemini_model, started_at=attempt_started, status="success",
+                max_tokens=max_tokens, json_mode=json_mode, fallback_from=fallback_from,
+            )
+        except Exception as error:
+            record_llm_call(
+                self, purpose=purpose, provider="vertex" if use_vertex else "gemini",
+                model=self.gemini_model, started_at=attempt_started, status="error",
+                max_tokens=max_tokens, json_mode=json_mode, error=error,
+                fallback_from=fallback_from,
+            )
+            raise
         candidates = data.get("candidates") or []
         if not candidates:
             return ""

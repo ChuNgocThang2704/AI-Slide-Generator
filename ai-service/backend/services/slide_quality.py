@@ -10,6 +10,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from services.content.json_utils import parse_json_response
+from services.grounding_policy import policy_for_extractor
 
 
 _VISUAL_VALUES = {"none", "image", "chart", "table"}
@@ -160,12 +161,14 @@ async def improve_deck_source_grounding(
         getattr(content_extractor, "_focused_source_content", "") or ""
     )
     source_excerpt = (focused_source or source)[:12000]
+    grounding_policy = policy_for_extractor(content_extractor, focused_source or source)
     messages = [
         {
             "role": "system",
             "content": (
                 "You are a strict source-grounded presentation editor.\n"
                 "Revise the slide deck only to improve fidelity to the source and professional slide quality.\n"
+                f"{grounding_policy.instruction_block()}\n"
                 "Rules:\n"
                 f"- Keep EXACTLY {expected} slides and keep the same JSON schema.\n"
                 "- Treat explicit user-requested topics, order, visual types, table columns/rows, and chart series as mandatory requirements.\n"

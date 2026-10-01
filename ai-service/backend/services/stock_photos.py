@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Callable, Awaitable
 
+import os
 import httpx
 
 import io
@@ -191,9 +192,15 @@ async def fetch_external_image(
     # Giới hạn ở 5 truy vấn hàng đầu để đảm bảo nhanh và hoạt động ổn định
     query_list = query_list[:5]
 
+    # Each judged candidate is one vision call (5-10 s); a slide whose first few photos are all
+    # off-topic will not get a better one from the 25th, so stop and let the slide go without.
+    judge_budget = int(os.getenv("STOCK_MAX_JUDGED_PER_SLIDE", "6"))
+    judged = 0
     for provider in providers:
         provider_l = str(provider or "").strip().lower()
         for query in query_list:
+            if vlm_validate_fn is not None and judged >= judge_budget:
+                return None
             candidates: List[Dict[str, Any]] = []
             if provider_l == "wikimedia":
                 candidates = await _search_wikimedia(client, query)
@@ -210,6 +217,9 @@ async def fetch_external_image(
                 
                 # Kiểm tra gọi lại (callback) độ liên quan/an toàn của VLM nếu được cung cấp
                 if vlm_validate_fn is not None:
+                    if judged >= judge_budget:
+                        return None
+                    judged += 1
                     is_valid = await vlm_validate_fn(downloaded["bytes"], meta)
                     if not is_valid:
                         continue

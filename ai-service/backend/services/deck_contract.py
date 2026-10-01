@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from services.deck_coherence import (
@@ -10,6 +11,10 @@ from services.deck_coherence import (
     improve_deck_coherence,
     improve_locked_outline_deck,
 )
+from config_groups import GENERATION_CONFIG
+from services.duplicate_content import detect_duplicate_content
+from services.cover_quality import normalize_cover
+from services.source_faithfulness import enforce_source_faithfulness
 from services.lecture_quality import (
     attach_source_page_provenance,
     enforce_instructional_requirements,
@@ -20,11 +25,39 @@ from services.lecture_quality import (
 from services.content.json_utils import parse_json_response
 from services.plan_limits import enforce_plan_slide_limit
 from services.slide_text_quality import (
+    deck_needs_speaker_notes_review,
     improve_final_slide_quality,
     improve_speaker_notes_quality,
 )
 from services.presentation_mode import lock_presentation_mode
 from services.technical_quality import repair_technical_content, validate_technical_content
+from services.quality_pass_telemetry import run_measured_deck_pass
+
+
+@dataclass(frozen=True)
+class FinalizationPolicy:
+    name: str
+    coherence_pass: str
+    coverage_pass: str
+    coverage_max_passes: int
+    strict_pre_review_count: bool
+
+
+LEGACY_FINALIZATION_POLICY = FinalizationPolicy(
+    name="legacy",
+    coherence_pass="coherence_review",
+    coverage_pass="instruction_coverage",
+    coverage_max_passes=2,
+    strict_pre_review_count=False,
+)
+
+LOCKED_FINALIZATION_POLICY = FinalizationPolicy(
+    name="locked_outline",
+    coherence_pass="locked_coherence_review",
+    coverage_pass="locked_instruction_coverage",
+    coverage_max_passes=1,
+    strict_pre_review_count=True,
+)
 
 
 def _stable_slide_id(slide: Dict[str, Any], index: int, seen: set[str]) -> str:
@@ -97,6 +130,7 @@ def _boundary_visual_issues(deck: Dict[str, Any]) -> list[Dict[str, Any]]:
                 "index": index,
                 "type": "role_mismatch",
                 "severity": "high",
+                "target_fields": ["bullets", "notes"],
                 "instruction": (
                     "Intro and closing slides cannot use table or chart objects because their boundary layout does "
                     "not render those objects. Rewrite every required item as complete, concise visible bullets. "
@@ -140,6 +174,66 @@ def _flatten_boundary_visuals(deck: Dict[str, Any]) -> Dict[str, Any]:
     return deck
 
 
+def _collect_precomputed_quality_issues(deck: Dict[str, Any]) -> tuple[Dict[str, Any], list[Dict[str, Any]]]:
+    normalized, issues = validate_technical_content(deck)
+    issues.extend(_boundary_visual_issues(normalized))
+    issues.extend(normalized.get("_grounding_warnings") or [])
+    issues.extend(detect_duplicate_content(
+        normalized,
+        model_name=GENERATION_CONFIG.embedding_model,
+        semantic_enabled=GENERATION_CONFIG.embedding_enabled,
+    ))
+    return normalized, issues
+
+
+async def _post_review_cleanup(
+    content_extractor,
+    deck: Dict[str, Any],
+    *,
+    raw_content: str,
+    mode_decision: Any,
+    policy: FinalizationPolicy,
+) -> Dict[str, Any]:
+    deck = lock_presentation_mode(deck, mode_decision)
+    deck = attach_source_page_provenance(deck, raw_content or "")
+    deck, remaining = await repair_technical_content(
+        content_extractor, deck, source_text=raw_content or ""
+    )
+    deck = _flatten_boundary_visuals(deck)
+    if remaining:
+        print(f"[deck_contract] unresolved {policy.name} technical issues={len(remaining)}")
+    return deck
+
+
+def _lock_final_deck(
+    deck: Dict[str, Any],
+    *,
+    desired_count: int,
+    policy: FinalizationPolicy,
+) -> Dict[str, Any]:
+    deck = normalize_cover(deck)
+    deck = assign_stable_slide_ids(deck)
+    signature = deck_structure_signature(deck)
+    slides = deck.get("slides") or []
+    if not signature:
+        raise RuntimeError(f"{policy.name} finalizer cannot lock an empty deck")
+    if len(signature) != desired_count:
+        raise RuntimeError(
+            f"{policy.name} finalizer count mismatch: expected={desired_count}, actual={len(signature)}"
+        )
+    if len(signature) != len(set(signature)):
+        raise RuntimeError(f"{policy.name} finalizer produced duplicate slide IDs")
+    first_layout = str((slides[0] or {}).get("layout") or "").strip().lower()
+    last_layout = str((slides[-1] or {}).get("layout") or "").strip().lower()
+    if first_layout not in {"intro", "title"}:
+        raise RuntimeError(f"{policy.name} finalizer requires an intro slide")
+    if last_layout not in {"thankyou", "thank_you"}:
+        raise RuntimeError(f"{policy.name} finalizer requires a closing slide")
+    deck["_structure_locked"] = True
+    deck["_structure_signature"] = list(signature)
+    return deck
+
+
 async def finalize_deck_for_visuals(
     content_extractor,
     structured: Dict[str, Any],
@@ -152,6 +246,7 @@ async def finalize_deck_for_visuals(
 ) -> Dict[str, Any]:
     """Run the final structure-changing passes, then lock slide order and identity."""
     deck = copy.deepcopy(structured or {})
+    policy = LEGACY_FINALIZATION_POLICY
     mode_decision = getattr(content_extractor, "_mode_decision", None)
     locked_mode = str(getattr(content_extractor, "_presentation_mode", "") or "")
     deck = lock_presentation_mode(deck, mode_decision)
@@ -167,17 +262,38 @@ async def finalize_deck_for_visuals(
             plan=plan,
             target_slides=target_slides,
         )
-        return await improve_speaker_notes_quality(
+        deck = await run_measured_deck_pass(
             content_extractor,
+            "locked_speaker_notes_quality",
             deck,
-            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            lambda current: improve_speaker_notes_quality(
+                content_extractor,
+                current,
+                source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+            ),
+            skip_reason=(
+                "all_speaker_notes_pass_deterministic_checks"
+                if not deck_needs_speaker_notes_review(deck)
+                else ""
+            ),
+        )
+        deck = await enforce_source_faithfulness(content_extractor, deck, raw_content or "")
+        return _lock_final_deck(
+            deck,
+            desired_count=int(target_slides) if target_slides else len(deck.get("slides") or []),
+            policy=LOCKED_FINALIZATION_POLICY,
         )
 
-    deck = await improve_final_slide_quality(
+    deck = await run_measured_deck_pass(
         content_extractor,
+        "final_slide_quality",
         deck,
-        task_id=task_id,
-        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        lambda current: improve_final_slide_quality(
+            content_extractor,
+            current,
+            task_id=task_id,
+            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        ),
     )
     # Coherence review needs the reliable mode, roles, objectives and source
     # provenance supplied by lecture enrichment. Running it afterwards also
@@ -188,13 +304,17 @@ async def finalize_deck_for_visuals(
     )
     deck = attach_source_page_provenance(deck, raw_content or "")
     deck = enforce_plan_slide_limit(deck, plan)
-    deck, technical_issues = validate_technical_content(deck)
-    technical_issues.extend(_boundary_visual_issues(deck))
-    deck = await improve_deck_coherence(
+    deck, technical_issues = _collect_precomputed_quality_issues(deck)
+    deck = await run_measured_deck_pass(
         content_extractor,
+        policy.coherence_pass,
         deck,
-        task_id=task_id,
-        precomputed_issues=technical_issues,
+        lambda current: improve_deck_coherence(
+            content_extractor,
+            current,
+            task_id=task_id,
+            precomputed_issues=technical_issues,
+        ),
     )
     # A review pass may accidentally remove a requested practice/activity role.
     # Re-apply the pedagogical contract before locking the structure.
@@ -212,8 +332,18 @@ async def finalize_deck_for_visuals(
     if len(deck.get("slides") or []) != desired_count:
         deck = await content_extractor._force_slide_count_exact(deck, desired_count)
     deck = lock_presentation_mode(deck, mode_decision)
-    deck = await enforce_user_instruction_coverage(
-        content_extractor, deck, max_passes=2
+    deck = await run_measured_deck_pass(
+        content_extractor,
+        policy.coverage_pass,
+        deck,
+        lambda current: enforce_user_instruction_coverage(
+            content_extractor, current, max_passes=policy.coverage_max_passes
+        ),
+        skip_reason=(
+            "no_user_instruction_to_audit"
+            if not str(user_instruction or "").strip()
+            else ""
+        ),
     )
     deck = await _repair_instructional_requirements(
         content_extractor, deck, raw_content or "", user_instruction or ""
@@ -222,41 +352,30 @@ async def finalize_deck_for_visuals(
     deck = order_lecture_assessment_slides(deck)
     # Count repair and boundary normalization may create replacement slides.
     # Reattach provenance only after the final slide set is stable.
-    deck = attach_source_page_provenance(deck, raw_content or "")
-    deck, remaining_technical = await repair_technical_content(
-        content_extractor, deck, source_text=raw_content or ""
-    )
-    deck = _flatten_boundary_visuals(deck)
-    if remaining_technical:
-        print(f"[deck_contract] unresolved technical issues={len(remaining_technical)}")
-    deck = await improve_speaker_notes_quality(
+    deck = await _post_review_cleanup(
         content_extractor,
         deck,
-        source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        raw_content=raw_content,
+        mode_decision=mode_decision,
+        policy=policy,
     )
-    deck = assign_stable_slide_ids(deck)
-
-    signature = deck_structure_signature(deck)
-    if len(signature) != len(set(signature)):
-        raise RuntimeError("Deck contains duplicate slide_id values")
-    if not signature:
-        raise RuntimeError("Cannot lock an empty deck")
-    if target_slides and len(signature) != int(target_slides):
-        raise RuntimeError(
-            f"Locked deck count mismatch: expected={int(target_slides)}, actual={len(signature)}"
-        )
-
-    slides = deck.get("slides") or []
-    first_layout = str((slides[0] or {}).get("layout") or "").strip().lower()
-    last_layout = str((slides[-1] or {}).get("layout") or "").strip().lower()
-    if first_layout not in {"intro", "title"}:
-        raise RuntimeError("Locked deck must begin with an intro slide")
-    if last_layout not in {"thankyou", "thank_you"}:
-        raise RuntimeError("Locked deck must end with a closing slide")
-
-    deck["_structure_locked"] = True
-    deck["_structure_signature"] = list(signature)
-    return deck
+    deck = await run_measured_deck_pass(
+        content_extractor,
+        "speaker_notes_quality",
+        deck,
+        lambda current: improve_speaker_notes_quality(
+            content_extractor,
+            current,
+            source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
+        ),
+        skip_reason=(
+            "all_speaker_notes_pass_deterministic_checks"
+            if not deck_needs_speaker_notes_review(deck)
+            else ""
+        ),
+    )
+    deck = await enforce_source_faithfulness(content_extractor, deck, raw_content or "")
+    return _lock_final_deck(deck, desired_count=desired_count, policy=policy)
 
 
 async def _finalize_locked_outline_deck(
@@ -270,10 +389,11 @@ async def _finalize_locked_outline_deck(
     target_slides: Optional[int],
 ) -> Dict[str, Any]:
     """Finalize an outline-first deck without allowing late structural rewrites."""
+    policy = LOCKED_FINALIZATION_POLICY
     mode_decision = getattr(content_extractor, "_mode_decision", None)
     deck = enforce_plan_slide_limit(copy.deepcopy(deck), plan)
     desired_count = int(target_slides) if target_slides else len(deck.get("slides") or [])
-    if len(deck.get("slides") or []) != desired_count:
+    if policy.strict_pre_review_count and len(deck.get("slides") or []) != desired_count:
         raise RuntimeError(
             f"Locked outline count changed before review: expected={desired_count}, "
             f"actual={len(deck.get('slides') or [])}"
@@ -283,44 +403,45 @@ async def _finalize_locked_outline_deck(
     slides[-1]["layout"] = "thankyou"
     deck = lock_presentation_mode(deck, mode_decision)
     deck = attach_source_page_provenance(deck, raw_content or "")
-    deck, technical_issues = validate_technical_content(deck)
-    technical_issues.extend(_boundary_visual_issues(deck))
-    deck = await improve_locked_outline_deck(
+    deck, technical_issues = _collect_precomputed_quality_issues(deck)
+    deck = await run_measured_deck_pass(
         content_extractor,
+        policy.coherence_pass,
         deck,
-        task_id=task_id,
-        precomputed_issues=technical_issues,
+        lambda current: improve_locked_outline_deck(
+            content_extractor,
+            current,
+            task_id=task_id,
+            precomputed_issues=technical_issues,
+        ),
     )
-    deck = await enforce_user_instruction_coverage(
-        content_extractor, deck, max_passes=1
+    deck = await run_measured_deck_pass(
+        content_extractor,
+        policy.coverage_pass,
+        deck,
+        lambda current: enforce_user_instruction_coverage(
+            content_extractor, current, max_passes=policy.coverage_max_passes
+        ),
+        skip_reason=(
+            "no_user_instruction_to_audit"
+            if not str(user_instruction or "").strip()
+            else ""
+        ),
     )
     # The single review may edit prose, but never count/order/layout.
     if len(deck.get("slides") or []) != desired_count:
         raise RuntimeError("Coherence review changed the locked outline structure")
-    deck = lock_presentation_mode(deck, mode_decision)
-    deck = attach_source_page_provenance(deck, raw_content or "")
-    deck, remaining_technical = await repair_technical_content(
-        content_extractor, deck, source_text=raw_content or ""
+    deck = await _post_review_cleanup(
+        content_extractor,
+        deck,
+        raw_content=raw_content,
+        mode_decision=mode_decision,
+        policy=policy,
     )
-    deck = _flatten_boundary_visuals(deck)
-    if remaining_technical:
-        print(f"[deck_contract] unresolved locked technical issues={len(remaining_technical)}")
     slides = deck.get("slides") or []
     slides[0]["layout"] = "intro"
     slides[-1]["layout"] = "thankyou"
-    deck = assign_stable_slide_ids(deck)
-    signature = deck_structure_signature(deck)
-    slides = deck.get("slides") or []
-    if len(signature) != desired_count or len(signature) != len(set(signature)):
-        raise RuntimeError("Locked outline produced an invalid slide identity set")
-    first_layout = str((slides[0] or {}).get("layout") or "").strip().lower()
-    last_layout = str((slides[-1] or {}).get("layout") or "").strip().lower()
-    if first_layout not in {"intro", "title"}:
-        raise RuntimeError("Locked outline must begin with an intro slide")
-    if last_layout not in {"thankyou", "thank_you"}:
-        raise RuntimeError("Locked outline must end with a closing slide")
-    deck["_structure_locked"] = True
-    deck["_structure_signature"] = list(signature)
+    deck = _lock_final_deck(deck, desired_count=desired_count, policy=policy)
     print("[deck_contract] outline-first deck finalized with one contract-only review")
     return deck
 

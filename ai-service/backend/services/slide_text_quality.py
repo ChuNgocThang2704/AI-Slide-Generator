@@ -237,6 +237,18 @@ def _sanitize_inline_markup(text: str) -> str:
     return t.strip()
 
 
+def _collapse_repeated_label(text: str) -> str:
+    """"Chiến lược Pooling - Chiến lược pooling: ..." -> "Chiến lược pooling: ..." (label said twice)."""
+    head, sep, tail = str(text or "").partition(" - ")
+    if not sep:
+        return text
+    label = tail.split(":", 1)[0].strip().lower()
+    head_key = head.strip().lower()
+    if head_key and label and (head_key == label or head_key in label or label in head_key) and ":" in tail:
+        return tail.strip()
+    return text
+
+
 def _sanitize_structured_text(structured: Dict[str, Any]) -> Dict[str, Any]:
     """Áp dụng quy tắc văn bản thuần túy cho mọi trường văn bản hiển thị với người dùng."""
     if not isinstance(structured, dict):
@@ -255,7 +267,7 @@ def _sanitize_structured_text(structured: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(bullets, str):
             clean_bullets = [_sanitize_inline_markup(bullets)]
         elif isinstance(bullets, list):
-            clean_bullets = [_sanitize_inline_markup(b) for b in bullets if _sanitize_inline_markup(b)]
+            clean_bullets = [_collapse_repeated_label(_sanitize_inline_markup(b)) for b in bullets if _sanitize_inline_markup(b)]
         else:
             clean_bullets = []
         if clean_bullets:
@@ -903,6 +915,14 @@ async def improve_speaker_notes_quality(
     if changed:
         print(f"[slide_text_quality] downstream speaker notes refined slides: {changed}")
     return _sanitize_structured_text(improved)
+
+
+def deck_needs_speaker_notes_review(structured: Dict[str, Any]) -> bool:
+    """Expose the deterministic gate already used by the notes reviewer."""
+    return any(
+        isinstance(slide, dict) and bool(_speaker_note_issues(slide, idx=index))
+        for index, slide in enumerate((structured or {}).get("slides") or [])
+    )
 
 
 async def improve_final_slide_quality(

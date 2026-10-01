@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import hashlib
+import time
 import re
 import unicodedata
 from pathlib import Path
@@ -53,6 +54,8 @@ from .validation import (
 )
 from .providers import (
     _try_secondary_ai_image_fallback,
+    _try_gateway_image,
+    gateway_images_enabled,
     _try_stock_photo_fallback,
 )
 from services.source_visuals import (
@@ -61,6 +64,8 @@ from services.source_visuals import (
     match_source_visuals_with_ai,
 )
 
+
+_IMAGE_SERVER_DOWN_UNTIL = [0.0]  # monotonic deadline; set when the self-hosted image server refuses connections
 
 def _image_fingerprint(path: str) -> Optional[tuple[int, tuple[float, float, float]]]:
     try:
@@ -229,6 +234,38 @@ def _allows_generated_factual_fallback(semantic: Dict[str, Any]) -> bool:
         "requires_scientific_accuracy",
     ))
 
+
+def _slug_tokens(text: str) -> set:
+    return {t for t in re.findall(r"[a-z]{4,}", (text or "").lower())}
+
+
+def _unverified_stock_verdict(meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Verdict for a stock photo when the VLM judge itself could not run (quota, outage, gateway down).
+
+    "Could not check" is not "wrong", but a search hit can still be off-topic (a phone-navigation
+    photo for "why we need RAG"). Without the judge the only evidence is the photo's own page
+    slug (Pexels/Wikimedia name the subject in the URL), so it is accepted only when that slug
+    shares at least two words with the search query; otherwise it is rejected like a failed check.
+    """
+    meta = meta or {}
+    slug = str(meta.get("page_url") or "").rstrip("/").rsplit("/", 1)[-1]
+    overlap = _slug_tokens(slug.replace("-", " ").replace("_", " ")) & _slug_tokens(str(meta.get("query") or ""))
+    matched = len(overlap) >= 2
+    return {
+        "relevance_score": 0.5 if matched else 0.2,
+        "artifact_score": 0.0,
+        "style_match_score": 0.5,
+        "reasons": [
+            "VLM judge unavailable; "
+            + (f"accepted unverified (page slug matches query: {sorted(overlap)})" if matched
+               else "rejected unverified (page slug does not match the slide's query)")
+        ],
+        "pass": matched,
+        "severe_failure": False,
+        "unverified": True,
+    }
+
+
 async def _process_single_slide(
     idx: int,
     client: httpx.AsyncClient,
@@ -367,14 +404,7 @@ async def _process_single_slide(
                 min_relevance=0.80 if force_requested else 0.45,
                 is_stock_photo=True,
             )
-            vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
-                "relevance_score": 0.0,
-                "artifact_score": 1.0,
-                "style_match_score": 0.0,
-                "reasons": ["VLM judge unavailable; candidate left unverified"],
-                "pass": False,
-                "severe_failure": False,
-            }
+            vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else _unverified_stock_verdict(meta)
             meta["vlm_judge"] = vlm_judge_dict
             tried_candidates.append({
                 "type": "external",
@@ -396,10 +426,16 @@ async def _process_single_slide(
             })
             return bool(vlm_judge_dict.get("pass"))
 
-        external = await _try_stock_photo_fallback(
-            client, slide, semantic, content_type, risk,
-            vlm_validate_fn=_external_vlm_validate_free,
-        )
+        external = None
+        if gateway_images_enabled("free"):
+            generated = await _try_gateway_image(client, prompt=full_prompt)
+            if generated:
+                external = {"bytes": generated, "extension": ".jpg", "source": "ai_gateway", "query": None}
+        if not external:
+            external = await _try_stock_photo_fallback(
+                client, slide, semantic, content_type, risk,
+                vlm_validate_fn=_external_vlm_validate_free,
+            )
         if not external:
             external_candidates = [c for c in tried_candidates if c.get("type") == "external"]
             if external_candidates:
@@ -572,14 +608,7 @@ async def _process_single_slide(
                 min_relevance=0.72,
                 is_stock_photo=True,
             )
-            vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
-                "relevance_score": 0.0,
-                "artifact_score": 1.0,
-                "style_match_score": 0.0,
-                "reasons": ["VLM judge unavailable; candidate left unverified"],
-                "pass": False,
-                "severe_failure": False,
-            }
+            vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else _unverified_stock_verdict(meta)
             meta["vlm_judge"] = vlm_judge_dict
             tried_candidates.append({
                 "type": "external_priority",
@@ -676,6 +705,9 @@ async def _process_single_slide(
         for attempt_idx, plan in enumerate(attempts_plan):
             if saved:
                 break
+            if time.monotonic() < _IMAGE_SERVER_DOWN_UNTIL[0]:
+                last_error = "image server unreachable (paused)"
+                break
             if should_stop is not None and await should_stop():
                 return None, None
             payload = dict(base_payload)
@@ -698,6 +730,9 @@ async def _process_single_slide(
                 attempt_record["status"] = "exception"
                 attempt_record["error"] = str(e)
                 last_error = str(e)
+                if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+                    _IMAGE_SERVER_DOWN_UNTIL[0] = time.monotonic() + 600.0
+                    print("[slide_images] image server unreachable -> skipping it for 10 minutes")
                 debug_record["attempts"].append(attempt_record)
                 if attempt_idx == 0:
                     print(f"[slide_images] slide {idx} primary failed: {e} -> retry next candidate")
@@ -906,7 +941,8 @@ async def _process_single_slide(
                             "ai_fallback_provider": "secondary_generate_api"
                         }
                     })
-                vlm_pass = bool(vlm_judge and vlm_judge.get("pass"))
+                # Judge unavailable (quota/outage) is "could not check", not "failed the check".
+                vlm_pass = vlm_judge is None or bool(vlm_judge.get("pass"))
                 if (clip_score is None or clip_score >= float(IMAGE_CLIP_MIN_SCORE)) and vlm_pass:
                     dest = IMAGE_DIR / f"{task_id}_{idx}_ai_fallback.png"
                     dest.write_bytes(secondary_raw)
@@ -958,14 +994,7 @@ async def _process_single_slide(
                 min_relevance=0.80 if force_requested else 0.45,
                 is_stock_photo=True,
             )
-            vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else {
-                "relevance_score": 0.0,
-                "artifact_score": 1.0,
-                "style_match_score": 0.0,
-                "reasons": ["VLM judge unavailable; candidate left unverified"],
-                "pass": False,
-                "severe_failure": False,
-            }
+            vlm_judge_dict = vlm_judge_res if vlm_judge_res is not None else _unverified_stock_verdict(meta)
             meta["vlm_judge"] = vlm_judge_dict
             tried_candidates.append({
                 "type": "external",

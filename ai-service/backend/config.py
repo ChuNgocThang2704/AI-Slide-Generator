@@ -238,6 +238,9 @@ IMAGE_CLIP_SCORE_TIMEOUT_SEC = float(os.getenv("IMAGE_CLIP_SCORE_TIMEOUT_SEC", "
 IMAGE_VLM_JUDGE_ENABLE = os.getenv("IMAGE_VLM_JUDGE_ENABLE", "true").lower() in ("1", "true", "yes")
 # Default to GEMINI_MODEL so text/chart fallback and image judge stay aligned.
 IMAGE_VLM_JUDGE_MODEL = os.getenv("IMAGE_VLM_JUDGE_MODEL", LLM_MODEL).strip()
+# A stronger judge for borderline verdicts. It is asked through the same gateway as the first
+# pass, so the escalation does not depend on a direct Gemini key being usable.
+IMAGE_VLM_JUDGE_STRONG_MODEL = os.getenv("IMAGE_VLM_JUDGE_STRONG_MODEL", "").strip()
 IMAGE_VLM_JUDGE_MIN_RELEVANCE = float(os.getenv("IMAGE_VLM_JUDGE_MIN_RELEVANCE", "0.60"))
 IMAGE_VLM_JUDGE_MAX_ARTIFACT = float(os.getenv("IMAGE_VLM_JUDGE_MAX_ARTIFACT", "0.45"))
 IMAGE_VLM_JUDGE_MIN_STYLE = float(os.getenv("IMAGE_VLM_JUDGE_MIN_STYLE", "0.75"))
