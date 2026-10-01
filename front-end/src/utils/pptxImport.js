@@ -44,7 +44,86 @@ function mapTableElement(element) {
   };
 }
 
-const DECOR_BUDGET = 40000;
+const DECOR_BUDGET = 55000;
+
+// Whole pixels (a tenth for the small ones) are all a drawing needs; the digits saved are what lets
+// a diagram of a hundred lines fit in the budget.
+const tidy = (value) => (Math.abs(value) < 20 ? Math.round(value * 10) / 10 : Math.round(value));
+// A straight-segment path with the points that add nothing (Ramer-Douglas-Peucker) taken out.
+function simplifyPath(d, tolerance) {
+  if (typeof d !== 'string' || d.length < 120 || /[^MLZ0-9.\s-]/.test(d)) return d;
+  const commands = d.match(/[MLZ][^MLZ]*/g) || [];
+  const out = [];
+  let run = [];
+  const flush = (closed) => {
+    if (run.length > 2) {
+      const keep = new Array(run.length).fill(false);
+      keep[0] = true; keep[run.length - 1] = true;
+      // A loop starts where it ends, so it is cut at its farthest point and both halves simplified.
+      const [sx, sy] = run[0];
+      const loop = run[run.length - 1][0] === sx && run[run.length - 1][1] === sy;
+      let far = run.length - 1;
+      if (loop) {
+        let best = -1;
+        run.forEach(([x, y], i) => { const d = Math.hypot(x - sx, y - sy); if (d > best) { best = d; far = i; } });
+        keep[far] = true;
+      }
+      const stack = loop ? [[0, far], [far, run.length - 1]] : [[0, run.length - 1]];
+      while (stack.length) {
+        const [a, b] = stack.pop();
+        let worst = 0; let index = -1;
+        for (let i = a + 1; i < b; i += 1) {
+          const [px, py] = run[i]; const [ax, ay] = run[a]; const [bx, by] = run[b];
+          const length = Math.hypot(bx - ax, by - ay) || 1;
+          const distance = Math.abs((by - ay) * px - (bx - ax) * py + bx * ay - by * ax) / length;
+          if (distance > worst) { worst = distance; index = i; }
+        }
+        if (worst > tolerance && index > 0) { keep[index] = true; stack.push([a, index], [index, b]); }
+      }
+      run = run.filter((_, i) => keep[i]);
+    }
+    run.forEach(([x, y], i) => out.push(`${i === 0 ? 'M' : 'L'} ${x} ${y}`));
+    if (closed) out.push('Z');
+    run = [];
+  };
+  commands.forEach((command) => {
+    const kind = command[0];
+    if (kind === 'Z') { flush(true); return; }
+    const nums = command.slice(1).trim().split(/\s+/).map(Number);
+    if (kind === 'M') flush(false);
+    run.push([nums[0], nums[1]]);
+  });
+  flush(false);
+  return out.join(' ');
+}
+
+// A closed run of points that all lie on the ellipse filling the box is an ellipse (what a
+// drawing program exports a circle or an oval as), and the editor has a real one.
+function isEllipsePath(d) {
+  if (typeof d !== 'string' || /[^MLZ0-9.\s-]/.test(d)) return false;
+  const points = (d.match(/-?\d+(?:\.\d+)?\s+-?\d+(?:\.\d+)?/g) || []).map((pair) => pair.split(/\s+/).map(Number));
+  if (points.length < 12) return false;
+  const [firstX, firstY] = points[0];
+  const [lastX, lastY] = points[points.length - 1];
+  if (Math.hypot(firstX - lastX, firstY - lastY) > 3) return false;
+  return points.every(([x, y]) => Math.abs(Math.hypot((x - 50) / 50, (y - 50) / 50) - 1) < 0.06);
+}
+
+const compactArt = (item) => {
+  const out = { ...item };
+  ['x', 'y', 'width', 'height', 'rotation'].forEach((key) => { if (typeof out[key] === 'number') out[key] = Math.round(out[key] * 10) / 10; });
+  if (typeof out.borderWidth === 'number') out.borderWidth = tidy(out.borderWidth);
+  if (out.opacity === 1) delete out.opacity;
+  if (out.style?.shape === 'path' && isEllipsePath(out.style.path)) {
+    out.style = { ...out.style, shape: 'ellipse' };
+    delete out.style.path;
+  }
+  const tolerance = 0.8 * 100 / Math.max(1, out.width || 1, out.height || 1);
+  if (typeof out.path === 'string') out.path = simplifyPath(out.path, tolerance);
+  if (typeof out.style?.path === 'string') out.style = { ...out.style, path: simplifyPath(out.style.path, tolerance) };
+  if (typeof out.id === 'string') out.id = out.id.replace(/^orn-\d+-/, 'o');
+  return out;
+};
 
 export function slidesFromImportedManifest(manifest) {
   const layouts = Array.isArray(manifest?.layouts) ? manifest.layouts : [];
@@ -61,7 +140,7 @@ export function slidesFromImportedManifest(manifest) {
       // A slide's rich text is stored in a 64 KB column; a drawing of hundreds of shapes is cut
       // at that budget (the rest is the least important: they come last) rather than refused.
       let budget = DECOR_BUDGET;
-      richText._decor = art.decor.filter((item) => (budget -= JSON.stringify(item).length) >= 0);
+      richText._decor = art.decor.map(compactArt).filter((item) => (budget -= JSON.stringify(item).length) >= 0);
       if (art.pageColor) richText._tplBg = art.pageColor;
       if (art.safe) richText._safe = art.safe;
     }

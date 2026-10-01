@@ -23,6 +23,31 @@ export const PreserveClassAttribute = Extension.create({
           },
         },
       },
+      {
+        // The room a block keeps around it (a PPTX paragraph's indent and the space before and
+        // after it), as the CSS it was opened with.
+        types: ['paragraph', 'heading', 'listItem'],
+        attributes: {
+          blockSpacing: {
+            default: null,
+            parseHTML: (element) => {
+              const spacing = {};
+              ['marginLeft', 'marginTop', 'marginBottom', 'textIndent'].forEach((key) => {
+                if (element.style[key]) spacing[key] = element.style[key];
+              });
+              return Object.keys(spacing).length ? spacing : null;
+            },
+            renderHTML: (attributes) => {
+              const spacing = attributes.blockSpacing;
+              if (!spacing) return {};
+              const css = Object.entries(spacing)
+                .map(([key, value]) => `${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}:${value}`)
+                .join(';');
+              return css ? { style: css } : {};
+            },
+          },
+        },
+      },
     ];
   },
 });

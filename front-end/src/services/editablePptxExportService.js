@@ -1,4 +1,5 @@
 import PptxGenJS from 'pptxgenjs';
+import JSZip from 'jszip';
 import { projectService } from './documentService';
 import { createElementsFromSlide } from '../utils/slideElements';
 import { resolveShape } from '../utils/shapeLibrary';
@@ -82,38 +83,128 @@ function htmlText(value) {
   return (holder.innerText || holder.textContent || '').replace(/\u00a0/g, ' ').trim();
 }
 
-// One paragraph per top-level block: a plain paragraph, or each item of a bullet or numbered list.
-// Reading the whole box as one string used to glue consecutive paragraphs together
-// ("...thôngKhoa..."), because a detached element has no line breaks between its blocks.
+const BULLET_CODES = { 'bu-box': '2751', 'bu-arrow': '27A2', 'bu-circle': '25CB', 'bu-square': '25AA', 'bu-diamond': '2756', 'bu-check': '2713', 'bu-dash': '2013' };
+
+// A CSS colour (hex or rgb()) as the six hex digits PowerPoint wants, or null.
+function cssHex(value) {
+  const text = String(value || '').trim();
+  const hex = text.match(/^#([0-9a-f]{6})$/i);
+  if (hex) return hex[1].toUpperCase();
+  const short = text.match(/^#([0-9a-f]{3})$/i);
+  if (short) return short[1].split('').map((c) => c + c).join('').toUpperCase();
+  const rgb = text.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+  if (rgb) return rgb.slice(1, 4).map((n) => Number(n).toString(16).padStart(2, '0')).join('').toUpperCase();
+  return null;
+}
+
+// What an inline element adds to the formatting of the text inside it.
+function inlineFormat(node, format) {
+  const next = { ...format };
+  const tag = node.tagName;
+  if (tag === 'STRONG' || tag === 'B') next.bold = true;
+  if (tag === 'EM' || tag === 'I') next.italic = true;
+  if (tag === 'U') next.underline = true;
+  const css = node.style;
+  if (css) {
+    if (css.color && cssHex(css.color)) next.color = cssHex(css.color);
+    if (css.fontSize && /px$/.test(css.fontSize)) next.fontSize = Math.max(5, parseFloat(css.fontSize));
+    if (css.fontFamily) next.fontFace = cleanFont(css.fontFamily);
+    if (css.letterSpacing && /px$/.test(css.letterSpacing)) next.charSpacing = parseFloat(css.letterSpacing);
+    if (css.fontWeight) next.bold = Number(css.fontWeight) >= 600 || css.fontWeight === 'bold';
+    if (css.fontStyle === 'italic') next.italic = true;
+    if ((css.textDecoration || '').includes('underline')) next.underline = true;
+  }
+  return next;
+}
+
+function inlineRuns(node, format, runs) {
+  node.childNodes.forEach((child) => {
+    if (child.nodeType === 3) {
+      const text = child.textContent.replace(/\u00a0/g, ' ').replace(/[\r\n]+/g, ' ');
+      if (text) runs.push({ text, format });
+    } else if (child.nodeType === 1) {
+      if (child.tagName === 'UL' || child.tagName === 'OL') return;
+      if (child.tagName === 'BR') runs.push({ text: '', format, lineBreak: true });
+      else inlineRuns(child, inlineFormat(child, format), runs);
+    }
+  });
+}
+
+// The text of a box as PowerPoint paragraphs: one per block, one per list item, nested lists as
+// levels with the bullet each list class stands for, and every run with its own formatting.
+// (Reading the box as one string glued paragraphs together, and pptxgenjs ignores `{ type: 'ul' }`.)
 function textRuns(value) {
   const holder = document.createElement('div');
   holder.innerHTML = String(value || '');
-  const blocks = [];
-  Array.from(holder.children).forEach((child) => {
-    if (child.tagName === 'UL' || child.tagName === 'OL') {
-      const ordered = child.tagName === 'OL';
-      Array.from(child.querySelectorAll('li')).forEach((item) => {
-        blocks.push({
-          text: (item.innerText || item.textContent || '').trim(),
-          // pptxgenjs only knows a bullet character ({ indent } or true) and { type: 'number' };
-          // the { type: 'ul' } this used to pass is ignored, so no list ever got its bullets.
-          bullet: ordered ? { type: 'number' } : { indent: 18 },
-        });
+  const paragraphs = [];
+  const addParagraph = (node, extra) => {
+    const runs = [];
+    inlineRuns(node, inlineFormat(node, {}), runs);
+    // A blank paragraph is a vertical gap in the file's text, so it stays, as a line holding a space.
+    if (!runs.some((run) => run.text.trim())) runs.splice(0, runs.length, { text: ' ', format: {} });
+    // A list item whose spacing needed a <p> of its own carries it there.
+    const styled = node.tagName === 'LI' && node.firstElementChild?.tagName === 'P' ? node.firstElementChild : node;
+    const css = styled.style || {};
+    paragraphs.push({
+      runs,
+      align: css.textAlign || node.style?.textAlign || '',
+      marginLeft: parseFloat(css.marginLeft) || 0,
+      spaceBefore: parseFloat(css.marginTop) || 0,
+      spaceAfter: parseFloat(css.marginBottom) || 0,
+      ...extra,
+    });
+  };
+  const walkList = (list, level) => {
+    const ordered = list.tagName === 'OL';
+    const code = BULLET_CODES[Array.from(list.classList).find((name) => BULLET_CODES[name])];
+    Array.from(list.children).forEach((item) => {
+      if (item.tagName !== 'LI') return;
+      addParagraph(item, {
+        level,
+        bullet: ordered ? { type: 'number' } : code ? { characterCode: code, indent: 22 } : { indent: 22 },
       });
-      return;
-    }
-    const text = (child.innerText || child.textContent || '').replace(/\u00a0/g, ' ').trim();
-    if (text) blocks.push({ text });
+      Array.from(item.children).forEach((nested) => {
+        if (nested.tagName === 'UL' || nested.tagName === 'OL') walkList(nested, level + 1);
+      });
+    });
+  };
+  Array.from(holder.children).forEach((child) => {
+    if (child.tagName === 'UL' || child.tagName === 'OL') walkList(child, 0);
+    else addParagraph(child, { level: 0 });
   });
-  if (!blocks.length) return htmlText(value);
-  if (blocks.length === 1 && !blocks[0].bullet) return blocks[0].text;
-  return blocks.map((block, index) => ({
-    text: block.text,
-    options: {
-      ...(block.bullet ? { bullet: block.bullet } : {}),
-      breakLine: index < blocks.length - 1,
-    },
-  }));
+  if (!paragraphs.length) return htmlText(value);
+
+  const out = [];
+  paragraphs.forEach((paragraph, index) => {
+    const last = index === paragraphs.length - 1;
+    paragraph.runs.forEach((run, runIndex) => {
+      const first = runIndex === 0;
+      const options = {
+        ...(run.format.bold ? { bold: true } : {}),
+        ...(run.format.italic ? { italic: true } : {}),
+        ...(run.format.underline ? { underline: true } : {}),
+        ...(run.format.color ? { color: run.format.color } : {}),
+        ...(run.format.fontSize ? { fontSize: run.format.fontSize } : {}),
+        ...(run.format.fontFace ? { fontFace: run.format.fontFace } : {}),
+        ...(run.format.charSpacing ? { charSpacing: run.format.charSpacing } : {}),
+        ...(['center', 'right', 'justify'].includes(paragraph.align) ? { align: paragraph.align } : {}),
+        // pptxgenjs has no left indent for plain text: a blank bullet with a hanging indent is one.
+        ...(first && (paragraph.bullet || paragraph.marginLeft > 2)
+          ? { bullet: paragraph.bullet || { characterCode: '0020', indent: Math.round(paragraph.marginLeft) } } : {}),
+        ...(first && paragraph.spaceBefore ? { paraSpaceBefore: paragraph.spaceBefore } : {}),
+        ...(first && paragraph.spaceAfter ? { paraSpaceAfter: paragraph.spaceAfter } : {}),
+        ...(first && paragraph.level ? { indentLevel: paragraph.level } : {}),
+        ...(run.lineBreak && !first ? { softBreakBefore: true } : {}),
+        breakLine: runIndex === paragraph.runs.length - 1 && !last,
+      };
+      if (run.lineBreak) {
+        out.push({ text: ' ', options: { ...options, softBreakBefore: true } });
+      } else {
+        out.push({ text: run.text, options });
+      }
+    });
+  });
+  return out;
 }
 
 async function imageData(projectId, element, cache) {
@@ -155,7 +246,7 @@ async function addShapeElement(pptx, pptxSlide, element, activeTheme) {
     pptxSlide.addShape(pptx.ShapeType.custGeom, {
       x, y, w, h, rotate,
       points: pathToPoints(shapePath, w, h),
-      line: hasBorder ? { color: cleanColor(borderColor), width: borderWidth, transparency } : { color: 'FFFFFF', transparency: 100 },
+      line: hasBorder ? { color: cleanColor(borderColor), width: borderWidth, transparency, ...(dash ? { dashType: dash === 'dot' ? 'sysDot' : 'dash' } : {}) } : { color: 'FFFFFF', transparency: 100 },
       fill: fill === 'transparent' ? { color: 'FFFFFF', transparency: 100 } : { color: cleanColor(fill, activeTheme.bg), transparency },
     });
     return;
@@ -268,17 +359,41 @@ function addDecor(pptxSlide, element) {
   }
 }
 
+// "3.6px 7.2px 3.6px 7.2px" (top right bottom left) as pptxgenjs's [left, right, bottom, top] points.
+function boxMargin(padding) {
+  const parts = String(padding || '').split(/\s+/).map((part) => parseFloat(part)).filter(Number.isFinite);
+  if (!parts.length) return 0;
+  const [top, right = top, bottom = top, left = right] = parts;
+  return [left, right, bottom, top];
+}
+
+function boxLook(style) {
+  const look = {};
+  const fill = cssHex(style.background);
+  if (fill) look.fill = { color: fill };
+  const border = String(style.border || '').match(/^([\d.]+)px\s+(\w+)\s+(#[0-9a-f]{3,6})/i);
+  if (border && cssHex(border[3])) {
+    look.line = { color: cssHex(border[3]), width: Math.max(0.5, parseFloat(border[1])), ...(border[2] === 'dashed' ? { dashType: 'dash' } : {}) };
+  }
+  if (look.fill || look.line) {
+    look.shape = style.borderRadius === '50%' ? 'ellipse' : parseFloat(style.borderRadius) > 0 ? 'roundRect' : 'rect';
+    if (look.shape === 'roundRect') look.rectRadius = 0.12;
+  }
+  return look;
+}
+
 function addEditableText(pptxSlide, element, theme) {
   addDecor(pptxSlide, element);
   const style = element.style || {};
   const content = textRuns(element.content);
   pptxSlide.addText(content, {
+    ...boxLook(style),
     x: toInches(element.x),
     y: toInches(element.y),
     w: Math.max(0.1, toInches(element.width)),
     h: Math.max(0.1, toInches(element.height)),
     fontFace: cleanFont(style.fontFamily),
-    fontSize: Math.max(5, (Number(style.fontSize) || 16) * 0.75),
+    fontSize: Math.max(5, Number(style.fontSize) || 16),
     color: cleanColor(style.color, element.role === 'body' ? theme.textSub : theme.text),
     bold: Number(style.fontWeight) >= 600 || style.fontWeight === 'bold',
     italic: style.fontStyle === 'italic',
@@ -286,7 +401,9 @@ function addEditableText(pptxSlide, element, theme) {
     align: ['center', 'right', 'justify'].includes(style.textAlign) ? style.textAlign : 'left',
     valign: { top: 'top', middle: 'mid', bottom: 'bottom' }[style.verticalAlign] || 'top',
     breakLine: false,
-    margin: 0,
+    margin: boxMargin(style.padding),
+    ...(style.whiteSpace === 'nowrap' ? { wrap: false } : {}),
+    ...(parseFloat(style.letterSpacing) ? { charSpacing: parseFloat(style.letterSpacing) } : {}),
     fit: 'shrink',
     rotate: Number(element.rotation) || 0,
     lineSpacingMultiple: Math.max(0.7, Number(style.lineHeight) || 1.2),
@@ -306,11 +423,14 @@ function addEditableTable(pptxSlide, element, slideData, theme) {
     headers.map((value, index) => ({
       text: String(value ?? ''),
       options: {
-        bold: true,
+        bold: headerStyles[index]?.fontWeight ? Number(headerStyles[index].fontWeight) >= 600 : true,
+        italic: headerStyles[index]?.fontStyle === 'italic',
         color: cleanColor(headerStyles[index]?.color, theme.text),
         fill: cleanColor(headerStyles[index]?.background, theme.surface),
         align: headerStyles[index]?.textAlign || 'center',
-        valign: 'mid',
+        valign: { top: 'top', middle: 'mid', bottom: 'bottom' }[headerStyles[index]?.verticalAlign] || 'mid',
+        ...(headerStyles[index]?.fontSize ? { fontSize: Number(headerStyles[index].fontSize) } : {}),
+        ...(headerStyles[index]?.fontFamily ? { fontFace: cleanFont(headerStyles[index].fontFamily) } : {}),
       },
     })),
     ...rows.map((row, rowIndex) => headers.map((_, colIndex) => {
@@ -324,6 +444,8 @@ function addEditableTable(pptxSlide, element, slideData, theme) {
           italic: style.fontStyle === 'italic',
           align: style.textAlign || 'left',
           valign: { top: 'top', middle: 'mid', bottom: 'bottom' }[style.verticalAlign] || 'mid',
+          ...(style.fontSize ? { fontSize: Number(style.fontSize) } : {}),
+          ...(style.fontFamily ? { fontFace: cleanFont(style.fontFamily) } : {}),
         },
       };
     })),
@@ -333,18 +455,24 @@ function addEditableTable(pptxSlide, element, slideData, theme) {
     ? table.columnWidths.map((value) => Math.max(1, Number(value) || 1))
     : headers.map(() => 1);
   const widthTotal = rawWidths.reduce((sum, value) => sum + value, 0);
+  const height = Math.max(0.4, toInches(element.height));
+  const rawHeights = Array.isArray(table.rowHeights) && table.rowHeights.length === rows.length + 1
+    ? table.rowHeights.map((value) => Math.max(1, Number(value) || 1))
+    : null;
+  const heightTotal = rawHeights ? rawHeights.reduce((sum, value) => sum + value, 0) : 0;
 
   pptxSlide.addTable(tableRows, {
     x: toInches(element.x),
     y: toInches(element.y),
     w: width,
-    h: Math.max(0.4, toInches(element.height)),
+    h: height,
     colW: rawWidths.map((value) => width * value / widthTotal),
+    ...(rawHeights ? { rowH: rawHeights.map((value) => height * value / heightTotal) } : {}),
     border: { type: 'solid', color: cleanColor(theme.textSub), pt: 0.6, transparency: 65 },
     fontFace: 'Arial',
     fontSize: 9,
     color: theme.text,
-    margin: 0.06,
+    margin: rawHeights ? 0.03 : 0.06,
     autoFit: false,
     valign: 'mid',
   });
@@ -391,6 +519,28 @@ function addEditableChart(pptx, pptxSlide, element, slideData, theme) {
     showPercent: type === pptx.ChartType.pie || type === pptx.ChartType.doughnut,
     border: { color: cleanColor(theme.textSub), transparency: 70, pt: 0.5 },
   });
+}
+
+// pptxgenjs writes a paragraph-properties block in front of every run of a paragraph, but the file
+// format allows one, first. Several runs in one paragraph (a bold word, a coloured one) made files
+// PowerPoint would offer to repair, so only the first block of each paragraph is kept.
+export async function withSingleParagraphProperties(bytes) {
+  const zip = await JSZip.loadAsync(bytes);
+  const blocks = /<a:pPr(?=[\s>/])[^>]*?(?:\/>|>[\s\S]*?<\/a:pPr>)/g;
+  await Promise.all(Object.keys(zip.files)
+    .filter((name) => /^ppt\/(slides|notesSlides)\/[^/]+\.xml$/.test(name))
+    .map(async (name) => {
+      const xml = await zip.file(name).async('string');
+      const fixed = xml.replace(/<a:p>[\s\S]*?<\/a:p>/g, (paragraph) => {
+        let seen = false;
+        return paragraph.replace(blocks, (block) => {
+          if (!seen) { seen = true; return block; }
+          return '';
+        });
+      });
+      if (fixed !== xml) zip.file(name, fixed);
+    }));
+  return zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', compression: 'DEFLATE' });
 }
 
 export async function exportEditablePptx({ slides, theme = 'clean-white', fileName = 'presentation', projectId }) {
@@ -478,5 +628,13 @@ export async function exportEditablePptx({ slides, theme = 'clean-white', fileNa
     if (notes) pptxSlide.addNotes(notes);
   }
 
-  await pptx.writeFile({ fileName: `${safeFileName(fileName)}_editable.pptx`, compression: true });
+  const bytes = await pptx.write({ outputType: 'arraybuffer', compression: true });
+  const blob = await withSingleParagraphProperties(bytes);
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `${safeFileName(fileName)}_editable.pptx`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
 }

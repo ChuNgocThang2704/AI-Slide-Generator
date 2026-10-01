@@ -80,6 +80,7 @@ export function ShapeGlyph({ element }) {
             stroke={stroke}
             strokeWidth={borderWidth}
             strokeLinejoin="round"
+            strokeDasharray={dash === 'dot' ? '2 3' : dash === 'dash' ? '7 5' : undefined}
             vectorEffect="non-scaling-stroke"
           />
         ) : null}

@@ -362,3 +362,4 @@
 .canvas-element .canvas-text ul.bu-diamond { list-style-type:"\2756\00a0\00a0"; }
 .canvas-element .canvas-text ul.bu-check { list-style-type:"\2713\00a0\00a0"; }
 .canvas-element .canvas-text ul.bu-dash { list-style-type:"\2013\00a0\00a0"; }
+.canvas-text[style*="white-space: nowrap"], .canvas-text[style*="white-space: nowrap"] .ProseMirror { white-space: nowrap !important; }

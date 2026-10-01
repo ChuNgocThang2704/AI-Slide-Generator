@@ -478,7 +478,7 @@ class PowerPointTemplateParserTest {
 
         TemplateManifest.Element bar = decor.stream().filter(item -> "#717BA2".equals(item.getFill())).findFirst().orElseThrow();
         assertThat(bar.getStyle().get("shape")).isEqualTo("path");
-        assertThat(bar.getStyle().get("path")).isEqualTo("M 0.00 0.00 L 100.00 0.00 L 100.00 100.00 L 0.00 100.00 Z");
+        assertThat(bar.getStyle().get("path")).isEqualTo("M 0 0 L 100 0 L 100 100 L 0 100 Z");
         // A dashed rule with no height is kept as a dashed line in its own colour.
         TemplateManifest.Element rule = decor.stream().filter(item -> "#999999".equals(item.getBorderColor())).findFirst().orElseThrow();
         assertThat(rule.getStyle()).containsEntry("shape", "line").containsEntry("dash", "dash");
@@ -574,8 +574,8 @@ class PowerPointTemplateParserTest {
                         <a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>
                         <a:solidFill><a:srgbClr val="FFF2CC"/></a:solidFill>
                         <a:ln w="12700"><a:solidFill><a:srgbClr val="7F6000"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr>
-                      <p:txBody><a:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"/><a:lstStyle/>
-                        <a:p><a:r><a:rPr sz="2000"/><a:t>minsup = 3</a:t></a:r></a:p></p:txBody>
+                      <p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0"/><a:lstStyle/>
+                        <a:p><a:r><a:rPr sz="2000" spc="-200"/><a:t>minsup = 3</a:t></a:r></a:p></p:txBody>
                     </p:sp>
                     <p:sp>
                       <p:nvSpPr><p:cNvPr id="3" name="Shrunk"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
@@ -592,7 +592,8 @@ class PowerPointTemplateParserTest {
                 .getLayouts().get(0).getElements().stream().filter(item -> "text".equals(item.getType())).toList();
         TemplateManifest.Element label = texts.stream().filter(item -> item.getContent().contains("minsup")).findFirst().orElseThrow();
         assertThat(label.getStyle()).containsEntry("background", "#FFF2CC").containsEntry("borderRadius", "50%")
-                .containsEntry("padding", "0px 0px 0px 0px");
+                .containsEntry("padding", "0px 0px 0px 0px").containsEntry("whiteSpace", "nowrap")
+                .containsEntry("letterSpacing", "-2px");
         assertThat((String) label.getStyle().get("border")).startsWith("1px dashed #7F6000");
 
         // 62.5% of 20 points.
@@ -628,6 +629,12 @@ class PowerPointTemplateParserTest {
                         <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
                         <a:ln w="9525"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr>
                     </p:cxnSp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="6" name="Bar"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="2000000" y="2000000"/><a:ext cx="1000000" cy="12700"/></a:xfrm>
+                        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                        <a:solidFill><a:srgbClr val="222222"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr>
+                    </p:sp>
                     <p:cxnSp>
                       <p:nvCxnSpPr><p:cNvPr id="5" name="Elbow"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
                       <p:spPr><a:xfrm><a:off x="6000000" y="1371600"/><a:ext cx="1000000" cy="1000000"/></a:xfrm>
@@ -660,6 +667,8 @@ class PowerPointTemplateParserTest {
         // A dashed rule stays a dashed line instead of becoming a solid bar.
         TemplateManifest.Element dashed = decor.stream().filter(item -> "#0000FF".equals(item.getBorderColor())).findFirst().orElseThrow();
         assertThat(dashed.getStyle()).containsEntry("shape", "line").containsEntry("dash", "dash");
+        // A hairline rectangle (a fraction bar) is kept as a rule in its fill colour.
+        assertThat(decor).anyMatch(item -> "#222222".equals(item.getFill()) && item.getHeight() < 3 && item.getWidth() > 70);
         // An elbow connector drawn as a straight line would be wrong, so it is left out.
         assertThat(decor).noneMatch(item -> "#123456".equals(item.getBorderColor()));
     }

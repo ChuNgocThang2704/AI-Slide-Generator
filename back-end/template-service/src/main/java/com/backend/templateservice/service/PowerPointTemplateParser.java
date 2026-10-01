@@ -559,6 +559,12 @@ public class PowerPointTemplateParser {
             data.put("cellStyles", cellLooks);
         }
 
+        List<Double> heights = new ArrayList<>();
+        for (Element row : descendants(table, "tr")) heights.add((double) longAttr(row, "h", 0));
+        if (heights.size() == normalized.size() && heights.stream().allMatch(height -> height > 0)) {
+            data.put("rowHeights", heights);
+        }
+
         Element columnGrid = firstChild(table, "tblGrid");
         if (columnGrid != null) {
             List<Double> widths = new ArrayList<>();
@@ -739,7 +745,8 @@ public class PowerPointTemplateParser {
         }
         Element masterShape = placeholder.present
                 ? findPlaceholderShape(context.masterTree(), masterPlaceholderType(type), "") : null;
-        Element layoutShape = placeholder.present
+        // A placeholder that names no layout shape (index 4294967295, an orphan) inherits from the master only.
+        Element layoutShape = placeholder.present && !"4294967295".equals(placeholder.index())
                 ? findPlaceholderShape(context.layoutTree(), type, placeholder.index()) : null;
         Element masterList = masterShape == null ? null : firstDescendant(masterShape, "lstStyle");
         Element layoutList = layoutShape == null ? null : firstDescendant(layoutShape, "lstStyle");
@@ -773,10 +780,11 @@ public class PowerPointTemplateParser {
                 if (text == null || text.isEmpty()) continue;
                 runs.add(new Run(base.copy().over(styles.run(firstChild(part, "rPr"))), text));
             }
-            if (runs.stream().anyMatch(run -> run.text() != null && !run.text().isBlank())) {
-                paragraphs.add(new Paragraph(level, base, runs));
-            }
+            paragraphs.add(new Paragraph(level, base, runs));
         }
+        // Blank paragraphs inside the text are PowerPoint's vertical gaps and stay; those around it go.
+        while (!paragraphs.isEmpty() && !hasText(paragraphs.get(0))) paragraphs.remove(0);
+        while (!paragraphs.isEmpty() && !hasText(paragraphs.get(paragraphs.size() - 1))) paragraphs.remove(paragraphs.size() - 1);
         if (paragraphs.isEmpty()) return null;
 
         // The box's own style is the one most of its text has, so a bold or coloured word stands out
@@ -794,6 +802,7 @@ public class PowerPointTemplateParser {
         if (box.size != null) boxStyle.put("fontSize", Math.round(box.size * toPixel * 10) / 10d);
         if (box.font != null) boxStyle.put("fontFamily", box.font);
         if (box.color != null) boxStyle.put("color", box.color);
+        if (box.letterSpacing != null) boxStyle.put("letterSpacing", px(box.letterSpacing * toPixel) + "px");
         boxStyle.put("fontWeight", Boolean.TRUE.equals(box.bold) ? 700 : 400);
         if (Boolean.TRUE.equals(box.italic)) boxStyle.put("fontStyle", "italic");
         boxStyle.put("textAlign", cssAlign(box.align));
@@ -846,10 +855,11 @@ public class PowerPointTemplateParser {
         for (Paragraph paragraph : paragraphs) {
             PptxTextStyles.Props props = paragraph.props();
             String align = cssAlign(props.align);
-            // Only a paragraph aligned differently from its box needs a <p> of its own inside a list item.
-            String open = align.equals(boxAlign) ? null : "<p style=\"text-align:" + align + "\">";
+            boolean blank = !hasText(paragraph);
+            boolean bulleted = !blank && ("char".equals(props.bulletMode) || "auto".equals(props.bulletMode));
+            // Only a paragraph aligned or spaced differently from its box needs a <p> of its own inside a list item.
+            String open = blockStyle(props, !align.equals(boxAlign), bulleted, toPixel);
             String inner = runsHtml(paragraph.runs(), box, toPixel);
-            boolean bulleted = "char".equals(props.bulletMode) || "auto".equals(props.bulletMode);
             if (!bulleted) {
                 closeLists(html, openLists, openItems, 0);
                 html.append(open == null ? "<p>" : open).append(inner).append("</p>");
@@ -872,6 +882,23 @@ public class PowerPointTemplateParser {
         }
         closeLists(html, openLists, openItems, 0);
         return html.toString();
+    }
+
+    private static boolean hasText(Paragraph paragraph) {
+        return paragraph.runs().stream().anyMatch(run -> run.text() != null && !run.text().isBlank());
+    }
+
+    /** The CSS a paragraph needs beyond its box's: its alignment, indent and the space around it. */
+    private String blockStyle(PptxTextStyles.Props props, boolean differentAlign, boolean bulleted, double toPixel) {
+        StringBuilder css = new StringBuilder();
+        if (differentAlign) css.append("text-align:").append(cssAlign(props.align)).append(';');
+        if (!bulleted) {
+            if (props.marginLeft != null && props.marginLeft > 0.5) css.append("margin-left:").append(px(props.marginLeft * toPixel)).append("px;");
+            if (props.indent != null && Math.abs(props.indent) > 0.5) css.append("text-indent:").append(px(props.indent * toPixel)).append("px;");
+        }
+        if (props.spaceBefore != null && props.spaceBefore > 0.5) css.append("margin-top:").append(px(props.spaceBefore * toPixel)).append("px;");
+        if (props.spaceAfter != null && props.spaceAfter > 0.5) css.append("margin-bottom:").append(px(props.spaceAfter * toPixel)).append("px;");
+        return css.length() == 0 ? null : "<p style=\"" + css + "\">";
     }
 
     /** Closes lists (and their open items) until only {@code depth} remain. */
@@ -920,7 +947,8 @@ public class PowerPointTemplateParser {
                 String.valueOf(Boolean.TRUE.equals(run.underline) != Boolean.TRUE.equals(box.underline)),
                 String.valueOf(run.color != null && !run.color.equals(box.color) ? run.color : ""),
                 String.valueOf(run.size != null && !run.size.equals(box.size) ? run.size : ""),
-                String.valueOf(run.font != null && !run.font.equals(box.font) ? run.font : ""));
+                String.valueOf(run.font != null && !run.font.equals(box.font) ? run.font : ""),
+                String.valueOf(run.letterSpacing != null && !run.letterSpacing.equals(box.letterSpacing) ? run.letterSpacing : ""));
     }
 
     private void flushRun(StringBuilder html, PptxTextStyles.Props run, StringBuilder text,
@@ -932,6 +960,9 @@ public class PowerPointTemplateParser {
             style.append("font-size:").append(px(run.size * toPixel)).append("px;");
         }
         if (run.font != null && !run.font.equals(box.font)) style.append("font-family:").append(run.font).append(';');
+        if (run.letterSpacing != null && !run.letterSpacing.equals(box.letterSpacing)) {
+            style.append("letter-spacing:").append(px(run.letterSpacing * toPixel)).append("px;");
+        }
         boolean bold = Boolean.TRUE.equals(run.bold) != Boolean.TRUE.equals(box.bold);
         boolean italic = Boolean.TRUE.equals(run.italic) != Boolean.TRUE.equals(box.italic);
         boolean underline = Boolean.TRUE.equals(run.underline) != Boolean.TRUE.equals(box.underline);
@@ -965,6 +996,8 @@ public class PowerPointTemplateParser {
         double bottom = body == null || body.getAttribute("bIns").isBlank() ? 45_720 : longAttr(body, "bIns", 45_720);
         look.put("padding", px(top * toPixel) + "px " + px(right * toPixel) + "px "
                 + px(bottom * toPixel) + "px " + px(left * toPixel) + "px");
+        // A box that does not wrap keeps its text on one line however narrow it is (a formula's parts).
+        if (body != null && "none".equals(body.getAttribute("wrap"))) look.put("whiteSpace", "nowrap");
 
         Element properties = firstChild(shape, "spPr");
         if (placeholder || properties == null) return look;
@@ -1570,6 +1603,11 @@ public class PowerPointTemplateParser {
                 style.put("shape", "path");
                 style.put("path", path);
                 if (stroked) style.put("borderWidth", Math.max(1, Math.round(strokeWidth * 10) / 10d));
+                Element strokeDash = stroke == null ? null : firstChild(stroke, "prstDash");
+                String dashName = strokeDash == null ? "" : strokeDash.getAttribute("val");
+                if (stroked && !dashName.isBlank() && !"solid".equals(dashName)) {
+                    style.put("dash", dashName.toLowerCase().contains("dot") ? "dot" : "dash");
+                }
                 out.add(TemplateManifest.Element.builder()
                         .id("decor-" + id)
                         .type("shape")
@@ -1674,7 +1712,8 @@ public class PowerPointTemplateParser {
     }
 
     private String unit(double value, double extent) {
-        return String.format(Locale.ROOT, "%.2f", value / extent * 100);
+        String text = String.format(Locale.ROOT, "%.1f", value / extent * 100);
+        return text.endsWith(".0") ? text.substring(0, text.length() - 2) : text;
     }
 
     /** An elliptical arc from the current point, as straight segments; returns the point it ends at. */
@@ -1693,7 +1732,7 @@ public class PowerPointTemplateParser {
         if (Math.abs(Math.abs(sweep) - 2 * Math.PI) < 1e-6) delta = sweep;
         double centreX = from[0] - radiusX * Math.cos(t0);
         double centreY = from[1] - radiusY * Math.sin(t0);
-        int steps = Math.max(6, (int) Math.ceil(Math.abs(delta) / (Math.PI / 12)));
+        int steps = Math.max(4, (int) Math.ceil(Math.abs(delta) / (Math.PI / 8)));
         double[] last = from;
         for (int step = 1; step <= steps; step++) {
             double t = t0 + delta * step / steps;
@@ -1717,7 +1756,7 @@ public class PowerPointTemplateParser {
         // Only straight lines: an elbow or curved connector drawn straight would be wrong.
         Element geometry = firstChild(properties, "prstGeom");
         String preset = geometry == null ? "" : geometry.getAttribute("prst");
-        if (!preset.isEmpty() && !"line".equals(preset) && !"straightConnector1".equals(preset)) return;
+        if (!preset.isEmpty() && !"line".equals(preset) && !"straightConnector1".equals(preset) && !"rect".equals(preset)) return;
         Element nonVisual = firstDescendant(line, "cNvPr");
         if (nonVisual != null && "1".equals(nonVisual.getAttribute("hidden"))) return;
 
@@ -1734,9 +1773,19 @@ public class PowerPointTemplateParser {
             Element reference = style == null ? null : firstChild(style, "lnRef");
             color = reference == null ? null : colorFromNode(reference, theme.getColors());
         }
+        // A thin filled shape (a fraction bar drawn as a flat rectangle) is a rule of its fill colour.
+        boolean filledBar = false;
+        if (color == null) {
+            Fill fill = fillOf(properties, theme);
+            if (fill != null && fill.css() != null && fill.css().startsWith("#")) {
+                color = fill.css();
+                filledBar = true;
+            }
+        }
         if (color == null) return;
         Element stroke = firstDescendant(properties, "ln");
-        double thickness = Math.max(1, stroke == null ? 1 : longAttr(stroke, "w", 12_700) / (double) pageSize[0] * 960);
+        double thickness = Math.max(1, filledBar ? Math.min(width, height)
+                : stroke == null ? 1 : longAttr(stroke, "w", 12_700) / (double) pageSize[0] * 960);
         Element dash = stroke == null ? null : firstDescendant(stroke, "prstDash");
         String dashName = dash == null ? "" : dash.getAttribute("val");
         boolean dashed = !dashName.isBlank() && !"solid".equals(dashName);

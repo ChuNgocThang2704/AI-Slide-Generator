@@ -40,6 +40,11 @@ final class PptxTextStyles {
         String bulletChar;
         String bulletFont;
         Double lineSpacing;     // a multiple of single spacing
+        Double letterSpacing;   // points
+        Double marginLeft;      // points
+        Double indent;          // points (negative: hanging)
+        Double spaceBefore;     // points
+        Double spaceAfter;      // points
 
         Props copy() {
             return new Props().over(this);
@@ -63,6 +68,11 @@ final class PptxTextStyles {
                 bulletFont = top.bulletFont;
             }
             if (top.lineSpacing != null) lineSpacing = top.lineSpacing;
+            if (top.letterSpacing != null) letterSpacing = top.letterSpacing;
+            if (top.marginLeft != null) marginLeft = top.marginLeft;
+            if (top.indent != null) indent = top.indent;
+            if (top.spaceBefore != null) spaceBefore = top.spaceBefore;
+            if (top.spaceAfter != null) spaceAfter = top.spaceAfter;
             return this;
         }
     }
@@ -120,6 +130,8 @@ final class PptxTextStyles {
         Props props = new Props();
         String align = pPr.getAttribute("algn");
         if (!align.isBlank()) props.align = align;
+        props.marginLeft = emuPoints(pPr.getAttribute("marL"));
+        props.indent = emuPoints(pPr.getAttribute("indent"));
         for (Element item : children(pPr)) {
             switch (item.getLocalName()) {
                 case "buNone" -> props.bulletMode = "none";
@@ -140,6 +152,8 @@ final class PptxTextStyles {
                         }
                     }
                 }
+                case "spcBef" -> props.spaceBefore = spacing(item, props);
+                case "spcAft" -> props.spaceAfter = spacing(item, props);
                 case "defRPr" -> props.over(run(item));
                 default -> { }
             }
@@ -147,10 +161,39 @@ final class PptxTextStyles {
         return props;
     }
 
+    private static Double emuPoints(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return Long.parseLong(value) / 12_700d;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    /** Space before or after a paragraph, in points ({@code spcPts}, or a percentage of a 12-point line). */
+    private static Double spacing(Element item, Props props) {
+        Element points = child(item, "spcPts");
+        try {
+            if (points != null) return Long.parseLong(points.getAttribute("val")) / 100d;
+            Element percent = child(item, "spcPct");
+            if (percent != null) return Long.parseLong(percent.getAttribute("val")) / 100_000d * 12;
+        } catch (NumberFormatException ignored) {
+            // no spacing stated
+        }
+        return null;
+    }
+
     /** Run properties ({@code a:rPr}, or the {@code defRPr} of a list style). */
     Props run(Element rPr) {
         Props props = new Props();
         if (rPr == null) return props;
+        if (!rPr.getAttribute("spc").isBlank()) {
+            try {
+                props.letterSpacing = Long.parseLong(rPr.getAttribute("spc")) / 100d;
+            } catch (NumberFormatException ignored) {
+                // keep the inherited spacing
+            }
+        }
         try {
             long size = rPr.getAttribute("sz").isBlank() ? 0 : Long.parseLong(rPr.getAttribute("sz"));
             if (size > 0) props.size = size / 100d;
