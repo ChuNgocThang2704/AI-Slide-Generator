@@ -217,7 +217,7 @@ services:
       RABBIT_PASS: ${RABBIT_PASS:-ai_password}
       RABBIT_VHOST: ${RABBIT_VHOST:-/}
       RABBIT_SSL_ENABLED: "false"
-      AI_URL: ${AI_URL_DOCKER:-http://host.docker.internal:8000}
+      AI_URL: http://ai-service:8000
       APP_SUBSCRIPTION_SERVICE_URL: ${APP_SUBSCRIPTION_SERVICE_URL_DOCKER:-http://subscription-service:8084/api/subscription}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -230,6 +230,51 @@ services:
         condition: service_healthy
       subscription-service:
         condition: service_started
+      ai-service:
+        condition: service_started
+    networks:
+      - ai-slide-net
+
+  ai-service:
+    build:
+      context: ./ai-service
+    container_name: ai-slide-service
+    restart: unless-stopped
+    ports:
+      - "${AI_SERVICE_PORT:-8000}:8000"
+    env_file:
+      - ./ai-service/backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./ai-service/uploads:/app/uploads
+      - ./ai-service/outputs:/app/outputs
+      - ./ai-service/backend/service-account.json:/app/service-account.json:ro
+      - ai-embedding-cache:/app/.cache/fastembed
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - ai-slide-net
+
+  ai-worker:
+    build:
+      context: ./ai-service
+    container_name: ai-slide-worker
+    restart: unless-stopped
+    command: ["python", "backend/worker.py"]
+    env_file:
+      - ./ai-service/backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./ai-service/uploads:/app/uploads
+      - ./ai-service/outputs:/app/outputs
+      - ./ai-service/backend/service-account.json:/app/service-account.json:ro
+      - ai-embedding-cache:/app/.cache/fastembed
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - ai-slide-net
 
@@ -318,3 +363,4 @@ volumes:
   mysql-data:
   redis-data:
   rabbitmq-data:
+  ai-embedding-cache:
