@@ -23,6 +23,7 @@ import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import java.text.ParseException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -569,7 +570,9 @@ public class AuthenticationService {
                     .bodyValue(requestBody)
                     .retrieve()
                     .bodyToMono(String.class)
-                    .block();
+                    // The sync runs inside the login path: without a bound, a hanging lecBE
+                    // would hold every login open instead of being skipped like any other failure.
+                    .block(Duration.ofSeconds(5));
             log.info("[user-service] Đồng bộ tài khoản sang lecBE thành công: {}", response);
         } catch (Exception e) {
             log.error("[user-service] Lỗi khi đồng bộ đăng ký sang lecBE (Bỏ qua để tiếp tục): {}", e.getMessage());

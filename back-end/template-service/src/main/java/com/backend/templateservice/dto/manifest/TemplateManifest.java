@@ -47,8 +47,13 @@ public class TemplateManifest {
         private String name;
         private String type;
         private String backgroundColor;
+        /** CSS background of the sample slide (colour or gradient), when it has one. */
+        private String background;
         @Builder.Default
         private List<Element> elements = new ArrayList<>();
+        /** Non-text art of the sample slide (pictures, shapes), in 960x540 units. */
+        @Builder.Default
+        private List<Element> decor = new ArrayList<>();
     }
 
     @Data

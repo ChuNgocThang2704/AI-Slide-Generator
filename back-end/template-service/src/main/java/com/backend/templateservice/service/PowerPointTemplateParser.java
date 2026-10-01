@@ -37,7 +37,26 @@ public class PowerPointTemplateParser {
     private static final int MAX_ENTRIES = 2_000;
     private static final String DISPLAY_BACKGROUND = "#FFFFFF";
 
+    public record ParsedTemplate(TemplateManifest manifest, Map<String, byte[]> assets) {}
+
     public TemplateManifest parse(byte[] fileBytes) {
+        return parseWithAssets(fileBytes).manifest();
+    }
+
+    public ParsedTemplate parseWithAssets(byte[] fileBytes) {
+        return parseWithAssets(fileBytes, false);
+    }
+
+    /**
+     * @param keepContent false (the default, used when a file is uploaded purely as a visual
+     *                     template): each real slide's title/body text is blanked to an empty,
+     *                     reusable placeholder, and only one representative picture is kept.
+     *                     true (used to open a real deck for editing, see TemplateService#importSlides):
+     *                     every text box keeps its real words and every picture/shape is kept, so
+     *                     each returned "layout" is a faithful, 1-to-1 copy of that real slide.
+     */
+    public ParsedTemplate parseWithAssets(byte[] fileBytes, boolean keepContent) {
+        Map<String, byte[]> assetsOut = new LinkedHashMap<>();
         try {
             Map<String, byte[]> entries = unzip(fileBytes);
             if (!entries.containsKey("ppt/presentation.xml")) {
@@ -47,7 +66,7 @@ public class PowerPointTemplateParser {
             long[] pageSize = readPageSize(entries.get("ppt/presentation.xml"));
             TemplateManifest.Theme theme = readTheme(entries);
             MasterData master = readMaster(entries, pageSize, theme);
-            List<TemplateManifest.Layout> sampleLayouts = readSampleLayouts(entries, pageSize, theme);
+            List<TemplateManifest.Layout> sampleLayouts = readSampleLayouts(entries, pageSize, theme, assetsOut, keepContent, master);
             List<TemplateManifest.Layout> layouts = sampleLayouts.isEmpty()
                     ? readLayouts(entries, pageSize, theme, master)
                     : sampleLayouts;
@@ -63,13 +82,15 @@ public class PowerPointTemplateParser {
             theme.setBackgroundColor(background);
             theme.setPrimaryColor(defaultColor(theme.getPrimaryColor(), "#4F46E5"));
 
-            return TemplateManifest.builder()
+            TemplateManifest manifest = TemplateManifest.builder()
                     .width(960)
                     .height(540)
                     .aspectRatio(aspectRatio(pageSize[0], pageSize[1]))
                     .theme(theme)
                     .layouts(layouts)
                     .build();
+            assetsOut.keySet().forEach(name -> manifest.getAssets().put(name, contentTypeFor(name)));
+            return new ParsedTemplate(manifest, assetsOut);
         } catch (CustomException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -94,7 +115,7 @@ public class PowerPointTemplateParser {
                     throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
                 }
 
-                boolean keepEntry = !name.startsWith("ppt/media/");
+                boolean keepEntry = !name.startsWith("ppt/media/") || isRasterMedia(name);
                 ByteArrayOutputStream output = keepEntry ? new ByteArrayOutputStream() : null;
                 byte[] buffer = new byte[8192];
                 int read;
@@ -105,6 +126,7 @@ public class PowerPointTemplateParser {
                     if (entrySize > MAX_ENTRY_BYTES || total > MAX_UNCOMPRESSED_BYTES) {
                         throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
                     }
+                    if (output != null && name.startsWith("ppt/media/") && entrySize > MAX_ASSET_BYTES) output = null;
                     if (output != null) output.write(buffer, 0, read);
                 }
                 if (output != null) entries.put(name, output.toByteArray());
@@ -229,7 +251,10 @@ public class PowerPointTemplateParser {
     private List<TemplateManifest.Layout> readSampleLayouts(
             Map<String, byte[]> entries,
             long[] pageSize,
-            TemplateManifest.Theme theme
+            TemplateManifest.Theme theme,
+            Map<String, byte[]> assetsOut,
+            boolean keepContent,
+            MasterData master
     ) throws Exception {
         List<String> paths = entries.keySet().stream()
                 .filter(name -> name.startsWith("ppt/slides/slide") && name.endsWith(".xml"))
@@ -239,25 +264,33 @@ public class PowerPointTemplateParser {
         int index = 0;
         for (String path : paths) {
             Document document = parseXml(entries.get(path));
+            // A real deck's own words live in its placeholders, and most of those boxes carry no
+            // position of their own: they sit wherever the slide's layout puts them.
+            Map<String, TemplateManifest.Element> layoutPlaceholders = keepContent
+                    ? readLayoutPlaceholders(entries, path, pageSize, theme, master)
+                    : Map.of();
             List<TemplateManifest.Element> elements = normalizeSampleElements(parseShapeTree(
-                    document, pageSize, theme, Map.of()
-            ));
+                    document, pageSize, theme, layoutPlaceholders, keepContent, null
+            ), keepContent);
 
-            if (elements.isEmpty()) continue;
+            if (elements.isEmpty() && !keepContent) continue;
 
             String layoutType = layouts.isEmpty() ? "title" : classifyLayout("Sample slide", elements);
+            SlideVisuals visuals = extractVisuals(path, document, entries, pageSize, theme, assetsOut);
             layouts.add(TemplateManifest.Layout.builder()
                     .id("sample-layout-" + (++index))
                     .name("Sample slide " + index)
                     .type(layoutType)
-                    .backgroundColor(DISPLAY_BACKGROUND)
+                    .backgroundColor(visuals.averageColor() == null ? DISPLAY_BACKGROUND : visuals.averageColor())
+                    .background(visuals.background())
                     .elements(elements)
+                    .decor(visuals.decor())
                     .build());
         }
         return layouts;
     }
 
-    private List<TemplateManifest.Element> normalizeSampleElements(List<TemplateManifest.Element> source) {
+    private List<TemplateManifest.Element> normalizeSampleElements(List<TemplateManifest.Element> source, boolean keepContent) {
         List<TemplateManifest.Element> visibleElements = source.stream()
                 .filter(this::intersectsCanvas)
                 .toList();
@@ -270,6 +303,24 @@ public class PowerPointTemplateParser {
                         .thenComparingDouble(item -> item.getWidth() * item.getHeight())
                         .thenComparingDouble(item -> -item.getY()))
                 .orElse(null);
+
+        // Opening a real deck: keep every real word, in its real box. Its pictures and plain
+        // shapes are already captured faithfully as this layout's `decor` (extractVisuals /
+        // collectVisuals resolve every one of them, not just a single representative one), so
+        // they're dropped here rather than duplicated as a second, blanked copy.
+        if (keepContent) {
+            return textElements.stream()
+                    .filter(element -> !String.valueOf(element.getContent()).isBlank())
+                    .map(element -> {
+                        TemplateManifest.Element copy = copyElement(element);
+                        copy.setRole(element == title ? "title" : "body");
+                        copy.setPlaceholder(false);
+                        copy.setLocked(false);
+                        return copy;
+                    })
+                    .toList();
+        }
+
         TemplateManifest.Element imagePlaceholder = visibleElements.stream()
                 .filter(item -> "image".equals(item.getType()))
                 .filter(item -> !isBackgroundLike(item))
@@ -331,6 +382,24 @@ public class PowerPointTemplateParser {
             TemplateManifest.Theme theme,
             Map<String, TemplateManifest.Element> inheritedPlaceholders
     ) {
+        return parseShapeTree(document, pageSize, theme, inheritedPlaceholders, false, null);
+    }
+
+    /**
+     * @param keepText whether a placeholder's own text is read. A template wants its placeholders
+     *                 blank; a deck being opened wants every word in them, since PowerPoint puts
+     *                 titles and body text there.
+     * @param placeholdersOut when given, receives each placeholder by its key (type and index), so
+     *                        a slide can later find the layout placeholder it inherits from
+     */
+    private List<TemplateManifest.Element> parseShapeTree(
+            Document document,
+            long[] pageSize,
+            TemplateManifest.Theme theme,
+            Map<String, TemplateManifest.Element> inheritedPlaceholders,
+            boolean keepText,
+            Map<String, TemplateManifest.Element> placeholdersOut
+    ) {
         Element shapeTree = firstDescendant(document.getDocumentElement(), "spTree");
         if (shapeTree == null) return List.of();
 
@@ -376,9 +445,9 @@ public class PowerPointTemplateParser {
             }
             String fill = readShapeFill(shape, theme);
             String border = readLineColor(shape, theme);
-            String content = placeholder.present ? "" : readText(shape);
+            String content = placeholder.present && !keepText ? "" : readTextHtml(shape, role);
 
-            result.add(TemplateManifest.Element.builder()
+            TemplateManifest.Element built = TemplateManifest.Element.builder()
                     .id("tpl-" + sequence++ + "-" + UUID.randomUUID().toString().substring(0, 8))
                     .type(elementType)
                     .role(role)
@@ -394,9 +463,35 @@ public class PowerPointTemplateParser {
                     .fill(fill)
                     .borderColor(border)
                     .style(style)
-                    .build());
+                    .build();
+            result.add(built);
+            if (placeholdersOut != null && placeholder.present) {
+                placeholdersOut.put(placeholder.key(), built);
+                placeholdersOut.putIfAbsent(role, built);
+            }
         }
         return result;
+    }
+
+    /** The placeholders of the layout a slide uses, by key, for the slide to inherit position and style from. */
+    private Map<String, TemplateManifest.Element> readLayoutPlaceholders(
+            Map<String, byte[]> entries,
+            String slidePath,
+            long[] pageSize,
+            TemplateManifest.Theme theme,
+            MasterData master
+    ) {
+        Map<String, TemplateManifest.Element> placeholders = new HashMap<>();
+        String layoutPath = readRelationships(entries, slidePath).values().stream()
+                .filter(target -> target.startsWith("ppt/slideLayouts/"))
+                .findFirst().orElse(null);
+        if (layoutPath == null || !entries.containsKey(layoutPath)) return placeholders;
+        try {
+            parseShapeTree(parseXml(entries.get(layoutPath)), pageSize, theme, master.placeholders, false, placeholders);
+        } catch (Exception exception) {
+            log.debug("Cannot read layout placeholders of {}: {}", slidePath, exception.getMessage());
+        }
+        return placeholders;
     }
 
     private Map<String, Object> readTextStyle(
@@ -498,10 +593,13 @@ public class PowerPointTemplateParser {
         if (normalized.contains("chart")) return "chart";
         if (normalized.contains("table")) return "table";
 
-        long bodies = elements.stream().filter(item -> item.isPlaceholder() && "body".equals(item.getRole())).count();
-        boolean image = elements.stream().anyMatch(item -> item.isPlaceholder() && "image".equals(item.getRole()));
-        boolean chart = elements.stream().anyMatch(item -> item.isPlaceholder() && "chart".equals(item.getRole()));
-        boolean table = elements.stream().anyMatch(item -> item.isPlaceholder() && "table".equals(item.getRole()));
+        // Not gated on isPlaceholder(): a faithfully-imported slide's elements (see
+        // normalizeSampleElements' keepContent branch) are real, unlocked content, not
+        // reusable placeholders, but they still carry the same role classification did.
+        long bodies = elements.stream().filter(item -> "body".equals(item.getRole())).count();
+        boolean image = elements.stream().anyMatch(item -> "image".equals(item.getRole()));
+        boolean chart = elements.stream().anyMatch(item -> "chart".equals(item.getRole()));
+        boolean table = elements.stream().anyMatch(item -> "table".equals(item.getRole()));
         if (chart) return "chart";
         if (table) return "table";
         if (image) return "imageText";
@@ -559,6 +657,355 @@ public class PowerPointTemplateParser {
                 .style(new LinkedHashMap<>(source.getStyle()))
                 .build();
     }
+
+    /* ───────────── backgrounds, pictures and shapes of a sample slide ───────────── */
+
+    private static final long MAX_ASSET_BYTES = 6L * 1024 * 1024;
+    private static final int MAX_DECOR = 40;
+    private static final String REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    private record SlideVisuals(String background, String averageColor, List<TemplateManifest.Element> decor) {}
+
+    private record Fill(String css, String averageColor) {}
+
+    private static boolean isRasterMedia(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")
+                || lower.endsWith(".webp") || lower.endsWith(".gif");
+    }
+
+    public static String contentTypeFor(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".png")) return "image/png";
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+        if (lower.endsWith(".webp")) return "image/webp";
+        if (lower.endsWith(".gif")) return "image/gif";
+        return "application/octet-stream";
+    }
+
+    private SlideVisuals extractVisuals(
+            String slidePath,
+            Document slide,
+            Map<String, byte[]> entries,
+            long[] pageSize,
+            TemplateManifest.Theme theme,
+            Map<String, byte[]> assetsOut
+    ) {
+        List<TemplateManifest.Element> decor = new ArrayList<>();
+        try {
+            Fill background = backgroundChain(slidePath, entries, theme, decor, assetsOut, 0);
+            Element tree = firstDescendant(slide.getDocumentElement(), "spTree");
+            if (tree != null) {
+                List<double[]> textRects = new ArrayList<>();
+                collectVisuals(tree, new double[]{1, 0, 1, 0}, readRelationships(entries, slidePath),
+                        pageSize, theme, entries, assetsOut, decor, textRects);
+                // A pill, label or button behind the sample's own text is meaningless once that text is gone.
+                decor.removeIf(art -> !"background".equals(art.getRole())
+                        && art.getWidth() * art.getHeight() < 0.12 * 960 * 540
+                        && textRects.stream().anyMatch(rect -> mostlyInside(rect, art)));
+            }
+            return new SlideVisuals(
+                    background == null ? null : background.css(),
+                    background == null ? null : background.averageColor(),
+                    decor);
+        } catch (Exception exception) {
+            log.warn("Cannot read visuals of {}: {}", slidePath, exception.getMessage());
+            return new SlideVisuals(null, null, List.of());
+        }
+    }
+
+    /** Relationship id -> package path of the target, for one part. */
+    private Map<String, String> readRelationships(Map<String, byte[]> entries, String partPath) {
+        Map<String, String> result = new HashMap<>();
+        int slash = partPath.lastIndexOf('/');
+        String dir = partPath.substring(0, slash + 1);
+        byte[] xml = entries.get(dir + "_rels/" + partPath.substring(slash + 1) + ".rels");
+        if (xml == null) return result;
+        try {
+            for (Element rel : descendants(parseXml(xml).getDocumentElement(), "Relationship")) {
+                String target = rel.getAttribute("Target");
+                if (target.isBlank() || "External".equals(rel.getAttribute("TargetMode"))) continue;
+                result.put(rel.getAttribute("Id"), normalizePartPath(dir, target));
+            }
+        } catch (Exception exception) {
+            log.debug("Cannot read relationships of {}", partPath);
+        }
+        return result;
+    }
+
+    private String normalizePartPath(String dir, String target) {
+        String joined = target.startsWith("/") ? target.substring(1) : dir + target;
+        java.util.ArrayDeque<String> parts = new java.util.ArrayDeque<>();
+        for (String part : joined.split("/")) {
+            if (part.isEmpty() || ".".equals(part)) continue;
+            if ("..".equals(part)) {
+                if (!parts.isEmpty()) parts.removeLast();
+            } else {
+                parts.addLast(part);
+            }
+        }
+        return String.join("/", parts);
+    }
+
+    /** Slide background, falling back to its layout and then its master. */
+    private Fill backgroundChain(
+            String partPath,
+            Map<String, byte[]> entries,
+            TemplateManifest.Theme theme,
+            List<TemplateManifest.Element> decor,
+            Map<String, byte[]> assetsOut,
+            int depth
+    ) throws Exception {
+        if (partPath == null || depth > 3 || !entries.containsKey(partPath)) return null;
+        Document part = parseXml(entries.get(partPath));
+        Map<String, String> rels = readRelationships(entries, partPath);
+        Element props = firstDescendant(part.getDocumentElement(), "bgPr");
+        if (props != null) {
+            Fill fill = fillOf(props, theme);
+            if (fill != null) return fill;
+            Element picture = firstChild(props, "blipFill");
+            Element blip = picture == null ? null : firstDescendant(picture, "blip");
+            String asset = blip == null ? null : registerAsset(rels.get(blip.getAttributeNS(REL_NS, "embed")), entries, assetsOut);
+            if (asset != null) {
+                decor.add(0, imageElement("bg", asset, 0, 0, 960, 540, 0, Map.of()));
+                return new Fill(null, null);
+            }
+        }
+        if (partPath.startsWith("ppt/slideMasters/")) return null;
+        String next = rels.values().stream()
+                .filter(target -> target.startsWith("ppt/slideLayouts/") || target.startsWith("ppt/slideMasters/"))
+                .findFirst().orElse(null);
+        return backgroundChain(next, entries, theme, decor, assetsOut, depth + 1);
+    }
+
+    private boolean mostlyInside(double[] text, TemplateManifest.Element art) {
+        double left = Math.max(text[0], art.getX());
+        double top = Math.max(text[1], art.getY());
+        double right = Math.min(text[0] + text[2], art.getX() + art.getWidth());
+        double bottom = Math.min(text[1] + text[3], art.getY() + art.getHeight());
+        if (right <= left || bottom <= top) return false;
+        return (right - left) * (bottom - top) >= 0.6 * text[2] * text[3];
+    }
+
+    private Element firstChild(Element parent, String localName) {
+        if (parent == null) return null;
+        for (Element child : childElements(parent)) {
+            if (localName.equals(child.getLocalName())) return child;
+        }
+        return null;
+    }
+
+    /** Solid or gradient fill that is a direct child of the given properties node. */
+    private Fill fillOf(Element props, TemplateManifest.Theme theme) {
+        Element solid = firstChild(props, "solidFill");
+        if (solid != null) {
+            String color = colorFromNode(solid, theme.getColors());
+            if (color == null) return null;
+            Element alpha = firstDescendant(solid, "alpha");
+            double opacity = alpha == null ? 1 : longAttr(alpha, "val", 100_000) / 100_000d;
+            return new Fill(cssColor(color, opacity), color);
+        }
+        Element gradient = firstChild(props, "gradFill");
+        return gradient == null ? null : gradientFill(gradient, theme);
+    }
+
+    private Fill gradientFill(Element gradient, TemplateManifest.Theme theme) {
+        Element list = firstChild(gradient, "gsLst");
+        if (list == null) return null;
+        List<String> stops = new ArrayList<>();
+        double red = 0;
+        double green = 0;
+        double blue = 0;
+        int counted = 0;
+        for (Element stop : childElements(list)) {
+            String color = colorFromNode(stop, theme.getColors());
+            if (color == null) continue;
+            Element alpha = firstDescendant(stop, "alpha");
+            double opacity = alpha == null ? 1 : longAttr(alpha, "val", 100_000) / 100_000d;
+            stops.add(cssColor(color, opacity) + " " + trimNumber(longAttr(stop, "pos", 0) / 1000d) + "%");
+            int rgb = Integer.parseInt(color.substring(1), 16);
+            red += (rgb >> 16) & 255;
+            green += (rgb >> 8) & 255;
+            blue += rgb & 255;
+            counted++;
+        }
+        if (counted == 0) return null;
+        String average = String.format("#%02X%02X%02X", Math.round(red / counted), Math.round(green / counted), Math.round(blue / counted));
+        if (stops.size() == 1) return new Fill(stops.get(0).replaceAll(" [0-9.]+%$", ""), average);
+        String joined = String.join(", ", stops);
+        if (firstChild(gradient, "path") != null) {
+            return new Fill("radial-gradient(circle at 50% 50%, " + joined + ")", average);
+        }
+        Element linear = firstChild(gradient, "lin");
+        double angle = linear == null ? 90 : longAttr(linear, "ang", 0) / 60_000d;
+        // OOXML measures 0deg as left-to-right; CSS measures 90deg that way.
+        return new Fill("linear-gradient(" + trimNumber((angle + 90) % 360) + "deg, " + joined + ")", average);
+    }
+
+    private String cssColor(String hex, double opacity) {
+        if (opacity >= 0.999) return hex;
+        int rgb = Integer.parseInt(hex.substring(1), 16);
+        return "rgba(" + ((rgb >> 16) & 255) + ", " + ((rgb >> 8) & 255) + ", " + (rgb & 255) + ", " + trimNumber(opacity) + ")";
+    }
+
+    private String trimNumber(double value) {
+        return String.format(Locale.ROOT, "%.2f", value).replaceAll("0+$", "").replaceAll("\\.$", "");
+    }
+
+    private String registerAsset(String path, Map<String, byte[]> entries, Map<String, byte[]> assetsOut) {
+        if (path == null || !path.startsWith("ppt/media/") || !isRasterMedia(path)) return null;
+        byte[] bytes = entries.get(path);
+        if (bytes == null) return null;
+        String name = Path.of(path).getFileName().toString().replaceAll("[^A-Za-z0-9._-]", "_");
+        assetsOut.putIfAbsent(name, bytes);
+        return name;
+    }
+
+    private TemplateManifest.Element imageElement(
+            String id, String asset, double x, double y, double width, double height, double rotation, Map<String, Object> style
+    ) {
+        return TemplateManifest.Element.builder()
+                .id("decor-" + id)
+                .type("image")
+                .role("decoration")
+                .x(x).y(y).width(width).height(height)
+                .rotation(rotation)
+                .locked(true)
+                .src("asset:" + asset)
+                .style(new LinkedHashMap<>(style))
+                .build();
+    }
+
+    /** Child-space to slide-space mapping of a group: X = a * x + b (and the same for Y). */
+    private double[] groupTransform(Element group, double[] parent) {
+        Element properties = firstChild(group, "grpSpPr");
+        Element transform = properties == null ? null : firstChild(properties, "xfrm");
+        if (transform == null) return parent;
+        Element offset = firstChild(transform, "off");
+        Element extent = firstChild(transform, "ext");
+        Element childOffset = firstChild(transform, "chOff");
+        Element childExtent = firstChild(transform, "chExt");
+        if (offset == null || extent == null || childOffset == null || childExtent == null) return parent;
+        double childW = longAttr(childExtent, "cx", 0);
+        double childH = longAttr(childExtent, "cy", 0);
+        if (childW <= 0 || childH <= 0) return parent;
+        double sx = longAttr(extent, "cx", 0) / childW;
+        double sy = longAttr(extent, "cy", 0) / childH;
+        double tx = longAttr(offset, "x", 0) - longAttr(childOffset, "x", 0) * sx;
+        double ty = longAttr(offset, "y", 0) - longAttr(childOffset, "y", 0) * sy;
+        return new double[]{parent[0] * sx, parent[0] * tx + parent[1], parent[2] * sy, parent[2] * ty + parent[3]};
+    }
+
+    private void collectVisuals(
+            Element container,
+            double[] tf,
+            Map<String, String> rels,
+            long[] pageSize,
+            TemplateManifest.Theme theme,
+            Map<String, byte[]> entries,
+            Map<String, byte[]> assetsOut,
+            List<TemplateManifest.Element> out,
+            List<double[]> textRects
+    ) {
+        for (Element node : childElements(container)) {
+            if (out.size() >= MAX_DECOR) return;
+            String kind = node.getLocalName();
+            if ("grpSp".equals(kind)) {
+                collectVisuals(node, groupTransform(node, tf), rels, pageSize, theme, entries, assetsOut, out, textRects);
+                continue;
+            }
+            if (!"sp".equals(kind) && !"pic".equals(kind)) continue;
+            Element nonVisual = firstDescendant(node, "cNvPr");
+            if (nonVisual != null && "1".equals(nonVisual.getAttribute("hidden"))) continue;
+            Element properties = firstChild(node, "spPr");
+            Element transform = properties == null ? null : firstChild(properties, "xfrm");
+            Element offset = firstChild(transform, "off");
+            Element extent = firstChild(transform, "ext");
+            if (offset == null || extent == null) continue;
+
+            double x = (tf[0] * longAttr(offset, "x", 0) + tf[1]) / pageSize[0] * 960;
+            double y = (tf[2] * longAttr(offset, "y", 0) + tf[3]) / pageSize[1] * 540;
+            double width = tf[0] * longAttr(extent, "cx", 0) / pageSize[0] * 960;
+            double height = tf[2] * longAttr(extent, "cy", 0) / pageSize[1] * 540;
+            if (width < 3 || height < 3 || x > 960 || y > 540 || x + width < 0 || y + height < 0) continue;
+
+            boolean textBox = "sp".equals(kind) && firstChild(properties, "blipFill") == null
+                    && (firstDescendant(node, "ph") != null || hasText(node));
+            if (textBox) {
+                textRects.add(new double[]{x, y, width, height});
+                continue;
+            }
+            if (firstDescendant(node, "ph") != null) continue; // picture placeholders are filled by the app
+            // Small marks away from the slide edge (logos, brand stamps) would land on top of the text.
+            boolean smallMark = width * height < 4_500;
+            boolean nearEdge = x < 48 || y < 48 || x + width > 960 - 48 || y + height > 540 - 48;
+            if (smallMark && !nearEdge) continue;
+
+            Element geometry = firstChild(properties, "prstGeom");
+            String preset = geometry == null ? "rect" : geometry.getAttribute("prst");
+            Map<String, Object> style = new LinkedHashMap<>();
+            if ("1".equals(transform.getAttribute("flipH"))) style.put("flipX", true);
+            if ("1".equals(transform.getAttribute("flipV"))) style.put("flipY", true);
+            if ("ellipse".equals(preset)) style.put("borderRadius", "50%");
+            if ("roundRect".equals(preset)) style.put("borderRadius", "12px");
+            double rotation = longAttr(transform, "rot", 0) / 60_000d;
+            String id = "d" + out.size() + "-" + UUID.randomUUID().toString().substring(0, 6);
+
+            Element pictureFill = "pic".equals(kind) ? firstChild(node, "blipFill") : firstChild(properties, "blipFill");
+            if (pictureFill != null) {
+                Element blip = firstDescendant(pictureFill, "blip");
+                String asset = blip == null ? null : registerAsset(rels.get(blip.getAttributeNS(REL_NS, "embed")), entries, assetsOut);
+                if (asset == null) continue;
+                Element crop = firstChild(pictureFill, "srcRect");
+                if (crop != null) {
+                    style.put("cropL", longAttr(crop, "l", 0) / 100_000d);
+                    style.put("cropT", longAttr(crop, "t", 0) / 100_000d);
+                    style.put("cropR", longAttr(crop, "r", 0) / 100_000d);
+                    style.put("cropB", longAttr(crop, "b", 0) / 100_000d);
+                }
+                out.add(imageElement(id, asset, x, y, width, height, rotation, style));
+                continue;
+            }
+
+            // Shapes: PowerPoint presets the editor has a matching shape for, filled and/or outlined.
+            // Custom outlines (freeform paths) have no equivalent here and would render as wrong rectangles.
+            String shapeId = SHAPE_PRESETS.get(preset);
+            if (hasText(node) || shapeId == null) continue;
+            Fill fill = fillOf(properties, theme);
+            String fillCss = fill == null ? null : fill.css();
+            String lineColor = readLineColor(node, theme);
+            Element line = firstDescendant(properties, "ln");
+            double lineWidth = line == null ? 0 : longAttr(line, "w", 0) / 12_700d * (960d / (pageSize[0] / 12_700d));
+            boolean outlined = lineColor != null && lineWidth > 0;
+            if (fillCss == null && !outlined) continue;
+            style.put("shape", shapeId);
+            if (outlined) style.put("borderWidth", Math.max(1, Math.round(lineWidth * 10) / 10d));
+            out.add(TemplateManifest.Element.builder()
+                    .id("decor-" + id)
+                    .type("shape")
+                    .role("decoration")
+                    .x(x).y(y).width(width).height(height)
+                    .rotation(rotation)
+                    .locked(true)
+                    .fill(fillCss == null ? "transparent" : fillCss)
+                    .borderColor(outlined ? lineColor : null)
+                    .style(style)
+                    .build());
+        }
+    }
+
+    /** PowerPoint preset geometry -> the editor's own shape id (see front-end utils/shapeLibrary). */
+    private static final Map<String, String> SHAPE_PRESETS = Map.ofEntries(
+            Map.entry("rect", "rect"),
+            Map.entry("roundRect", "roundRect"),
+            Map.entry("ellipse", "ellipse"),
+            Map.entry("triangle", "triangle"),
+            Map.entry("diamond", "diamond"),
+            Map.entry("star5", "star"),
+            Map.entry("rightArrow", "arrowRight"),
+            Map.entry("chevron", "chevron"),
+            Map.entry("homePlate", "chevron")
+    );
 
     private Document parseXml(byte[] xml) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
@@ -631,6 +1078,35 @@ public class PowerPointTemplateParser {
                 .filter(value -> value != null && !value.isBlank())
                 .reduce((left, right) -> left + " " + right)
                 .orElse("");
+    }
+
+    /**
+     * The real text of a shape, one editor-ready HTML paragraph per PowerPoint paragraph
+     * (`<a:p>`), instead of `readText`'s single flattened line — so a real deck opened for
+     * editing keeps its bullets as actual bullets (and step 4's "reveal one at a time" has
+     * bullets to reveal), not one run-on sentence. Titles stay plain paragraphs; body/custom
+     * text becomes a bulleted list when it has more than one paragraph, matching how most
+     * placeholders are actually used.
+     */
+    private String readTextHtml(Element shape, String role) {
+        List<String> paragraphs = descendants(shape, "p").stream()
+                .map(paragraph -> descendants(paragraph, "t").stream()
+                        .map(Element::getTextContent)
+                        .filter(value -> value != null && !value.isEmpty())
+                        .reduce((left, right) -> left + right)
+                        .orElse(""))
+                .filter(text -> !text.isBlank())
+                .map(this::escapeHtml)
+                .toList();
+        if (paragraphs.isEmpty()) return "";
+        if ("title".equals(role) || paragraphs.size() == 1) {
+            return paragraphs.stream().map(text -> "<p>" + text + "</p>").reduce("", String::concat);
+        }
+        return "<ul>" + paragraphs.stream().map(text -> "<li>" + text + "</li>").reduce("", String::concat) + "</ul>";
+    }
+
+    private String escapeHtml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private boolean hasText(Element shape) {

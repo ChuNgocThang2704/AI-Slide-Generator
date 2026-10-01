@@ -158,6 +158,22 @@ public class AiService {
         }
     }
 
+    /** Design brief (colour, mood, type, ornament) for a prompt-driven template; {"ok":false} on any failure. */
+    public JsonNode themeBrief(String subject) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            body.add("subject", subject);
+            String response = restTemplate.postForObject(
+                    buildAiUrl("/api/theme-brief"), new HttpEntity<>(body, headers), String.class);
+            return objectMapper.readTree(response);
+        } catch (Exception exception) {
+            log.warn("[document-service] Theme brief failed: {}", exception.getMessage());
+            return objectMapper.createObjectNode().put("ok", false);
+        }
+    }
+
     public JsonNode reviseSlides(
             String sourceTaskId,
             String revisionPrompt,
@@ -168,6 +184,7 @@ public class AiService {
             Integer slideNumber,
             Integer contextSlideNumber,
             Integer imageLimit,
+            String currentSpecJson,
             Consumer<String> taskIdConsumer
     ) throws JsonProcessingException {
         String submitUrl = buildAiUrl("/api/revise-slide-spec");
@@ -194,6 +211,11 @@ public class AiService {
             }
             if (imageLimit != null) {
                 body.add("image_limit", imageLimit);
+            }
+            // The deck as it stands in the editor, so the AI revises the user's
+            // version instead of the stored first-generation result.
+            if (currentSpecJson != null && !currentSpecJson.isBlank()) {
+                body.add("current_spec", currentSpecJson);
             }
 
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
@@ -232,6 +254,38 @@ public class AiService {
                 errorMessage = "AI revise API error (" + e.getStatusCode() + "): " + responseBody;
             }
             throw new AppException(ErrorCode.AI_API_ERROR, errorMessage);
+        }
+    }
+
+    /**
+     * Register a deck the AI did not generate (an opened PPTX, or one whose task has expired)
+     * as a completed spec task, and return that task's id so it can be revised.
+     */
+    public String adoptSlideSpec(String currentSpecJson, String deckTitle) {
+        String adoptUrl = buildAiUrl("/api/adopt-slide-spec");
+        log.info("[document-service] Adopting the current deck as an AI revision source: {}", adoptUrl);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        body.add("spec", currentSpecJson);
+        if (deckTitle != null && !deckTitle.isBlank()) {
+            body.add("title", deckTitle);
+        }
+
+        try {
+            String responseStr = restTemplate.postForObject(adoptUrl, new HttpEntity<>(body, headers), String.class);
+            JsonNode response = objectMapper.readTree(responseStr);
+            String taskId = response.path("task_id").asText("");
+            if (taskId.isBlank()) {
+                throw new AppException(ErrorCode.AI_API_ERROR, "AI khong tra ve task_id khi nhan deck hien tai.");
+            }
+            return taskId;
+        } catch (HttpStatusCodeException e) {
+            throw new AppException(ErrorCode.AI_API_ERROR,
+                    "Khong the dung deck hien tai lam nguon sua (" + e.getStatusCode() + "): " + e.getResponseBodyAsString());
+        } catch (JsonProcessingException e) {
+            throw new AppException(ErrorCode.AI_API_ERROR, "Phan hoi khong hop le khi nhan deck hien tai: " + e.getMessage());
         }
     }
 

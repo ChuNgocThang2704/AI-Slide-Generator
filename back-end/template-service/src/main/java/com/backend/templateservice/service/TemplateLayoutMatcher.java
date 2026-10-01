@@ -21,7 +21,12 @@ public class TemplateLayoutMatcher {
         TemplateManifest.Layout layout = chooseLayout(manifest.getLayouts(), requestedType, request.getPageIndex());
         List<Map<String, Object>> elements = new ArrayList<>();
 
-        elements.add(backgroundElement());
+        String pageColor = layout.getBackgroundColor() == null || layout.getBackgroundColor().isBlank()
+                ? DISPLAY_BACKGROUND : layout.getBackgroundColor();
+        elements.add(backgroundElement(layout.getBackground() == null ? pageColor : layout.getBackground()));
+        if (layout.getDecor() != null) {
+            layout.getDecor().forEach(art -> elements.add(decorElement(art)));
+        }
         List<TemplateManifest.Element> bodyPlaceholders = layout.getElements().stream()
                 .filter(item -> item.isPlaceholder() && "body".equals(item.getRole()))
                 .toList();
@@ -48,7 +53,7 @@ public class TemplateLayoutMatcher {
         }
 
         ensureSemanticElements(elements, request, manifest);
-        ensureReadableTextColors(elements, manifest);
+        ensureReadableTextColors(elements, manifest, pageColor);
         Map<String, Object> titleStyle = styleForRole(
                 elements, "title", manifest.getTheme().getHeadingFont(), 32, 700
         );
@@ -58,7 +63,7 @@ public class TemplateLayoutMatcher {
         return TemplateMatchResponse.builder()
                 .layoutId(layout.getId())
                 .layoutType(layout.getType())
-                .backgroundColor(DISPLAY_BACKGROUND)
+                .backgroundColor(pageColor)
                 .primaryColor(manifest.getTheme().getPrimaryColor())
                 .headingFont(manifest.getTheme().getHeadingFont())
                 .bodyFont(manifest.getTheme().getBodyFont())
@@ -103,7 +108,16 @@ public class TemplateLayoutMatcher {
                     .filter(layout -> "content".equals(layout.getType()))
                     .toList();
         }
-        if (candidates.isEmpty()) return layouts.getFirst();
+        if (candidates.isEmpty() && !"title".equals(type) && !"thankyou".equals(type)) {
+            // Sample decks (e.g. exported from Canva) have no plain "content" layout;
+            // an everyday slide must not fall back to the cover.
+            candidates = layouts.stream()
+                    .filter(layout -> !"title".equals(layout.getType()) && !"thankyou".equals(layout.getType()))
+                    .toList();
+        }
+        if (candidates.isEmpty()) {
+            return "thankyou".equals(type) ? layouts.getLast() : layouts.getFirst();
+        }
         int rotation = pageIndex == null ? 0 : Math.max(0, pageIndex - ("title".equals(type) ? 0 : 1));
         return candidates.get(rotation % candidates.size());
     }
@@ -122,7 +136,26 @@ public class TemplateLayoutMatcher {
         return "content";
     }
 
-    private Map<String, Object> backgroundElement() {
+    private Map<String, Object> decorElement(TemplateManifest.Element art) {
+        Map<String, Object> element = new LinkedHashMap<>();
+        element.put("id", art.getId() + "-" + UUID.randomUUID().toString().substring(0, 6));
+        element.put("type", art.getType());
+        element.put("role", "decoration");
+        element.put("x", art.getX());
+        element.put("y", art.getY());
+        element.put("width", art.getWidth());
+        element.put("height", art.getHeight());
+        element.put("rotation", art.getRotation());
+        if (art.getOpacity() != null) element.put("opacity", art.getOpacity());
+        if (art.getSrc() != null) element.put("src", art.getSrc());
+        if (art.getFill() != null) element.put("fill", art.getFill());
+        if (art.getBorderColor() != null) element.put("borderColor", art.getBorderColor());
+        element.put("style", art.getStyle() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(art.getStyle()));
+        element.put("locked", true);
+        return element;
+    }
+
+    private Map<String, Object> backgroundElement(String fill) {
         Map<String, Object> element = new LinkedHashMap<>();
         element.put("id", "template-background-" + UUID.randomUUID());
         element.put("type", "shape");
@@ -132,7 +165,7 @@ public class TemplateLayoutMatcher {
         element.put("width", 960);
         element.put("height", 540);
         element.put("rotation", 0);
-        element.put("fill", DISPLAY_BACKGROUND);
+        element.put("fill", fill);
         element.put("borderColor", "transparent");
         element.put("locked", true);
         return element;
@@ -140,14 +173,15 @@ public class TemplateLayoutMatcher {
 
     private void ensureReadableTextColors(
             List<Map<String, Object>> elements,
-            TemplateManifest manifest
+            TemplateManifest manifest,
+            String pageColor
     ) {
-        String replacement = mostReadableThemeColor(manifest, DISPLAY_BACKGROUND);
+        String replacement = mostReadableThemeColor(manifest, pageColor);
         for (Map<String, Object> element : elements) {
             if (!"text".equals(element.get("type"))) continue;
             Map<String, Object> style = copyStyle(element.get("style"));
             String current = String.valueOf(style.getOrDefault("color", ""));
-            if (contrastRatio(current, DISPLAY_BACKGROUND) < MIN_TEXT_CONTRAST) {
+            if (contrastRatio(current, pageColor) < MIN_TEXT_CONTRAST) {
                 style.put("color", replacement);
                 element.put("style", style);
             }

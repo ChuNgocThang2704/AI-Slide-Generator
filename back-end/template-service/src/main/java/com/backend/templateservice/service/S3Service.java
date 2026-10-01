@@ -52,6 +52,40 @@ public class S3Service {
         return String.format("https://%s.s3.%s.amazonaws.com/%s", bucketName, region, key);
     }
 
+    public void putBytes(String key, byte[] data, String contentType) {
+        PutObjectRequest request = PutObjectRequest.builder()
+                .bucket(bucketName)
+                .key(key)
+                .contentType(contentType)
+                .build();
+        s3Client.putObject(request, RequestBody.fromBytes(data));
+    }
+
+    /** Returns the object bytes, or null when it does not exist. */
+    public byte[] getBytes(String key) {
+        try {
+            return s3Client.getObjectAsBytes(GetObjectRequest.builder().bucket(bucketName).key(key).build()).asByteArray();
+        } catch (Exception exception) {
+            log.warn("Cannot read S3 object {}: {}", key, exception.getMessage());
+            return null;
+        }
+    }
+
+    /** Bytes of an object addressed by this bucket's public-style url; null if unknown. */
+    public byte[] getBytesFromUrl(String fileUrl) {
+        String bucketDomain = String.format("https://%s.s3.%s.amazonaws.com/", bucketName, region);
+        if (fileUrl == null || !fileUrl.startsWith(bucketDomain)) return null;
+        return getBytes(fileUrl.substring(bucketDomain.length()));
+    }
+
+    public void deleteKey(String key) {
+        try {
+            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(key).build());
+        } catch (Exception exception) {
+            log.warn("Cannot delete S3 object {}: {}", key, exception.getMessage());
+        }
+    }
+
     public void deleteFile(String fileUrl) {
         if (fileUrl == null || fileUrl.isEmpty()) return;
 

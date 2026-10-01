@@ -1,6 +1,7 @@
 package com.backend.documentservice.controller;
 
 import com.backend.documentservice.dto.request.ProjectCreateRequest;
+import com.backend.documentservice.dto.request.ProjectImportRequest;
 import com.backend.documentservice.dto.request.ProjectReviseRequest;
 import com.backend.documentservice.dto.request.ProjectUpdateRequest;
 import com.backend.documentservice.dto.request.SlidePageUpdateRequest;
@@ -70,6 +71,13 @@ public class DocumentController {
                 .build();
     }
 
+    @PostMapping("/projects/import")
+    public ApiResponse<ProjectResponse> createImportedProject(@RequestBody ProjectImportRequest request) {
+        return ApiResponse.<ProjectResponse>builder()
+                .data(projectService.createImportedProject(currentUserId(), request))
+                .build();
+    }
+
     @GetMapping("/projects")
     public ApiResponse<PageResponse<ProjectResponse>> getAllProjects(
             @RequestParam(required = false) String search,
@@ -92,6 +100,13 @@ public class DocumentController {
     public ApiResponse<ProjectProgressResponse> getProjectProgress(@PathVariable UUID id) {
         return ApiResponse.<ProjectProgressResponse>builder()
                 .data(projectService.getProjectProgress(id, currentUserId()))
+                .build();
+    }
+
+    @PostMapping("/theme-brief")
+    public ApiResponse<com.fasterxml.jackson.databind.JsonNode> themeBrief(@RequestBody java.util.Map<String, String> body) {
+        return ApiResponse.<com.fasterxml.jackson.databind.JsonNode>builder()
+                .data(projectService.requestThemeBrief(body.get("subject")))
                 .build();
     }
 

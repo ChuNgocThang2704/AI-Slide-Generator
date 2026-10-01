@@ -75,7 +75,8 @@ public class TemplateService {
         }
 
         try {
-            TemplateManifest manifest = templateParser.parse(file.getBytes());
+            PowerPointTemplateParser.ParsedTemplate parsed = templateParser.parseWithAssets(file.getBytes());
+            TemplateManifest manifest = parsed.manifest();
             String url = s3Service.uploadFile(file, "templates/custom");
             Template template = new Template();
             template.setName(firstNonBlank(requestedName, stripExtension(originalFilename), "Custom template"));
@@ -88,13 +89,89 @@ public class TemplateService {
             template.setPrimaryColor(manifest.getTheme().getPrimaryColor());
             template.setBackgroundColor(manifest.getTheme().getBackgroundColor());
             template.setManifestJson(objectMapper.writeValueAsString(manifest));
-            return TemplateMapper.toResponse(templateRepository.save(template));
+            Template saved = templateRepository.save(template);
+            parsed.assets().forEach((name, bytes) -> {
+                try {
+                    s3Service.putBytes(assetKey(saved.getId(), name), bytes, PowerPointTemplateParser.contentTypeFor(name));
+                } catch (RuntimeException exception) {
+                    log.warn("Cannot store template asset {}: {}", name, exception.getMessage());
+                }
+            });
+            return TemplateMapper.toResponse(saved);
         } catch (CustomException exception) {
             throw exception;
         } catch (IOException | RuntimeException exception) {
             log.error("Failed to parse or upload custom template", exception);
             throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
         }
+    }
+
+    /**
+     * Parses a real PowerPoint deck to open it for editing (not to file it away as a reusable
+     * template): every slide's own real text, pictures and shapes are kept in order, 1-to-1,
+     * rather than being reduced to one reusable, blanked-out sample layout. The result also
+     * becomes a normal custom template of its own (so the same asset-storage and re-parse
+     * plumbing as `uploadCustomTemplate` applies), the caller just doesn't have to use it that way.
+     */
+    @Transactional
+    public com.backend.templateservice.dto.response.TemplateImportResponse importSlides(MultipartFile file) {
+        String originalFilename = file.getOriginalFilename();
+        if (!isPowerPointTemplate(originalFilename)) {
+            throw new CustomException(ErrorCode.INVALID_FILE_FORMAT);
+        }
+
+        try {
+            PowerPointTemplateParser.ParsedTemplate parsed = templateParser.parseWithAssets(file.getBytes(), true);
+            TemplateManifest manifest = parsed.manifest();
+            String url = s3Service.uploadFile(file, "templates/imports");
+            Template template = new Template();
+            template.setName(firstNonBlank(stripExtension(originalFilename), "Imported presentation"));
+            template.setDescription("Opened from an uploaded PowerPoint file");
+            template.setS3Url(url);
+            template.setNumSlides(manifest.getLayouts().size());
+            template.setIsPremium(false);
+            template.setSourceType("IMPORT_PPTX");
+            template.setParseStatus("READY");
+            template.setPrimaryColor(manifest.getTheme().getPrimaryColor());
+            template.setBackgroundColor(manifest.getTheme().getBackgroundColor());
+            template.setManifestJson(objectMapper.writeValueAsString(manifest));
+            Template saved = templateRepository.save(template);
+            parsed.assets().forEach((name, bytes) -> {
+                try {
+                    s3Service.putBytes(assetKey(saved.getId(), name), bytes, PowerPointTemplateParser.contentTypeFor(name));
+                } catch (RuntimeException exception) {
+                    log.warn("Cannot store imported asset {}: {}", name, exception.getMessage());
+                }
+            });
+            rewriteAssetUrls(manifest, saved.getId());
+            return com.backend.templateservice.dto.response.TemplateImportResponse.builder()
+                    .templateId(saved.getId())
+                    .manifest(manifest)
+                    .build();
+        } catch (CustomException exception) {
+            throw exception;
+        } catch (IOException | RuntimeException exception) {
+            log.error("Failed to parse uploaded presentation", exception);
+            throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
+        }
+    }
+
+    /** Turns every "asset:name" placeholder this manifest's elements carry into a servable URL. */
+    private void rewriteAssetUrls(TemplateManifest manifest, UUID templateId) {
+        manifest.getLayouts().forEach(layout -> {
+            rewriteAssetUrls(layout.getElements(), templateId);
+            rewriteAssetUrls(layout.getDecor(), templateId);
+        });
+    }
+
+    private void rewriteAssetUrls(List<TemplateManifest.Element> elements, UUID templateId) {
+        if (elements == null) return;
+        elements.forEach(element -> {
+            String src = element.getSrc();
+            if (src != null && src.startsWith("asset:")) {
+                element.setSrc("/template/public/assets/" + templateId + "/" + src.substring("asset:".length()));
+            }
+        });
     }
 
     public TemplateMatchResponse matchLayout(UUID id, TemplateMatchRequest request) {
@@ -104,7 +181,14 @@ public class TemplateService {
         }
         try {
             TemplateManifest manifest = objectMapper.readValue(template.getManifestJson(), TemplateManifest.class);
-            return layoutMatcher.match(manifest, request);
+            TemplateMatchResponse response = layoutMatcher.match(manifest, request);
+            response.getElements().forEach(element -> {
+                Object src = element.get("src");
+                if (src instanceof String value && value.startsWith("asset:")) {
+                    element.put("src", "/template/public/assets/" + id + "/" + value.substring(6));
+                }
+            });
+            return response;
         } catch (JsonProcessingException exception) {
             log.error("Cannot read template manifest {}", id, exception);
             throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
@@ -162,7 +246,54 @@ public class TemplateService {
         if (template.getS3Url() != null) {
             s3Service.deleteFile(template.getS3Url());
         }
+        deleteAssets(template);
         templateRepository.delete(template);
+    }
+
+    /** Re-reads the stored PowerPoint with the current parser (backgrounds, pictures, shapes). */
+    @Transactional
+    public TemplateResponse reparseCustomTemplate(UUID id) {
+        Template template = templateRepository.findById(id)
+                .orElseThrow(() -> new CustomException(ErrorCode.TEMPLATE_NOT_FOUND));
+        verifyCustomTemplateOwner(template);
+        byte[] file = s3Service.getBytesFromUrl(template.getS3Url());
+        if (file == null) throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
+        try {
+            PowerPointTemplateParser.ParsedTemplate parsed = templateParser.parseWithAssets(file);
+            deleteAssets(template);
+            parsed.assets().forEach((name, bytes) ->
+                    s3Service.putBytes(assetKey(template.getId(), name), bytes, PowerPointTemplateParser.contentTypeFor(name)));
+            template.setNumSlides(parsed.manifest().getLayouts().size());
+            template.setPrimaryColor(parsed.manifest().getTheme().getPrimaryColor());
+            template.setBackgroundColor(parsed.manifest().getTheme().getBackgroundColor());
+            template.setManifestJson(objectMapper.writeValueAsString(parsed.manifest()));
+            return TemplateMapper.toResponse(templateRepository.save(template));
+        } catch (CustomException exception) {
+            throw exception;
+        } catch (IOException | RuntimeException exception) {
+            log.error("Failed to re-parse template {}", id, exception);
+            throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
+        }
+    }
+
+    private static String assetKey(UUID templateId, String name) {
+        return "templates/custom-assets/" + templateId + "/" + name;
+    }
+
+    private void deleteAssets(Template template) {
+        if (template.getManifestJson() == null) return;
+        try {
+            TemplateManifest manifest = objectMapper.readValue(template.getManifestJson(), TemplateManifest.class);
+            manifest.getAssets().keySet().forEach(name -> s3Service.deleteKey(assetKey(template.getId(), name)));
+        } catch (Exception exception) {
+            log.warn("Cannot delete assets of template {}: {}", template.getId(), exception.getMessage());
+        }
+    }
+
+    /** A template picture, addressed by the template's unguessable id. Null when it does not exist. */
+    public byte[] getAssetBytes(UUID templateId, String name) {
+        if (name == null || !name.matches("[A-Za-z0-9._-]{1,120}")) return null;
+        return s3Service.getBytes(assetKey(templateId, name));
     }
 
     public TemplateResponse getTemplate(UUID id) {
@@ -217,17 +348,49 @@ public class TemplateService {
     }
 
     private void verifyAccess(Template template) {
-        if ("CUSTOM_PPTX".equals(template.getSourceType())
+        if (isPrivateSource(template.getSourceType())
                 && !Objects.equals(template.getCreatedBy(), currentAuditor())) {
             throw new CustomException(ErrorCode.TEMPLATE_NOT_FOUND);
         }
     }
 
     private void verifyCustomTemplateOwner(Template template) {
-        if (!"CUSTOM_PPTX".equals(template.getSourceType())
+        if (!isPrivateSource(template.getSourceType())
                 || !Objects.equals(template.getCreatedBy(), currentAuditor())) {
             throw new CustomException(ErrorCode.TEMPLATE_NOT_FOUND);
         }
+    }
+
+    // IMPORT_PPTX = a real deck the user opened for editing: its manifest holds that deck's own
+    // text, so it must never be visible to (or deletable by) anyone but its owner.
+    private static boolean isPrivateSource(String sourceType) {
+        return "CUSTOM_PPTX".equals(sourceType) || "GENERATED_THEME".equals(sourceType) || "IMPORT_PPTX".equals(sourceType);
+    }
+
+    /**
+     * Saves a prompt-generated template. The whole design is the short code, kept in
+     * `description`, so nothing else has to be stored. Saving the same code twice returns
+     * the entry the user already has.
+     */
+    @Transactional
+    public TemplateResponse saveGeneratedTheme(String name, String code) {
+        if (code == null || !code.matches("gen[0-9]+(\\.[0-9]{1,4}){5,20}")) {
+            throw new CustomException(ErrorCode.INVALID_TEMPLATE_FILE);
+        }
+        String owner = currentAuditor();
+        Template existing = templateRepository
+                .findFirstBySourceTypeAndCreatedByAndDescription("GENERATED_THEME", owner, code)
+                .orElse(null);
+        if (existing != null) return TemplateMapper.toResponse(existing);
+
+        Template template = new Template();
+        template.setName(firstNonBlank(name == null ? null : name.trim(), "Template tạo theo prompt"));
+        template.setDescription(code);
+        template.setSourceType("GENERATED_THEME");
+        template.setParseStatus("READY");
+        template.setNumSlides(0);
+        template.setIsPremium(false);
+        return TemplateMapper.toResponse(templateRepository.save(template));
     }
 
     private String currentAuditor() {

@@ -28,6 +28,7 @@ public class ProjectResponse implements Serializable {
     private String aiTaskId;
     private String presentationMode;
     private List<String> learningObjectives;
+    private String deckMaster;
     private Instant createdAt;
     private Instant updatedAt;
 }

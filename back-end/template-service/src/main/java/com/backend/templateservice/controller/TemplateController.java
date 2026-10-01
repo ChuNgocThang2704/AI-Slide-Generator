@@ -6,6 +6,7 @@ import com.backend.templateservice.dto.response.ApiResponse;
 import com.backend.templateservice.dto.response.PageResponse;
 import com.backend.templateservice.dto.response.TemplateResponse;
 import com.backend.templateservice.dto.response.TemplateMatchResponse;
+import com.backend.templateservice.dto.response.TemplateImportResponse;
 import com.backend.templateservice.service.TemplateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -39,6 +40,13 @@ public class TemplateController {
                 .build();
     }
 
+    @PostMapping(value = "/import", consumes = "multipart/form-data")
+    public ApiResponse<TemplateImportResponse> importSlides(@RequestParam("file") MultipartFile file) {
+        return ApiResponse.<TemplateImportResponse>builder()
+                .data(templateService.importSlides(file))
+                .build();
+    }
+
     @PostMapping("/{id}/match")
     public ApiResponse<TemplateMatchResponse> matchLayout(
             @PathVariable UUID id,
@@ -65,6 +73,30 @@ public class TemplateController {
         return ApiResponse.<PageResponse<TemplateResponse>>builder()
                 .data(templateService.getAllTemplates(search, page, size))
                 .build();
+    }
+
+    @PostMapping("/custom/generated")
+    public ApiResponse<TemplateResponse> saveGeneratedTheme(@RequestBody java.util.Map<String, String> body) {
+        return ApiResponse.<TemplateResponse>builder()
+                .data(templateService.saveGeneratedTheme(body.get("name"), body.get("code")))
+                .build();
+    }
+
+    @PostMapping("/custom/{id}/reparse")
+    public ApiResponse<TemplateResponse> reparseCustomTemplate(@PathVariable UUID id) {
+        return ApiResponse.<TemplateResponse>builder()
+                .data(templateService.reparseCustomTemplate(id))
+                .build();
+    }
+
+    @GetMapping("/public/assets/{id}/{name}")
+    public org.springframework.http.ResponseEntity<byte[]> getTemplateAsset(@PathVariable UUID id, @PathVariable String name) {
+        byte[] data = templateService.getAssetBytes(id, name);
+        if (data == null) return org.springframework.http.ResponseEntity.notFound().build();
+        return org.springframework.http.ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.parseMediaType(com.backend.templateservice.service.PowerPointTemplateParser.contentTypeFor(name)))
+                .cacheControl(org.springframework.http.CacheControl.maxAge(java.time.Duration.ofDays(7)).cachePublic())
+                .body(data);
     }
 
     @GetMapping("/public")

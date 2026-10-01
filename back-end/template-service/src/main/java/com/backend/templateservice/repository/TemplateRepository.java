@@ -15,7 +15,8 @@ public interface TemplateRepository extends JpaRepository<Template, UUID> {
 
     @Query("""
             SELECT t FROM Template t
-            WHERE (t.sourceType IS NULL OR t.sourceType <> 'CUSTOM_PPTX' OR t.createdBy = :owner)
+            WHERE (t.sourceType IS NULL OR t.sourceType NOT IN ('CUSTOM_PPTX', 'GENERATED_THEME', 'IMPORT_PPTX') OR t.createdBy = :owner)
+              AND (t.sourceType IS NULL OR t.sourceType <> 'IMPORT_PPTX')
               AND (:search IS NULL OR :search = ''
                 OR LOWER(t.name) LIKE LOWER(CONCAT('%', :search, '%'))
                 OR LOWER(t.description) LIKE LOWER(CONCAT('%', :search, '%')))
@@ -28,10 +29,12 @@ public interface TemplateRepository extends JpaRepository<Template, UUID> {
 
     @Query("""
             SELECT t FROM Template t
-            WHERE (t.sourceType IS NULL OR t.sourceType <> 'CUSTOM_PPTX')
+            WHERE (t.sourceType IS NULL OR t.sourceType NOT IN ('CUSTOM_PPTX', 'GENERATED_THEME', 'IMPORT_PPTX'))
               AND (:search IS NULL OR :search = ''
                 OR LOWER(t.name) LIKE LOWER(CONCAT('%', :search, '%'))
                 OR LOWER(t.description) LIKE LOWER(CONCAT('%', :search, '%')))
             """)
     Page<Template> searchPublicTemplates(@Param("search") String search, Pageable pageable);
+
+    java.util.Optional<Template> findFirstBySourceTypeAndCreatedByAndDescription(String sourceType, String createdBy, String description);
 }

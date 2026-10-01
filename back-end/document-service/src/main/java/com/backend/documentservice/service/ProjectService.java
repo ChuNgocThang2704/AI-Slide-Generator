@@ -1,6 +1,7 @@
 package com.backend.documentservice.service;
 
 import com.backend.documentservice.dto.request.ProjectCreateRequest;
+import com.backend.documentservice.dto.request.ProjectImportRequest;
 import com.backend.documentservice.dto.request.ProjectReviseRequest;
 import com.backend.documentservice.dto.request.ProjectUpdateRequest;
 import com.backend.documentservice.dto.response.ProjectResponse;
@@ -112,6 +113,9 @@ public class ProjectService {
             addAllowedImageUrl(allowedUrls, page.getImageUrl());
             collectImageUrls(allowedUrls, page.getElements());
         }
+        // The deck-wide logo (Project.deckMaster) isn't part of any one slide's elements,
+        // so it needs its own entry in the allowlist or every export/render of it 403s.
+        collectImageUrls(allowedUrls, project.getDeckMaster());
         if (!allowedUrls.contains(normalizedRequestedUrl)) {
             throw new AppException(ErrorCode.ACCESS_DENIED);
         }
@@ -132,16 +136,19 @@ public class ProjectService {
     private URI resolveImageProxyTarget(String requestedUrl) {
         URI requested = URI.create(requestedUrl);
         String host = requested.getHost();
+        String requestedPath = requested.getRawPath() == null ? "" : requested.getRawPath();
+        boolean aiOutputImage = requestedPath.startsWith("/outputs/images/");
         boolean localAiAlias = host != null
                 && ("localhost".equalsIgnoreCase(host)
                 || "127.0.0.1".equals(host)
-                || "host.docker.internal".equalsIgnoreCase(host))
+                || "host.docker.internal".equalsIgnoreCase(host)
+                || "ai-service".equalsIgnoreCase(host)
+                || "ai-slide-service".equalsIgnoreCase(host))
                 && (requested.getPort() == 8000 || requested.getPort() == -1);
-        if (!localAiAlias) return requested;
+        if (!localAiAlias && !aiOutputImage) return requested;
 
         URI configuredAi = URI.create(aiUrl);
         String basePath = configuredAi.getPath() == null ? "" : configuredAi.getPath().replaceAll("/+$", "");
-        String requestedPath = requested.getRawPath() == null ? "" : requested.getRawPath();
         return URI.create(new StringBuilder()
                 .append(configuredAi.getScheme())
                 .append("://")
@@ -167,7 +174,8 @@ public class ProjectService {
             node.fields().forEachRemaining(entry -> {
                 String key = entry.getKey();
                 JsonNode value = entry.getValue();
-                if (value.isTextual() && ("src".equals(key) || "storageUrl".equals(key) || "imageUrl".equals(key))) {
+                if (value.isTextual() && ("src".equals(key) || "storageUrl".equals(key) || "imageUrl".equals(key)
+                        || "logoUrl".equals(key) || "logoStorageUrl".equals(key))) {
                     addAllowedImageUrl(urls, value.asText());
                 } else {
                     collectImageUrls(urls, value);
@@ -193,11 +201,15 @@ public class ProjectService {
             if (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme())) return null;
             if (uri.getHost() == null) return null;
             String host = uri.getHost();
+            String path = uri.getRawPath() == null ? "" : uri.getRawPath();
+            boolean aiOutputImage = path.startsWith("/outputs/images/");
             boolean localAiAlias = ("localhost".equalsIgnoreCase(host)
                     || "127.0.0.1".equals(host)
-                    || "host.docker.internal".equalsIgnoreCase(host))
+                    || "host.docker.internal".equalsIgnoreCase(host)
+                    || "ai-service".equalsIgnoreCase(host)
+                    || "ai-slide-service".equalsIgnoreCase(host))
                     && (uri.getPort() == 8000 || uri.getPort() == -1);
-            if (localAiAlias) {
+            if (localAiAlias || aiOutputImage) {
                 uri = resolveImageProxyTarget(value);
             }
             return new URI(
@@ -266,6 +278,30 @@ public class ProjectService {
         log.info("[document-service] lưu project thành công, id: {}, tên: {}", project.getId(), project.getName());
 
         return projectMapper.toDto(project);
+    }
+
+    /**
+     * Creates a project straight from a file the caller already parsed (see step 5: opening a
+     * real .pptx to edit), skipping the AI generation pipeline entirely — its slides come right
+     * after from syncSlidePages, not from generateSlidesAsync.
+     */
+    // The dashboard's project list is cached per user/page: without this the new project
+    // would not appear there until that cache expired.
+    @CacheEvict(allEntries = true)
+    public ProjectResponse createImportedProject(UUID ownerId, ProjectImportRequest request) {
+        log.info("[document-service] tạo project từ file đã import cho user: {}", ownerId);
+        Project project = Project.builder()
+                .name(firstNonBlank(request.getName(), "Bài trình chiếu đã mở"))
+                .ownerId(ownerId)
+                .templateId(request.getTemplateId())
+                .status(Constants.PROJECT_STATUS.DONE)
+                .build();
+        project = projectRepository.save(project);
+        return projectMapper.toDto(project);
+    }
+
+    private static String firstNonBlank(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private void validateGenerationPrompt(ProjectCreateRequest request) {
@@ -505,6 +541,23 @@ public class ProjectService {
         return projectMapper.toDto(project);
     }
 
+    public JsonNode requestThemeBrief(String subject) {
+        String text = subject == null ? "" : subject.trim();
+        if (text.length() < 3) {
+            return objectMapper.createObjectNode().put("ok", false);
+        }
+        return aiService.themeBrief(text.length() > 1500 ? text.substring(0, 1500) : text);
+    }
+
+    /**
+     * The completed AI task a revision starts from.
+     *
+     * <p>A deck opened from a PPTX file was never generated, and a generated deck's task expires
+     * after the AI service's task TTL, so in both cases there is nothing to revise from. Rather
+     * than refuse the edit, the deck as it currently stands is handed to the AI service, which
+     * registers it as a completed task; the revision then proceeds like any other.
+     */
+    @Transactional
     public String getCurrentAiTaskId(UUID projectId, UUID userId) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
@@ -514,10 +567,114 @@ public class ProjectService {
         }
 
         String taskId = project.getAiTaskId();
-        if (taskId == null || taskId.isBlank()) {
-            throw new AppException(ErrorCode.AI_API_ERROR, "Project chua co AI task hoan thanh de sua.");
+        if (taskId != null && !taskId.isBlank() && aiTaskCanBeRevised(taskId)) {
+            return taskId;
         }
-        return taskId;
+
+        List<SlidePage> pages = slidePageRepository.findByProjectIdOrderByPageIndexAsc(projectId);
+        List<SlidePage> backfilled = pages.stream().filter(this::fillTextFromElements).toList();
+        if (!backfilled.isEmpty()) {
+            slidePageRepository.saveAll(backfilled);
+            log.info("[document-service] Da suy ra tieu de/noi dung tu element cho {} slide cua project {}",
+                    backfilled.size(), projectId);
+        }
+        String currentSpecJson = pages.isEmpty() ? null : buildCurrentSpecJson(pages);
+        if (currentSpecJson == null) {
+            throw new AppException(ErrorCode.AI_API_ERROR, "Project chua co slide de sua.");
+        }
+
+        String adoptedTaskId = aiService.adoptSlideSpec(currentSpecJson, project.getName());
+        project.setAiTaskId(adoptedTaskId);
+        projectRepository.save(project);
+        log.info("[document-service] Da nhan deck hien tai lam nguon sua cho project {}: task {}",
+                projectId, adoptedTaskId);
+        return adoptedTaskId;
+    }
+
+    /**
+     * Give a slide the title and bullets its own text boxes already show.
+     *
+     * <p>A deck opened from a PPTX keeps each slide's text inside its elements; only text in a
+     * PowerPoint title/body placeholder also reaches the title and bullets columns. The AI, the
+     * dashboard and exports all read those columns, so a slide built from plain text boxes looked
+     * empty to them. The elements themselves are left exactly as they are, so the slide still
+     * looks like the file it came from.
+     *
+     * @return whether this page was changed and needs saving
+     */
+    private boolean fillTextFromElements(SlidePage page) {
+        boolean hasTitle = page.getTitle() != null && !page.getTitle().isBlank();
+        JsonNode storedBullets = readJsonOrNull(page.getBullets());
+        boolean hasBullets = storedBullets != null && storedBullets.isArray() && storedBullets.size() > 0;
+        if (hasTitle && hasBullets) return false;
+
+        JsonNode elements = readJsonOrNull(page.getElements());
+        if (elements == null || !elements.isArray()) return false;
+
+        List<String> titleLines = new java.util.ArrayList<>();
+        List<String> otherLines = new java.util.ArrayList<>();
+        for (JsonNode element : elements) {
+            if (!"text".equals(element.path("type").asText(""))) continue;
+            List<String> lines = plainTextLines(element.path("content").asText(""));
+            if ("title".equals(element.path("role").asText(""))) {
+                titleLines.addAll(lines);
+            } else {
+                otherLines.addAll(lines);
+            }
+        }
+        // With no title box, the slide's first line of text is its heading, as it reads on screen.
+        if (titleLines.isEmpty() && !otherLines.isEmpty()) {
+            titleLines.add(otherLines.remove(0));
+        }
+        if (titleLines.isEmpty() && otherLines.isEmpty()) return false;
+
+        boolean changed = false;
+        if (!hasTitle && !titleLines.isEmpty()) {
+            String title = String.join(" ", titleLines).trim();
+            page.setTitle(title.length() > 240 ? title.substring(0, 240) : title);
+            changed = true;
+        }
+        if (!hasBullets && !otherLines.isEmpty()) {
+            try {
+                page.setBullets(objectMapper.writeValueAsString(otherLines));
+                changed = true;
+            } catch (Exception e) {
+                log.warn("[document-service] Khong the luu noi dung suy ra tu element: {}", e.getMessage());
+            }
+        }
+        return changed;
+    }
+
+    /** The visible lines of an element's HTML, one per paragraph or list item. */
+    private List<String> plainTextLines(String html) {
+        if (html == null || html.isBlank()) return List.of();
+        String separated = html
+                .replaceAll("(?i)</(?:li|p|div|h[1-6])>", "\n")
+                .replaceAll("(?i)<br\\s*/?>", "\n")
+                .replaceAll("<[^>]+>", "");
+        String text = separated
+                .replaceAll("(?i)&nbsp;|&#160;", " ")
+                .replaceAll("(?i)&lt;", "<")
+                .replaceAll("(?i)&gt;", ">")
+                .replaceAll("(?i)&quot;", "\"")
+                .replaceAll("(?i)&#39;", "'")
+                .replaceAll("(?i)&amp;", "&");
+        return java.util.Arrays.stream(text.split("\\r?\\n"))
+                .map(String::trim)
+                .filter(line -> !line.isEmpty())
+                .toList();
+    }
+
+    /** Whether the AI service still holds this task as a completed slide spec. */
+    private boolean aiTaskCanBeRevised(String taskId) {
+        try {
+            JsonNode status = aiService.checkAiTaskStatus(taskId);
+            return "completed".equalsIgnoreCase(status.path("status").asText(""))
+                    && "json_spec".equals(status.path("result").path("mode").asText(""));
+        } catch (Exception e) {
+            log.warn("[document-service] Khong kiem tra duoc AI task {}: {}", taskId, e.getMessage());
+            return false;
+        }
     }
 
     @Async
@@ -527,10 +684,12 @@ public class ProjectService {
             Project project = projectRepository.findById(projectId)
                     .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
             String effectiveUserRole = resolveUserRole(project.getOwnerId(), userRole);
-            List<String> persistedImageUrls = slidePageRepository.findByProjectIdOrderByPageIndexAsc(projectId)
+            List<SlidePage> pagesBeforeRevision = slidePageRepository.findByProjectIdOrderByPageIndexAsc(projectId);
+            List<String> persistedImageUrls = pagesBeforeRevision
                     .stream()
                     .map(SlidePage::getImageUrl)
                     .collect(Collectors.toList());
+            String currentSpecJson = buildCurrentSpecJson(pagesBeforeRevision);
 
             JsonNode aiResponse = aiService.reviseSlides(
                     sourceTaskId,
@@ -542,6 +701,7 @@ public class ProjectService {
                     request.getSlideNumber(),
                     request.getContextSlideNumber(),
                     request.getImageLimit(),
+                    currentSpecJson,
                     taskId -> {
                         submittedRevisionTaskId.set(taskId);
                         Project proj = projectRepository.findById(projectId).orElse(project);
@@ -559,7 +719,7 @@ public class ProjectService {
                 proj.setName(deckTitle);
             }
 
-            replaceSlidePagesFromDeck(proj, parsedResponse);
+            replaceSlidePagesFromDeck(proj, parsedResponse, pagesBeforeRevision);
             updateAiTaskLogsFromProgress(proj.getId(), "completed", null);
             proj.setStatus(Constants.PROJECT_STATUS.DONE);
             projectRepository.save(proj);
@@ -894,6 +1054,111 @@ public class ProjectService {
     }
 
     private void replaceSlidePagesFromDeck(Project project, JsonNode aiResponse) {
+        replaceSlidePagesFromDeck(project, aiResponse, List.of());
+    }
+
+    private JsonNode readJsonOrNull(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            JsonNode node = objectMapper.readTree(json);
+            return node == null || node.isNull() ? null : node;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The live deck, in the shape the AI service uses for a generated deck. */
+    private String buildCurrentSpecJson(List<SlidePage> pages) {
+        if (pages == null || pages.isEmpty()) return null;
+        try {
+            ArrayNode slides = objectMapper.createArrayNode();
+            for (int i = 0; i < pages.size(); i++) {
+                SlidePage page = pages.get(i);
+                ObjectNode slide = objectMapper.createObjectNode();
+                slide.put("index", i);
+                slide.put("title", page.getTitle() == null ? "" : page.getTitle());
+                JsonNode bullets = readJsonOrNull(page.getBullets());
+                slide.set("bullets", bullets != null && bullets.isArray() ? bullets : objectMapper.createArrayNode());
+                slide.put("notes", page.getNotes() == null ? "" : page.getNotes());
+                if (page.getLayout() != null && !page.getLayout().isBlank()) slide.put("layout", page.getLayout());
+                if (page.getPrimaryVisual() != null && !page.getPrimaryVisual().isBlank()) slide.put("primary_visual", page.getPrimaryVisual());
+                if (page.getPedagogicalRole() != null && !page.getPedagogicalRole().isBlank()) slide.put("pedagogical_role", page.getPedagogicalRole());
+                JsonNode sourcePages = readJsonOrNull(page.getSourcePages());
+                if (sourcePages != null && sourcePages.isArray()) slide.set("source_pages", sourcePages);
+                JsonNode table = readJsonOrNull(page.getTable());
+                if (table != null && table.isObject()) slide.set("table", table);
+                JsonNode chart = readJsonOrNull(page.getChart());
+                if (chart != null && chart.isObject()) slide.set("chart", chart);
+                if (page.getImageUrl() != null && !page.getImageUrl().isBlank()) {
+                    slide.set("image", objectMapper.createObjectNode().put("url", page.getImageUrl()));
+                }
+                slides.add(slide);
+            }
+            return objectMapper.writeValueAsString(slides);
+        } catch (Exception e) {
+            log.warn("[document-service] Khong the dung current_spec cho revise, dung ban goc cua AI: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String textOf(JsonNode node) {
+        return node == null || node.isMissingNode() || node.isNull() ? "" : node.asText("").trim();
+    }
+
+    /** Identity of a slide's visible content: title, bullet lines, table cells and chart data. */
+    private String slideContentSignature(String title, JsonNode bullets, JsonNode table, JsonNode chart) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(title == null ? "" : title.trim()).append('\u0001');
+        if (bullets != null && bullets.isArray()) {
+            for (JsonNode bullet : bullets) sb.append(textOf(bullet)).append('\u0002');
+        }
+        sb.append('\u0001');
+        if (table != null && table.isObject()) {
+            sb.append(table.path("headers").toString()).append(table.path("rows").toString());
+        }
+        sb.append('\u0001');
+        if (chart != null && chart.isObject()) {
+            JsonNode series = chart.hasNonNull("series") ? chart.path("series") : chart.path("datasets");
+            sb.append(chart.path("labels").toString()).append(series.toString());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * A slide's signature reduced to its letters and digits, so text the AI service only re-typed
+     * still counts as the same slide.
+     *
+     * <p>The AI service normalizes every slide's text on the way through, whether or not the
+     * revision touched that slide: math italics become plain letters, tabs become spaces and
+     * arrows such as "→" are dropped. A deck generated by the AI has already been through that, so
+     * an untouched slide comes back identical. A deck opened from a PPTX has not, and every slide
+     * containing such a character looked "changed" and was rebuilt from the normalized text, which
+     * discarded its original layout and decoration.
+     */
+    private String foldSignature(String signature) {
+        return java.text.Normalizer.normalize(signature, java.text.Normalizer.Form.NFKC)
+                .replaceAll("[^\\p{L}\\p{N}]", "")
+                .toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** The previous page whose content equals {@code signature}; exact text first, then tolerant. */
+    private SlidePage findPreviousPage(List<SlidePage> candidates, String signature, boolean tolerant) {
+        String wanted = tolerant ? foldSignature(signature) : signature;
+        if (tolerant && wanted.isEmpty()) return null;
+        for (SlidePage candidate : candidates) {
+            String candidateSignature = slideContentSignature(
+                    candidate.getTitle(),
+                    readJsonOrNull(candidate.getBullets()),
+                    readJsonOrNull(candidate.getTable()),
+                    readJsonOrNull(candidate.getChart()));
+            if (wanted.equals(tolerant ? foldSignature(candidateSignature) : candidateSignature)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private void replaceSlidePagesFromDeck(Project project, JsonNode aiResponse, List<SlidePage> previousPages) {
         JsonNode deckNode = aiResponse.path("deck");
         JsonNode generatedSlides = deckNode.path("slides");
         if (!generatedSlides.isArray()) {
@@ -906,6 +1171,9 @@ public class ProjectService {
             slidePageRepository.deleteAll(currentPages);
         }
 
+        // Slides the revision left untouched keep their layout, formatting and
+        // exact table/chart data; only slides whose content changed are rebuilt.
+        List<SlidePage> unmatchedPrevious = new java.util.ArrayList<>(previousPages == null ? List.of() : previousPages);
         List<SlidePage> slidePagesToSave = new java.util.ArrayList<>();
         for (int i = 0; i < generatedSlides.size(); i++) {
             JsonNode slideNode = generatedSlides.get(i);
@@ -937,7 +1205,16 @@ public class ProjectService {
                 String sourcePagesJson = slideNode.hasNonNull("source_pages")
                         ? objectMapper.writeValueAsString(slideNode.path("source_pages")) : null;
 
-                SlidePage slidePage = SlidePage.builder()
+                SlidePage unchanged = null;
+                if (!unmatchedPrevious.isEmpty()) {
+                    String signature = slideContentSignature(
+                            title, slideNode.path("bullets"), slideNode.path("table"), slideNode.path("chart"));
+                    unchanged = findPreviousPage(unmatchedPrevious, signature, false);
+                    if (unchanged == null) unchanged = findPreviousPage(unmatchedPrevious, signature, true);
+                    if (unchanged != null) unmatchedPrevious.remove(unchanged);
+                }
+
+                var builder = SlidePage.builder()
                         .projectId(project.getId())
                         .pageIndex(index)
                         .title(title)
@@ -950,9 +1227,38 @@ public class ProjectService {
                         .primaryVisual(primaryVisual)
                         .likelyMultiPptxSlides(likelyMulti)
                         .pedagogicalRole(pedagogicalRole)
-                        .sourcePages(sourcePagesJson)
-                        .build();
-                slidePagesToSave.add(slidePage);
+                        .sourcePages(sourcePagesJson);
+                if (unchanged != null) {
+                    // The slide is the user's own, so its text stays exactly as they have it
+                    // rather than the AI service's normalized copy of it.
+                    if (unchanged.getTitle() != null) builder.title(unchanged.getTitle());
+                    if (unchanged.getBullets() != null) builder.bullets(unchanged.getBullets());
+                    builder.richText(unchanged.getRichText())
+                            .elements(unchanged.getElements())
+                            .table(unchanged.getTable())
+                            .chart(unchanged.getChart())
+                            .imageUrl(unchanged.getImageUrl())
+                            .layout(unchanged.getLayout());
+                } else if (previousPages != null && previousPages.size() == generatedSlides.size()
+                        && chartJson == null && tableJson == null && (imageUrl == null || imageUrl.isBlank())) {
+                    // A rewritten slide of a deck opened from a PPTX: pour the new words into the
+                    // slide's own boxes, so it still looks like the file rather than the template.
+                    SlidePage previous = previousPages.get(i);
+                    if (unmatchedPrevious.contains(previous)) {
+                        List<String> revisedBullets = new java.util.ArrayList<>();
+                        slideNode.path("bullets").forEach(bullet -> revisedBullets.add(textOf(bullet)));
+                        ImportedSlideReviser.Poured poured = new ImportedSlideReviser(objectMapper).pour(
+                                previous.getRichText(), previous.getElements(), title, revisedBullets);
+                        if (poured != null) {
+                            builder.elements(poured.elementsJson())
+                                    .richText(previous.getRichText())
+                                    .layout(previous.getLayout())
+                                    .bullets(objectMapper.writeValueAsString(poured.bullets()));
+                            unmatchedPrevious.remove(previous);
+                        }
+                    }
+                }
+                slidePagesToSave.add(builder.build());
             } catch (Exception e) {
                 throw new AppException(ErrorCode.AI_API_ERROR, "Khong the luu du lieu slide tu AI: " + e.getMessage());
             }
@@ -1065,6 +1371,7 @@ public class ProjectService {
         if (request.getTemplateId() != null) project.setTemplateId(request.getTemplateId());
         if (request.getStatus() != null) project.setStatus(request.getStatus());
         if (request.getSlideUrl() != null) project.setSlideUrl(request.getSlideUrl());
+        if (request.getDeckMaster() != null) project.setDeckMaster(request.getDeckMaster());
 
         project = projectRepository.save(project);
         return projectMapper.toDto(project);

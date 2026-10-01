@@ -67,4 +67,9 @@ public class Project extends AbstractAuditingEntity {
     @Convert(converter = StringListConverter.class)
     @Column(name = "learning_objectives", columnDefinition = "TEXT")
     private List<String> learningObjectives;
+
+    // Deck-wide logo/slide-number/footer settings, applied to every slide (master-lite).
+    // Stored as a raw JSON string, same pattern as SlidePage.richText, parsed on the front-end.
+    @Column(name = "deck_master", columnDefinition = "TEXT")
+    private String deckMaster;
 }

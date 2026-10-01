@@ -43,7 +43,10 @@ public class AuthenticationFilter implements GlobalFilter, Ordered {
             "/api/auth/forgot-password",
             "/api/auth/reset-password",
             "/api/auth/verify-reset-code",
-            "/api/payment/webhook/"
+            "/api/payment/webhook/",
+            // Pictures of an uploaded template are loaded by <img> tags, which cannot send a token.
+            // The ids in the path are unguessable UUIDs.
+            "/api/template/public/assets/"
     };
 
     @Override

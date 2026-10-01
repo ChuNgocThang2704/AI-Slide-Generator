@@ -55,10 +55,11 @@ class PowerPointTemplateParserTest {
     }
 
     @Test
-    void parsesImageFrameAndThemeColorsWithoutEmbeddedMedia() throws Exception {
+    void parsesImageFrameAndThemeColorsAndStoresMediaAsAssets() throws Exception {
         TemplateManifest manifest = new PowerPointTemplateParser().parse(sampleSlidePptx());
 
-        assertThat(manifest.getAssets()).isEmpty();
+        // The slide's pictures are kept as decoration, so they travel with the template as assets.
+        assertThat(manifest.getAssets()).containsOnlyKeys("background.png", "photo.png");
         assertThat(manifest.getLayouts()).hasSize(1);
         TemplateManifest.Layout layout = manifest.getLayouts().getFirst();
         assertThat(layout.getType()).isEqualTo("title");
@@ -94,11 +95,16 @@ class PowerPointTemplateParserTest {
                         .pageIndex(0)
                         .build()
         );
-        assertThat(match.getElements()).filteredOn(item -> "image".equals(item.get("type")))
+        // The generated picture goes in the template's image frame; the template's own pictures
+        // come along as decoration, referenced by asset.
+        assertThat(match.getElements()).filteredOn(item -> "image".equals(item.get("role")))
                 .singleElement()
                 .satisfies(item -> assertThat(item.get("src")).isEqualTo("https://example.test/generated.png"));
         assertThat(match.getBackgroundColor()).isEqualTo("#FFFFFF");
-        assertThat(match.getElements()).noneMatch(item -> "decoration".equals(item.get("role")));
+        assertThat(match.getElements())
+                .filteredOn(item -> "decoration".equals(item.get("role")) && "image".equals(item.get("type")))
+                .extracting(item -> item.get("src"))
+                .containsExactlyInAnyOrder("asset:background.png", "asset:photo.png");
         assertThat(match.getElements()).filteredOn(item -> "title".equals(item.get("role")))
                 .singleElement()
                 .satisfies(item -> {
@@ -110,7 +116,7 @@ class PowerPointTemplateParserTest {
                 manifest,
                 TemplateMatchRequest.builder().title("No generated image yet").pageIndex(0).build()
         );
-        assertThat(emptyFrameMatch.getElements()).filteredOn(item -> "image".equals(item.get("type")))
+        assertThat(emptyFrameMatch.getElements()).filteredOn(item -> "image".equals(item.get("role")))
                 .singleElement()
                 .satisfies(item -> assertThat(item).doesNotContainKey("src"));
     }
@@ -161,13 +167,127 @@ class PowerPointTemplateParserTest {
 
         assertThat(match.getElements()).noneMatch(item -> "image".equals(item.get("type")));
         assertThat(match.getElements()).noneMatch(item -> "decoration".equals(item.get("role")));
+        // The page takes the layout's own colour (black here), not a fixed white.
         assertThat(match.getElements()).filteredOn(item -> "background".equals(item.get("role")))
                 .singleElement()
-                .satisfies(item -> assertThat(item.get("fill")).isEqualTo("#FFFFFF"));
+                .satisfies(item -> assertThat(item.get("fill")).isEqualTo("#000000"));
+        // White text on that black page is already readable, so it is kept.
         assertThat(match.getElements()).filteredOn(item -> "title".equals(item.get("role")))
                 .singleElement()
                 .satisfies(item -> assertThat(((Map<?, ?>) item.get("style")).get("color"))
-                        .isEqualTo("#111111"));
+                        .isEqualTo("#FFFFFF"));
+    }
+
+    @Test
+    void openedDeckKeepsPlaceholderTextAndInheritsLayoutPosition() throws Exception {
+        byte[] deck = placeholderDeckPptx();
+
+        // Opening a real deck: the words in its title and body placeholders are the deck itself.
+        TemplateManifest opened = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest();
+        List<TemplateManifest.Element> texts = opened.getLayouts().get(0).getElements().stream()
+                .filter(item -> "text".equals(item.getType()))
+                .toList();
+        assertThat(texts).extracting(TemplateManifest.Element::getContent)
+                .anyMatch(content -> content.contains("Tieu de that"))
+                .anyMatch(content -> content.contains("Noi dung that"));
+        // Neither placeholder has a position of its own; each takes the one its layout gives it,
+        // matched by index, so the two boxes do not end up in the same place.
+        TemplateManifest.Element title = texts.stream()
+                .filter(item -> item.getContent().contains("Tieu de that")).findFirst().orElseThrow();
+        TemplateManifest.Element body = texts.stream()
+                .filter(item -> item.getContent().contains("Noi dung that")).findFirst().orElseThrow();
+        assertThat(title.getY()).isLessThan(body.getY());
+        assertThat(body.getWidth()).isGreaterThan(title.getWidth());
+
+        // Uploading the same file as a template keeps placeholders blank, as before.
+        TemplateManifest asTemplate = new PowerPointTemplateParser().parseWithAssets(deck, false).manifest();
+        assertThat(asTemplate.getLayouts().get(0).getElements())
+                .noneMatch(item -> item.getContent() != null && item.getContent().contains("Tieu de that"));
+    }
+
+    private byte[] placeholderDeckPptx() throws Exception {
+        String presentation = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+                  <p:sldSz cx="12192000" cy="6858000"/>
+                </p:presentation>
+                """;
+        String theme = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <a:themeElements>
+                    <a:clrScheme name="Office">
+                      <a:dk1><a:srgbClr val="111111"/></a:dk1>
+                      <a:lt1><a:srgbClr val="FFFFFF"/></a:lt1>
+                      <a:accent1><a:srgbClr val="008C7A"/></a:accent1>
+                    </a:clrScheme>
+                    <a:fontScheme name="Office">
+                      <a:majorFont><a:latin typeface="Aptos Display"/></a:majorFont>
+                      <a:minorFont><a:latin typeface="Aptos"/></a:minorFont>
+                    </a:fontScheme>
+                  </a:themeElements>
+                </a:theme>
+                """;
+        String master = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree/></p:cSld>
+                </p:sldMaster>
+                """;
+        String layout = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld name="Title and content"><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="365760"/><a:ext cx="6096000" cy="914400"/></a:xfrm></p:spPr>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Content"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="1828800"/><a:ext cx="10972800" cy="4114800"/></a:xfrm></p:spPr>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sldLayout>
+                """;
+        // Both placeholders on the slide omit <a:xfrm>: PowerPoint stores nothing when a box has
+        // not been moved from its layout.
+        String slide = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Tieu de that</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Content 2"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Noi dung that</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sld>
+                """;
+        String relationships = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+                </Relationships>
+                """;
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(output)) {
+            add(zip, "ppt/presentation.xml", presentation);
+            add(zip, "ppt/theme/theme1.xml", theme);
+            add(zip, "ppt/slideMasters/slideMaster1.xml", master);
+            add(zip, "ppt/slideLayouts/slideLayout1.xml", layout);
+            add(zip, "ppt/slides/slide1.xml", slide);
+            add(zip, "ppt/slides/_rels/slide1.xml.rels", relationships);
+        }
+        return output.toByteArray();
     }
 
     private byte[] minimalPptx() throws Exception {
