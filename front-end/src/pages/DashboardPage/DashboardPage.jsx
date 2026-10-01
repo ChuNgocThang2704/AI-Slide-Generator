@@ -78,6 +78,10 @@ function ProjectSlideThumbnail({ slide, theme }) {
   );
 }
 
+// Opening an existing .pptx is switched off until it can reproduce the file exactly (see
+// utils/pptxImport.js); the import path below is kept so it can be switched back on.
+const OPEN_PPTX_ENABLED = false;
+
 export default function DashboardPage() {
   const { user } = useAuthStore();
   const { projects, setProjects, updateProject, deleteProject } = useProjectStore();
@@ -339,11 +343,13 @@ export default function DashboardPage() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
+            {OPEN_PPTX_ENABLED && (
             <label className={`btn btn-ghost btn-lg ${importing ? 'disabled' : ''}`} style={{ cursor: importing ? 'not-allowed' : 'pointer' }}>
               {importing ? <Loader2 size={18} className="spin" /> : <UploadCloud size={18} />}
               {importing ? 'Đang mở...' : 'Mở file PPTX có sẵn'}
               <input type="file" accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation" onChange={handleImportPptx} disabled={importing} hidden />
             </label>
+            )}
             <button className="btn btn-primary btn-lg" onClick={() => navigate('/generate')}>
               <Plus size={18} /> Tạo slide mới
             </button>
