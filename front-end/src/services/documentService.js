@@ -41,6 +41,24 @@ export const projectService = {
     return normalizeApiResponse(response.data);
   },
 
+  // Creates a project straight from an already-parsed file (see templateService.importSlides),
+  // with no AI generation step — its slides are filled right after via syncSlidePages.
+  async createImported(name, templateId) {
+    const response = await apiClient.post('/document/projects/import', { name, templateId });
+    return normalizeApiResponse(response.data);
+  },
+
+  // AI đọc chủ đề và đề xuất màu sắc, phong cách cho template; null nếu AI không phản hồi.
+  async themeBrief(subject) {
+    try {
+      const response = await apiClient.post('/document/theme-brief', { subject }, { timeout: 35000 });
+      const data = normalizeApiResponse(response.data);
+      return data?.ok ? data.brief : null;
+    } catch {
+      return null;
+    }
+  },
+
   // Lấy danh sách projects của user
   async getAll(page = 0, size = 10, search = '') {
     const response = await apiClient.get('/document/projects', {

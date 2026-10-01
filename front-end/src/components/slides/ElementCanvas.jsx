@@ -1,8 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Plus, Scan, Trash2, Unlock, RotateCw, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AlignHorizontalJustifyCenter, ArrowDownToLine, ArrowUpToLine, ClipboardPaste, Copy, CopyPlus, Crop, GripHorizontal, ImagePlus, Loader2, Lock, Palette, Plus, Scan, Shapes, Trash2, Unlock, RotateCw, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
+import { GraphicInspector, ShapePicker } from './GraphicTools';
+import { ArtGlyph, IconGlyph, ShapeGlyph } from './ElementGlyphs';
+import { createIconElement, createShapeElement } from '../../utils/shapeLibrary';
+import {
+  alignPatches, applyPatches, boundsOf, cloneSelection, distributePatches, expandToGroups, groupElements, hasGroup,
+  marqueeSelect, moveWithinSlide, newElementId, reorderLayers, selectable, snapBox, toggleInSelection, ungroupElements,
+} from '../../utils/selection';
+import SelectionTools from './SelectionTools';
+import { getClipboard, setClipboard } from '../../utils/elementClipboard';
 import { createElementsFromSlide, createTextElement } from '../../utils/slideElements';
 import { normalizeBoundaryElements, normalizeTableElements } from '../../utils/templateLayouts';
 import { resolveAssetUrl } from '../../utils/assetUrl';
+import { isBackdrop, isDarkColor } from '../../utils/templateArt';
+import { isGeneratedTheme, buildGeneratedTheme } from '../../utils/generatedTheme';
 import EditableSlide, { THEMES } from './EditableSlide';
 import { TiptapInlineEditor } from './TiptapEditor';
 import { ChartVisual, TableVisual } from './StructuredVisual';
@@ -11,11 +22,11 @@ import AssetImage from './AssetImage';
 import { BgDecorations } from './SlideRenderer';
 import { fitTextToBox } from '../../utils/textFit';
 import { inferImageFit } from '../../utils/imageFit';
+import { paintReveal } from '../../utils/reveal';
 import './ElementCanvas.css';
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const SNAP_DISTANCE = 6;
-let elementClipboard = null;
 const normalizeColor = (value) => String(value || '').replace(/\s+/g, '').toLowerCase();
 const isFormEditingTarget = (target) => {
   const element = target instanceof Element ? target : document.activeElement;
@@ -28,17 +39,13 @@ const DEFAULT_THEME_TEXT_COLORS = new Set(
     .map(normalizeColor),
 );
 
-const cloneElement = (element) => ({
-  ...element,
-  id: `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  x: clamp((element.x || 0) + 20, 0, 920),
-  y: clamp((element.y || 0) + 20, 0, 510),
-  style: element.style ? { ...element.style } : undefined,
-});
-
 const adaptiveCanvasFontSize = (element) => {
   const savedSize = Number(element?.style?.fontSize);
   const content = String(element?.content || '');
+  // A size set by dragging a resize handle (see startPointerAction) is a
+  // deliberate, Canva-style scale — it must stick exactly, not get
+  // silently recalculated back to whatever size best "fits" the box.
+  if (element?.style?.fontSizeLocked && savedSize) return savedSize;
   if (/font-size\s*:/i.test(content)) return savedSize || (element?.role === 'title' ? 34 : 16);
 
   const isTitle = element?.role === 'title';
@@ -58,6 +65,34 @@ const adaptiveCanvasFontSize = (element) => {
   });
 };
 
+// Background and pictures of an uploaded template's sample slide, drawn under the content.
+// The uploaded template's own art. It is not part of the slide's elements, so clicking a
+// piece hands it to the editor, which turns the decoration into real, editable shapes
+// (see adoptArtAt in EditorPage) — no "edit the decorations" switch to find first.
+function TemplateArt({ art, onPick }) {
+  return (
+    <div className={`element-canvas-art${onPick ? ' pickable' : ''}`} aria-hidden="true">
+      {art.map((item) => (
+        <div
+          key={item.id}
+          onPointerDown={onPick ? (event) => { event.stopPropagation(); onPick(item); } : undefined}
+          title={onPick ? 'Bấm để tách trang trí thành hình có thể sửa' : undefined}
+          style={{
+            position: 'absolute',
+            left: item.x,
+            top: item.y,
+            width: item.width,
+            height: item.height,
+            transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined,
+          }}
+        >
+          <ArtGlyph item={item} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ElementCanvas({
   slide,
   theme,
@@ -67,10 +102,16 @@ export default function ElementCanvas({
   readonly = false,
   preserveTemplate = false,
   preserveTemplateStyles = false,
+  revealStage = null,
+  onAdoptArt,
+  onCopyToAllSlides,
 }) {
   const imageInputRef = useRef(null);
+  const canvasRootRef = useRef(null);
   const themeData = useMemo(() => {
-    const importedTheme = slide.elements?.find((element) => element.templateTheme)?.templateTheme;
+    const importedTheme = preserveTemplateStyles
+      ? slide.elements?.find((element) => element.templateTheme)?.templateTheme
+      : null;
     const baseThemeData = THEMES[theme] || THEMES['clean-white'];
     return importedTheme ? {
       ...baseThemeData,
@@ -80,7 +121,7 @@ export default function ElementCanvas({
       fontTitle: importedTheme.fontTitle || baseThemeData.fontTitle,
       fontBody: importedTheme.fontBody || baseThemeData.fontBody,
     } : baseThemeData;
-  }, [slide.elements, theme]);
+  }, [slide.elements, theme, preserveTemplateStyles]);
   const fallbackElements = useMemo(() => createElementsFromSlide(slide, theme), [slide, theme]);
   const elements = useMemo(() => {
     const source = Array.isArray(slide.elements) && (slide.elements.length || preserveTemplate)
@@ -104,6 +145,8 @@ export default function ElementCanvas({
               fontFamily: style.fontFamily || themeData.fontBody,
               color: isThemeDefaultColor ? themeData.textSub : style.color,
             }
+          : element.role === 'pageNumber'
+            ? { ...style, fontFamily: style.fontFamily || themeData.fontBody, color: style.color || themeData.textSub }
           : element.role === 'custom' && element.type === 'text'
             ? {
                 ...style,
@@ -127,79 +170,238 @@ export default function ElementCanvas({
       return themedStyle === style ? element : { ...element, style: themedStyle };
     });
   }, [fallbackElements, preserveTemplate, preserveTemplateStyles, slide.elements, slide.imageUrl, slide.type, theme, themeData]);
+  // Presenting can "build" a slide's bullets in one at a time; painted on the real DOM
+  // after Tiptap has rendered them (see utils/reveal.js for why it can't be baked into the
+  // HTML each bullet is rendered from). Everywhere else revealStage is null, so this is a
+  // no-op and every bullet just shows as normal.
+  useEffect(() => {
+    if (revealStage == null) return;
+    paintReveal(canvasRootRef.current, revealStage);
+  }, [revealStage, elements]);
+  // The theme's fixed accent bar belongs next to a top-left title; once a layout
+  // (or the user) moves the title elsewhere the bar hides instead of floating.
+  const titleElement = elements.find((item) => item.type === 'text' && item.role === 'title');
+  const titleAtTopLeft = !titleElement || (titleElement.x <= 96 && titleElement.y <= 70 && !titleElement.rotation);
   const [selectedId, setSelectedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [hasClipboard, setHasClipboard] = useState(Boolean(elementClipboard));
+  const [hasClipboard, setHasClipboard] = useState(Boolean(getClipboard()));
   const [guides, setGuides] = useState({ x: null, y: null });
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [formatOpen, setFormatOpen] = useState(false);
+  const [alignOpen, setAlignOpen] = useState(false);
+  const [multi, setMulti] = useState([]);
+  const [marquee, setMarquee] = useState(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [croppingId, setCroppingId] = useState(null);
-  const selectedElement = elements.find((item) => item.id === selectedId) || null;
+  const [resizingId, setResizingId] = useState(null);
+  const multiIds = multi.filter((mid) => elements.some((item) => item.id === mid));
+  const isMulti = multiIds.length > 1;
+  // With several elements selected there is no single "selected element": the per-element
+  // controls (resize handles, image tools, format panel) step aside for the group tools.
+  const selectedElement = isMulti ? null : (elements.find((item) => item.id === selectedId) || null);
+  const selectionIds = isMulti ? multiIds : (selectedElement ? [selectedElement.id] : []);
+  const selectionBounds = isMulti ? boundsOf(elements, multiIds) : null;
 
-  const commit = (next, slidePatch = {}) => onUpdate({ ...slide, ...slidePatch, elements: next });
+  // Two updates can land in the same tick (a text box saving its content on
+  // blur while its auto-resize reports a new height). Each must build on the
+  // result of the one before it, not on the render they both closed over —
+  // otherwise the later one silently reverts the earlier one (lost formatting).
+  const latest = useRef({ slide, elements });
+  useLayoutEffect(() => {
+    latest.current = { slide, elements };
+  });
+  // `meta.silent` marks an automatic layout correction (a box re-measuring its own height), as
+  // opposed to something the user did: it must not become an undo step or wipe the redo list.
+  const commit = (next, slidePatch = {}, meta) => {
+    // Read-only views (thumbnails, presenter, audience) have no onUpdate; their text boxes
+    // still report a blur/height change now and then, which must simply be ignored.
+    if (!onUpdate) return;
+    const updated = { ...latest.current.slide, ...slidePatch, elements: next };
+    latest.current = { slide: updated, elements: next };
+    onUpdate(updated, meta);
+  };
+  const syncElementLayout = (elementId, patch) => {
+    commit(latest.current.elements.map((item) => item.id === elementId ? { ...item, ...patch } : item), {}, { silent: true });
+  };
   const updateElement = (elementId, patch) => {
-    commit(elements.map((item) => item.id === elementId ? { ...item, ...patch } : item));
+    commit(latest.current.elements.map((item) => item.id === elementId ? { ...item, ...patch } : item));
   };
 
   const updateStructuredElement = (elementId, type, data) => {
     commit(
-      elements.map((item) => item.id === elementId ? { ...item, data } : item),
+      latest.current.elements.map((item) => item.id === elementId ? { ...item, data } : item),
       { [type]: data },
     );
   };
 
   const addText = () => {
     const element = createTextElement();
-    commit([...elements, element]);
+    commit([...latest.current.elements, element]);
     setSelectedId(element.id);
   };
 
-  const removeSelected = () => {
-    if (!selectedId || selectedElement?.locked) return;
-    commit(elements.filter((item) => item.id !== selectedId));
-    setSelectedId(null);
+  const accentColor = themeData.accent || themeData.primary || '#6c63ff';
+
+  const addShape = (shape) => {
+    const element = createShapeElement(shape, { accent: accentColor });
+    commit([...latest.current.elements, element]);
+    setSelectedId(element.id);
+    setPickerOpen(false);
+  };
+
+  const addIcon = (icon) => {
+    const element = createIconElement(icon, { accent: accentColor });
+    commit([...latest.current.elements, element]);
+    setSelectedId(element.id);
+    setPickerOpen(false);
+  };
+
+  const cloneElementList = (list) => list.map((item) => ({ ...item, style: item.style ? { ...item.style } : undefined }));
+
+  // One place decides what is selected: several ids, one id, or nothing.
+  const selectMany = (ids, primary) => {
+    if (ids.length > 1) {
+      setMulti(ids);
+      setSelectedId(primary ?? ids[ids.length - 1]);
+    } else {
+      setMulti([]);
+      setSelectedId(ids[0] ?? null);
+    }
     setEditingId(null);
+    setCroppingId(null);
+  };
+
+  const removeSelected = () => {
+    const doomed = selectionIds.filter((sid) => selectable(latest.current.elements.find((item) => item.id === sid)));
+    if (!doomed.length) return;
+    commit(latest.current.elements.filter((item) => !doomed.includes(item.id)));
+    selectMany([]);
   };
 
   const copySelected = () => {
-    const source = elements.find((item) => item.id === selectedId);
-    if (!source) return;
-    elementClipboard = { ...source, style: source.style ? { ...source.style } : undefined };
+    const picked = latest.current.elements.filter((item) => selectionIds.includes(item.id));
+    if (!picked.length) return;
+    setClipboard(cloneElementList(picked));
     setHasClipboard(true);
   };
 
   const pasteElement = () => {
-    if (!elementClipboard) return;
-    const copy = cloneElement(elementClipboard);
-    commit([...elements, copy]);
-    setSelectedId(copy.id);
-    elementClipboard = { ...copy, style: copy.style ? { ...copy.style } : undefined };
+    const buffer = getClipboard();
+    if (!buffer?.length) return;
+    const copies = cloneSelection(buffer, buffer.map((item) => item.id));
+    commit([...latest.current.elements, ...copies]);
+    selectMany(copies.map((item) => item.id));
+    setClipboard(cloneElementList(copies));
     setHasClipboard(true);
   };
 
   const duplicateSelected = () => {
-    if (!selectedElement) return;
-    const duplicate = cloneElement(selectedElement);
-    commit([...elements, duplicate]);
-    setSelectedId(duplicate.id);
-    setEditingId(null);
+    if (!selectionIds.length) return;
+    const copies = cloneSelection(latest.current.elements, selectionIds);
+    commit([...latest.current.elements, ...copies]);
+    selectMany(copies.map((item) => item.id));
   };
 
   const moveLayer = (direction) => {
-    const index = elements.findIndex((item) => item.id === selectedId);
-    if (index < 0) return;
-    const target = direction === 'front' ? elements.length - 1 : 0;
-    if (index === target) return;
-    const next = [...elements];
-    const [element] = next.splice(index, 1);
-    next.splice(target, 0, element);
-    commit(next);
+    if (!selectionIds.length) return;
+    commit(reorderLayers(latest.current.elements, selectionIds, direction));
   };
 
   const toggleLock = () => {
-    if (!selectedElement) return;
-    updateElement(selectedElement.id, { locked: !selectedElement.locked });
+    if (!selectionIds.length) return;
+    const picked = latest.current.elements.filter((item) => selectionIds.includes(item.id));
+    const lock = !picked.every((item) => item.locked);
+    commit(latest.current.elements.map((item) => (selectionIds.includes(item.id) ? { ...item, locked: lock } : item)));
     setEditingId(null);
     setCroppingId(null);
+  };
+
+  const alignSelection = (mode) => {
+    const patches = alignPatches(latest.current.elements, selectionIds, mode);
+    if (Object.keys(patches).length) commit(applyPatches(latest.current.elements, patches));
+  };
+
+  const distributeSelection = (axis) => {
+    const patches = distributePatches(latest.current.elements, selectionIds, axis);
+    if (Object.keys(patches).length) commit(applyPatches(latest.current.elements, patches));
+  };
+
+  const groupSelection = () => {
+    const next = groupElements(latest.current.elements, selectionIds);
+    if (next === latest.current.elements) return;
+    commit(next);
+    selectMany(expandToGroups(next, selectionIds));
+  };
+
+  const ungroupSelection = () => {
+    commit(ungroupElements(latest.current.elements, selectionIds));
+  };
+
+  // Dragging one member of a multi-selection or of a group moves all of them together.
+  const startGroupMove = (event, ids, anchor, deferUntilMove) => {
+    // Always cancel the default press: otherwise the browser starts a native drag and the pointer stream stops.
+    event.preventDefault();
+    event.stopPropagation();
+    const items = latest.current.elements.filter((item) => ids.includes(item.id) && selectable(item));
+    if (!items.length) return;
+    const starts = Object.fromEntries(items.map((item) => [item.id, { x: item.x, y: item.y }]));
+    const bounds = boundsOf(items, items.map((item) => item.id));
+    const others = latest.current.elements.filter((item) => !starts[item.id]);
+    const origin = { x: event.clientX, y: event.clientY };
+    let moving = !deferUntilMove;
+    let moved = false;
+    const move = (pointerEvent) => {
+      const dx = (pointerEvent.clientX - origin.x) / scale;
+      const dy = (pointerEvent.clientY - origin.y) / scale;
+      if (!moving && Math.hypot(dx, dy) < 3) return;
+      moving = true;
+      moved = true;
+      pointerEvent.preventDefault();
+      const first = moveWithinSlide(starts, bounds, dx, dy);
+      const snap = snapBox({ x: bounds.x + first.dx, y: bounds.y + first.dy, width: bounds.width, height: bounds.height }, others, SNAP_DISTANCE);
+      const final = moveWithinSlide(starts, bounds, first.dx + snap.fixX, first.dy + snap.fixY);
+      setGuides({ x: snap.guideX, y: snap.guideY });
+      commit(applyPatches(latest.current.elements, final.patches));
+    };
+    const up = () => {
+      setGuides({ x: null, y: null });
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      // A plain click on one member of a loose selection narrows it to that element.
+      if (!moved && !anchor.groupId) selectMany([anchor.id]);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up, { once: true });
+  };
+
+  // Dragging on empty canvas draws a selection rectangle.
+  const startMarquee = (event) => {
+    setPickerOpen(false);
+    setFormatOpen(false);
+    setAlignOpen(false);
+    if (event.button !== undefined && event.button !== 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const toSlide = (clientX, clientY) => ({ x: (clientX - rect.left) / scale, y: (clientY - rect.top) / scale });
+    const origin = toSlide(event.clientX, event.clientY);
+    const base = event.shiftKey ? selectionIds : [];
+    if (!event.shiftKey) selectMany([]);
+    let dragging = false;
+    const move = (pointerEvent) => {
+      const point = toSlide(pointerEvent.clientX, pointerEvent.clientY);
+      if (!dragging && Math.hypot(point.x - origin.x, point.y - origin.y) < 4) return;
+      dragging = true;
+      pointerEvent.preventDefault();
+      const area = { x0: origin.x, y0: origin.y, x1: point.x, y1: point.y };
+      setMarquee(area);
+      selectMany(expandToGroups(latest.current.elements, [...base, ...marqueeSelect(latest.current.elements, area)]));
+    };
+    const up = () => {
+      setMarquee(null);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up, { once: true });
   };
 
   const startImageCrop = (event, element) => {
@@ -272,10 +474,9 @@ export default function ElementCanvas({
           src, storageUrl: uploaded.url, assetId: uploaded.id,
           imageScale: 1, objectPositionX: 50, objectPositionY: 50,
         });
-        onNotify?.('Đã thay ảnh', 'success');
       } else {
         const image = {
-          id: `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          id: newElementId(),
           type: 'image',
           role: 'image',
           x: 280,
@@ -291,7 +492,6 @@ export default function ElementCanvas({
         };
         commit([...elements, image]);
         setSelectedId(image.id);
-        onNotify?.('Đã thêm ảnh vào slide', 'success');
       }
     } catch (error) {
       onNotify?.(error.message || 'Không thể tải ảnh lên', 'error');
@@ -329,7 +529,6 @@ export default function ElementCanvas({
       element.content = escaped;
       commit([...elements, element]);
       setSelectedId(element.id);
-      onNotify?.('Đã dán nội dung vào slide', 'success');
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
@@ -342,14 +541,32 @@ export default function ElementCanvas({
       const command = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
 
-      if (command && key === 'd' && selectedId) {
+      const arrows = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+      if (command && key === 'a') {
+        event.preventDefault();
+        selectMany(latest.current.elements.filter(selectable).map((item) => item.id));
+      } else if (command && key === 'g' && selectionIds.length > 1) {
+        event.preventDefault();
+        if (event.shiftKey) ungroupSelection(); else groupSelection();
+      } else if (event.key === 'Escape' && selectionIds.length) {
+        selectMany([]);
+      } else if (isMulti && arrows.includes(event.key)) {
+        event.preventDefault();
+        const step = event.shiftKey ? 10 : 1;
+        const items = latest.current.elements.filter((item) => multiIds.includes(item.id) && selectable(item));
+        const bounds = boundsOf(items, items.map((item) => item.id));
+        const starts = Object.fromEntries(items.map((item) => [item.id, { x: item.x, y: item.y }]));
+        const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+        const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+        if (bounds) commit(applyPatches(latest.current.elements, moveWithinSlide(starts, bounds, dx, dy).patches));
+      } else if (command && key === 'd' && selectedId) {
         event.preventDefault();
         event.stopPropagation();
         duplicateSelected();
       } else if (command && key === 'c' && selectedId) {
         event.preventDefault();
         copySelected();
-      } else if (command && key === 'v' && elementClipboard) {
+      } else if (command && key === 'v' && getClipboard()) {
         event.preventDefault();
         pasteElement();
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId) {
@@ -379,13 +596,29 @@ export default function ElementCanvas({
 
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [readonly, selectedId, selectedElement, elements]);
+  }, [readonly, selectedId, selectedElement, elements, multi]);
 
   const startPointerAction = (event, element, mode, deferUntilMove = false) => {
     if (element.locked) {
       event.stopPropagation();
       setSelectedId(element.id);
       return;
+    }
+    if (mode === 'move') {
+      if (event.shiftKey) {
+        event.stopPropagation();
+        selectMany(toggleInSelection(latest.current.elements, selectionIds, element.id), element.id);
+        return;
+      }
+      const family = expandToGroups(latest.current.elements, [element.id]);
+      const inSelection = isMulti && multiIds.includes(element.id);
+      const members = inSelection ? multiIds : family;
+      if (members.length > 1) {
+        if (!inSelection) selectMany(members, element.id);
+        startGroupMove(event, members, element, deferUntilMove);
+        return;
+      }
+      if (isMulti) setMulti([]);
     }
     if (!deferUntilMove) event.preventDefault();
     event.stopPropagation();
@@ -402,8 +635,16 @@ export default function ElementCanvas({
       if (mode === 'move') {
         let nextX = clamp(start.element.x + dx, 0, 960 - element.width);
         let nextY = clamp(start.element.y + dy, 0, 540 - element.height);
-        const verticalTargets = [0, 480, 960];
-        const horizontalTargets = [0, 270, 540];
+        // Snap to the canvas edges/center and to every other element's own
+        // edges/center, so dragging one box lines it up with another one
+        // already on the slide — not just with the slide bounds.
+        const others = elements.filter((item) => item.id !== element.id);
+        const verticalTargets = [0, 480, 960, ...others.flatMap((item) => [
+          item.x, item.x + (item.width || 0) / 2, item.x + (item.width || 0),
+        ])];
+        const horizontalTargets = [0, 270, 540, ...others.flatMap((item) => [
+          item.y, item.y + (item.height || 0) / 2, item.y + (item.height || 0),
+        ])];
         const elementXPoints = [nextX, nextX + element.width / 2, nextX + element.width];
         const elementYPoints = [nextY, nextY + element.height / 2, nextY + element.height];
         let guideX = null;
@@ -445,12 +686,33 @@ export default function ElementCanvas({
           nextY = clamp(start.element.y + dy, 0, start.element.y + start.element.height - minHeight);
           nextHeight = start.element.height + start.element.y - nextY;
         }
-        updateElement(element.id, { x: nextX, y: nextY, width: nextWidth, height: nextHeight });
+
+        const patch = { x: nextX, y: nextY, width: nextWidth, height: nextHeight };
+        if (element.type === 'text') {
+          // Dragging a handle on a text box scales the font with it, like
+          // resizing an image — a corner scales by the box's own area
+          // change (both dimensions), an edge handle by that one dimension.
+          const widthRatio = nextWidth / (start.element.width || nextWidth);
+          const heightRatio = nextHeight / (start.element.height || nextHeight);
+          const isCorner = direction.length === 2;
+          const scaleRatio = isCorner ? Math.sqrt(widthRatio * heightRatio)
+            : direction.includes('e') || direction.includes('w') ? widthRatio
+            : heightRatio;
+          const startFontSize = start.element.style?.fontSizeLocked && Number(start.element.style?.fontSize)
+            ? Number(start.element.style.fontSize)
+            : adaptiveCanvasFontSize(start.element);
+          const nextFontSize = Math.round(Math.min(200, Math.max(6, startFontSize * scaleRatio)) * 10) / 10;
+          patch.style = { ...element.style, fontSize: nextFontSize, fontSizeLocked: true };
+        }
+        updateElement(element.id, patch);
       }
     };
 
+    if (mode.startsWith('resize-')) setResizingId(element.id);
+
     const up = () => {
       setGuides({ x: null, y: null });
+      setResizingId(null);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
     };
@@ -483,20 +745,52 @@ export default function ElementCanvas({
   };
 
   return (
-    <div className={`element-canvas ${readonly ? 'readonly' : ''} ${preserveTemplate ? 'preserve-template' : ''}`} data-theme={theme} style={{ background: preserveTemplate ? 'transparent' : themeData.bgGrad }} onPointerDown={readonly ? undefined : () => {
-      setSelectedId(null);
-      setEditingId(null);
-    }}>
+    <div ref={canvasRootRef} className={`element-canvas ${readonly ? 'readonly' : ''} ${preserveTemplate ? 'preserve-template' : ''} ${THEMES[theme] ? '' : 'custom-theme'}`} data-theme={theme} data-slide-type={slide?.type || ''} data-title-tl={titleAtTopLeft ? 'true' : 'false'} style={{ background: preserveTemplate ? 'transparent' : themeData.bgGrad, '--slide-accent': themeData.accent, ...(isGeneratedTheme(theme) ? buildGeneratedTheme(theme).cssVars : null), ...(slide?.richText?._tplBg && isDarkColor(slide.richText._tplBg) ? { '--card-bg': 'rgba(255, 255, 255, 0.08)', '--card-border': 'rgba(255, 255, 255, 0.2)' } : null) }} onPointerDown={readonly ? undefined : startMarquee}>
       {preserveTemplate ? (
         <div className="element-canvas-template">
           <EditableSlide slide={{ ...slide, elements: [] }} theme={theme} readonly />
         </div>
-      ) : (
+      ) : THEMES[theme] && !slide?.richText?._noOrnaments ? (
+        // Custom (uploaded) templates have no built-in ornaments; the fallback
+        // decoration would stamp a stray indigo bar on every one of them.
         <BgDecorations theme={theme} />
+      ) : null}
+      {Array.isArray(slide?.richText?._decor) && slide.richText._decor.length > 0 && (
+        <TemplateArt
+          art={slide.richText._noOrnaments ? slide.richText._decor.filter(isBackdrop) : slide.richText._decor}
+          onPick={readonly || !onAdoptArt ? undefined : onAdoptArt}
+        />
       )}
-      {!readonly && <div className="element-canvas-actions" onPointerDown={(event) => event.stopPropagation()}>
+      {!readonly && <div className={`element-canvas-actions${pickerOpen || formatOpen || alignOpen ? ' open' : ''}`} onPointerDown={(event) => event.stopPropagation()}>
         <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={handleImageUpload}/>
         <button type="button" onClick={addText} title="Thêm ô chữ"><Plus size={15}/> Chữ</button>
+        <span className="ea-anchor">
+          <button
+            type="button"
+            className={pickerOpen ? 'active' : ''}
+            onClick={() => { setPickerOpen((open) => !open); setFormatOpen(false); }}
+            title="Thêm hình khối hoặc biểu tượng"
+            aria-expanded={pickerOpen}
+          >
+            <Shapes size={15}/> Hình
+          </button>
+          {pickerOpen && <ShapePicker color={accentColor} onAddShape={addShape} onAddIcon={addIcon} />}
+        </span>
+        {(selectedElement?.type === 'shape' || selectedElement?.type === 'icon') && (
+          <span className="ea-anchor">
+            <button
+              type="button"
+              className={formatOpen ? 'active' : ''}
+              onClick={() => { setFormatOpen((open) => !open); setPickerOpen(false); }}
+              disabled={selectedElement?.locked}
+              title="Định dạng hình: màu, viền, độ mờ"
+              aria-expanded={formatOpen}
+            >
+              <Palette size={15}/>
+            </button>
+            {formatOpen && <GraphicInspector element={selectedElement} onChange={(patch) => updateElement(selectedElement.id, patch)} />}
+          </span>
+        )}
         <button type="button" onClick={() => imageInputRef.current?.click()} disabled={uploadingImage || selectedElement?.locked} title={selectedElement?.type === 'image' ? 'Thay ảnh' : 'Thêm ảnh'}>
           {uploadingImage ? <Loader2 size={15} className="spin"/> : <ImagePlus size={15}/>} {selectedElement?.type === 'image' ? 'Thay' : 'Ảnh'}
         </button>
@@ -559,21 +853,68 @@ export default function ElementCanvas({
         <button type="button" onClick={copySelected} disabled={!selectedId} title="Sao chép (Ctrl+C)"><Copy size={15}/></button>
         <button type="button" onClick={pasteElement} disabled={!hasClipboard} title="Dán (Ctrl+V)"><ClipboardPaste size={15}/></button>
         <button type="button" onClick={duplicateSelected} disabled={!selectedId} title="Nhân bản (Ctrl+D)"><Copy size={15}/><Plus size={10}/></button>
+        {onCopyToAllSlides && (
+          <button
+            type="button"
+            onClick={() => selectedElement && onCopyToAllSlides(selectedElement)}
+            disabled={!selectedElement}
+            title="Đặt phần tử này lên mọi slide (logo, chân trang, watermark…)"
+          >
+            <CopyPlus size={15}/>
+          </button>
+        )}
         <button type="button" onClick={() => moveLayer('back')} disabled={!selectedId} title="Đưa xuống dưới"><ArrowDownToLine size={15}/></button>
         <button type="button" onClick={() => moveLayer('front')} disabled={!selectedId} title="Đưa lên trên"><ArrowUpToLine size={15}/></button>
+        <span className="ea-anchor">
+          <button
+            type="button"
+            className={alignOpen ? 'active' : ''}
+            onClick={() => { setAlignOpen((open) => !open); setPickerOpen(false); setFormatOpen(false); }}
+            disabled={!selectionIds.length}
+            title="Căn chỉnh, phân bố và gộp nhóm"
+            aria-expanded={alignOpen}
+          >
+            <AlignHorizontalJustifyCenter size={15}/>
+          </button>
+          {alignOpen && (
+            <SelectionTools
+              count={selectionIds.length}
+              canGroup={selectionIds.length > 1}
+              canUngroup={hasGroup(elements, selectionIds)}
+              onAlign={alignSelection}
+              onDistribute={distributeSelection}
+              onGroup={groupSelection}
+              onUngroup={ungroupSelection}
+            />
+          )}
+        </span>
         <button type="button" onClick={toggleLock} disabled={!selectedId} title={selectedElement?.locked ? 'Mở khóa phần tử' : 'Khóa phần tử'}>
           {selectedElement?.locked ? <Unlock size={15}/> : <Lock size={15}/>}
         </button>
         <button type="button" onClick={removeSelected} disabled={!selectedId || selectedElement?.locked} title="Xóa (Delete)"><Trash2 size={15}/></button>
       </div>}
 
+      {isMulti && selectionBounds && (
+        <div
+          className="canvas-multi-frame"
+          style={{ left: selectionBounds.x - 4, top: selectionBounds.y - 4, width: selectionBounds.width + 8, height: selectionBounds.height + 8 }}
+        >
+          <span>{multiIds.length} phần tử{hasGroup(elements, multiIds) ? ' · nhóm' : ''}</span>
+        </div>
+      )}
+      {marquee && (
+        <div
+          className="canvas-marquee"
+          style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }}
+        />
+      )}
       {guides.x !== null && <div className="canvas-guide vertical" style={{ left: guides.x }}/>} 
       {guides.y !== null && <div className="canvas-guide horizontal" style={{ top: guides.y }}/>} 
 
       {elements.map((element, index) => (
         <div
           key={element.id}
-          className={`canvas-element role-${element.role || 'custom'} ${element.type === 'image' && (element.objectFit || inferImageFit(element.src)) === 'contain' ? 'fit-contain' : ''} ${selectedId === element.id ? 'selected' : ''} ${editingId === element.id ? 'editing' : ''} ${element.locked ? 'locked' : ''} ${croppingId === element.id ? 'cropping' : ''}`}
+          className={`canvas-element role-${element.role || 'custom'} ${element.type === 'image' && (element.objectFit || inferImageFit(element.src)) === 'contain' ? 'fit-contain' : ''} ${!isMulti && selectedId === element.id ? 'selected' : ''} ${isMulti && multiIds.includes(element.id) ? 'multi-selected' : ''} ${editingId === element.id ? 'editing' : ''} ${element.locked ? 'locked' : ''} ${croppingId === element.id ? 'cropping' : ''}`}
           style={{
             left: element.x,
             top: element.y,
@@ -596,12 +937,17 @@ export default function ElementCanvas({
             if (element.type === 'image') {
               setEditingId(null);
               setCroppingId(element.id);
-              return;
+            } else if (element.type === 'text') {
+              // contentEditable only turns on once this sets editingId (see
+              // the `editable` prop below) — while merely *selected*, the
+              // box stays a plain div so a press-and-drag anywhere on it
+              // moves the box instead of the browser starting a native
+              // text-selection drag.
+              setEditingId(element.id);
             }
-            if (element.type === 'text') setEditingId(element.id);
           }}
         >
-          {selectedId === element.id && !element.locked && croppingId !== element.id && (
+          {!isMulti && selectedId === element.id && !element.locked && croppingId !== element.id && (
             <button
               type="button"
               className="canvas-drag-handle"
@@ -611,7 +957,7 @@ export default function ElementCanvas({
               <GripHorizontal size={15}/>
             </button>
           )}
-          {selectedId === element.id && !element.locked && croppingId !== element.id && (
+          {!isMulti && selectedId === element.id && !element.locked && croppingId !== element.id && (
             <button
               type="button"
               className="canvas-rotate-handle"
@@ -646,15 +992,11 @@ export default function ElementCanvas({
               </div>
             )
           ) : element.type === 'shape' ? (
-            <div
-              className="canvas-shape"
-              style={{
-                background: element.fill || 'transparent',
-                borderColor: element.borderColor || 'transparent',
-                borderRadius: element.radius || 0,
-                opacity: element.opacity ?? 1,
-              }}
-            />
+            <ShapeGlyph element={element} />
+          ) : element.type === 'icon' ? (
+            <IconGlyph element={element} />
+          ) : element.type === 'art' ? (
+            <ArtGlyph item={{ type: element.artType, src: element.src, fill: element.fill, style: element.style, opacity: element.opacity }} />
           ) : element.type === 'table' ? (
             <TableVisual
               table={element.data || slide.table}
@@ -683,20 +1025,24 @@ export default function ElementCanvas({
                   bottom: 'flex-end',
                 }[element.style?.verticalAlign] || 'flex-start',
               }}
-              className="canvas-text"
+              className={`canvas-text${element.decor ? ` decor-${element.decor}` : ''}`}
               value={element.content}
-              autoFit
+              autoFit={false}
+              autoResizeHeight={!readonly && resizingId !== element.id}
+              minHeight={element.role === 'title' ? 40 : element.role === 'pageNumber' ? 20 : 60}
+              onHeightChange={readonly ? undefined : (height) => syncElementLayout(element.id, { height })}
               autoFitBaseFontSize={adaptiveCanvasFontSize(element)}
               minFontSize={element.role === 'title' ? 12 : 8}
-              selected={!readonly && selectedId === element.id && !element.locked}
-              editable={!readonly && editingId === element.id}
+              selected={!readonly && !isMulti && selectedId === element.id && !element.locked}
+              editable={!readonly && editingId === element.id && !element.locked}
               boxStyle={element.style}
               onBoxStyleChange={(patch) => updateElement(element.id, { style: { ...element.style, ...patch } })}
+              onEnterEdit={() => setEditingId(element.id)}
               onExitEdit={() => setEditingId((current) => current === element.id ? null : current)}
               onSave={(html) => updateElement(element.id, { content: html })}
             />
           )}
-          {selectedId === element.id && !element.locked && croppingId !== element.id && (
+          {!isMulti && selectedId === element.id && !element.locked && croppingId !== element.id && (
             <>
               {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((direction) => (
                 <button

@@ -1,5 +1,19 @@
-import { inferImageFit } from './imageFit';
-import { normalizeBoundaryElements, normalizeTableElements, orderedBodyElements } from './templateLayouts.js';
+import { inferImageFit } from './imageFit.js';
+import { reflowSlideTemplate } from './slideElements.js';
+import { ADAPTIVE_TEMPLATES, normalizeBoundaryElements, normalizeTableElements, orderedBodyElements } from './templateLayouts.js';
+
+// Compositions the first template generator produced (rails, split columns,
+// per-theme text profiles). They hid the traditional horizontal text layout,
+// so slides still carrying them return to the classic arrangement on load.
+const LEGACY_GENERATED_LAYOUT = /(^title-rail$|-points$|-text$)/;
+// Cover/closing slides saved by the first generator carry the bare "cover"
+// marker (the current engine writes cover-* / closing-*).
+const hasLegacyBoundaryLayout = (elements) => elements.some((element) => (
+  element?.type === 'text' && element.templateLayout === 'cover'
+));
+const isLegacyGeneratedLayout = (elements) => elements.some((element) => (
+  element?.type === 'text' && LEGACY_GENERATED_LAYOUT.test(String(element.templateLayout || ''))
+));
 
 export function parseBullets(page) {
   if (Array.isArray(page?.bullets)) return page.bullets;
@@ -186,7 +200,7 @@ export function formatSlidePage(page, { presentationMode = 'presentation', theme
     };
   });
 
-  return {
+  const formatted = {
     id: page.id,
     type,
     title: page.title || page.table?.title || '',
@@ -217,24 +231,35 @@ export function formatSlidePage(page, { presentationMode = 'presentation', theme
       page.presentationMode || page.presentation_mode || presentationMode || 'presentation'
     ).toLowerCase(),
   };
+  if (ADAPTIVE_TEMPLATES.has(theme) && !['title', 'thankyou', 'quote'].includes(type)
+    && isLegacyGeneratedLayout(formatted.elements)) {
+    return { ...formatted, elements: reflowSlideTemplate(formatted, theme).elements };
+  }
+  return formatted;
 }
 
-function hasCustomBoundaryCanvas(slide) {
-  const elements = Array.isArray(slide?.elements) ? slide.elements : [];
-  const systemLabels = new Set([
-    'bài giảng',
-    'lecture',
-    'kết thúc bài giảng',
-    'end of lecture',
-  ]);
-  return elements.some((element) => (
-    element?.type !== 'text'
-    || !['title', 'body', 'custom'].includes(element?.role)
-    || (
-      element?.role === 'custom'
-      && !systemLabels.has(normalizeElementText(element?.content))
-    )
-  ));
+function polishedCoverSubtitle(slide) {
+  const current = String(slide?.subtitle || '').trim();
+  const plain = current.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const folded = plain.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const definitionLike = !plain
+    || plain.length > 150
+    || plain.slice(0, 40).includes(':')
+    || /^(dinh nghia|khai niem|definition\b|defined as\b)/.test(folded);
+  if (!definitionLike) return { subtitle: plain, replaced: false };
+
+  const rawTitle = String(slide?.title || '').trim();
+  const topic = rawTitle
+    .replace(/^\s*(giới thiệu|tổng quan)\s+(về\s+)?/i, '')
+    .replace(/^\s*(introduction|overview)\s+(to|of)\s+/i, '')
+    .trim() || rawTitle;
+  const vietnamese = /[ăâđêôơưàáạảãằắặẳẵầấậẩẫèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]/i.test(rawTitle + plain);
+  return {
+    subtitle: vietnamese
+      ? `Khám phá ${topic} qua các nội dung trọng tâm và góc nhìn thực tiễn.`
+      : `Explore ${topic} through its key ideas and practical perspectives.`,
+    replaced: true,
+  };
 }
 
 export function formatSlideDeck(pages, presentationMode = '', theme) {
@@ -253,12 +278,17 @@ export function formatSlideDeck(pages, presentationMode = '', theme) {
   const slides = source.map((page) => formatSlidePage(page, { presentationMode: effectiveMode, theme }));
   if (!slides.length) return slides;
 
+  // Cover and closing slides are ordinary canvases. Whatever the user placed,
+  // resized or restyled must survive a reload, so saved elements are kept as-is;
+  // only a slide with no canvas yet is generated (and its subtitle polished).
   const first = slides[0];
-  slides[0] = {
-    ...first,
-    type: 'title',
-    elements: hasCustomBoundaryCanvas(first) ? first.elements : [],
-  };
+  const hasCanvas = (slide) => Array.isArray(slide?.elements) && slide.elements.length > 0;
+  if (hasCanvas(first)) {
+    slides[0] = { ...first, type: 'title' };
+  } else {
+    const cover = polishedCoverSubtitle(first);
+    slides[0] = { ...first, type: 'title', subtitle: cover.subtitle, bullets: [cover.subtitle], elements: [] };
+  }
 
   if (slides.length > 1) {
     const lastIndex = slides.length - 1;
@@ -272,13 +302,17 @@ export function formatSlideDeck(pages, presentationMode = '', theme) {
         rawRole === 'summary'
         && /(tổng kết|kết luận|hỏi đáp|cảm ơn|summary|conclusion|thank|q&a)/i.test(closingTitle)
       );
-    if (isClosing) {
-      slides[lastIndex] = {
-        ...last,
-        type: 'thankyou',
-        elements: hasCustomBoundaryCanvas(last) ? last.elements : [],
-      };
-    }
+    if (isClosing) slides[lastIndex] = { ...last, type: 'thankyou' };
+  }
+
+  // Old-generator covers and closings return to the current composition once.
+  if (ADAPTIVE_TEMPLATES.has(theme)) {
+    [0, slides.length - 1].forEach((index) => {
+      const slide = slides[index];
+      if (slide && ['title', 'thankyou'].includes(slide.type) && hasLegacyBoundaryLayout(slide.elements || [])) {
+        slides[index] = { ...slide, elements: reflowSlideTemplate(slide, theme).elements };
+      }
+    });
   }
 
   return slides;

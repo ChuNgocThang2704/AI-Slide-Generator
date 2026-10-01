@@ -1,0 +1,36 @@
+.dlg-backdrop {
+  position: fixed; inset: 0; z-index: 5000; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(6, 6, 14, .62); backdrop-filter: blur(4px); animation: dlg-fade .15s ease;
+}
+.dlg {
+  width: min(420px, 100%); padding: 22px; border-radius: 16px; color: #fff;
+  background: #171727; border: 1px solid rgba(255, 255, 255, .1); box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
+  animation: dlg-pop .18s ease; font-family: Inter, sans-serif;
+}
+.dlg-head { display: flex; align-items: center; gap: 12px; }
+.dlg-head h3 { margin: 0; font-size: 1.02rem; font-weight: 700; }
+.dlg-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 34px; height: 34px; border-radius: 10px; background: rgba(108, 99, 255, .18); color: #b7b0ff;
+}
+.dlg-icon.danger { background: rgba(255, 91, 91, .16); color: #ff8a8a; }
+.dlg-msg { margin: 14px 0 0; color: rgba(255, 255, 255, .68); font-size: .88rem; line-height: 1.6; }
+.dlg-input {
+  width: 100%; margin-top: 16px; padding: 11px 13px; border-radius: 10px; box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, .14); background: rgba(0, 0, 0, .3); color: #fff; font: 500 .9rem Inter, sans-serif;
+}
+.dlg-input:focus { outline: none; border-color: #8478ff; box-shadow: 0 0 0 3px rgba(108, 99, 255, .25); }
+.dlg-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.dlg-btn {
+  min-width: 84px; padding: 10px 16px; border-radius: 10px; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, .14); background: rgba(255, 255, 255, .06); color: #fff;
+  font: 650 .84rem Inter, sans-serif; transition: background .15s, border-color .15s;
+}
+.dlg-btn:hover { background: rgba(255, 255, 255, .11); }
+.dlg-btn.primary { background: #6c63ff; border-color: #7b73ff; }
+.dlg-btn.primary:hover { background: #7b73ff; }
+.dlg-btn.primary.danger { background: #d64545; border-color: #e35b5b; }
+.dlg-btn.primary.danger:hover { background: #e35b5b; }
+.dlg-btn:focus-visible { outline: 2px solid #a89fff; outline-offset: 2px; }
+@keyframes dlg-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dlg-pop { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }

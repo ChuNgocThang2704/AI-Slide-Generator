@@ -6,6 +6,7 @@ import { subscriptionService } from './services/subscriptionService';
 
 import Navbar from './components/layout/Navbar';
 import ToastContainer from './components/common/Toast';
+import DialogHost from './components/common/DialogHost';
 
 import LandingPage from './pages/LandingPage/LandingPage';
 import AuthPage from './pages/AuthPage/AuthPage';
@@ -14,11 +15,15 @@ import VerifyCodePage from './pages/VerifyCodePage/VerifyCodePage';
 import DashboardPage from './pages/DashboardPage/DashboardPage';
 import GeneratePage from './pages/GeneratePage/GeneratePage';
 import EditorPage from './pages/EditorPage/EditorPage';
+import PresentPage from './pages/PresentPage/PresentPage';
 import PricingPage from './pages/PricingPage/PricingPage';
 import DocumentsPage from './pages/DocumentsPage/DocumentsPage';
 import AdminPage from './pages/AdminPage/AdminPage';
 import SettingsPage from './pages/SettingsPage/SettingsPage';
 import PaymentResultPage from './pages/PaymentResultPage/PaymentResultPage';
+
+// Developer-only layout bench; compiled out of production builds.
+const LayoutLab = import.meta.env.DEV ? React.lazy(() => import('./pages/LayoutLab/LayoutLab')) : null;
 
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuthStore();
@@ -36,6 +41,7 @@ function Layout({ children, hideNav }) {
       {!hideNav && <Navbar />}
       {children}
       <ToastContainer />
+      <DialogHost />
     </>
   );
 }
@@ -179,6 +185,9 @@ export default function App() {
       <SubscriptionSync />
       <Routes>
         {/* Public */}
+        {LayoutLab && (
+          <Route path="/__layout-lab" element={<React.Suspense fallback={null}><LayoutLab /></React.Suspense>} />
+        )}
         <Route path="/" element={<Layout><LandingPage /></Layout>} />
         <Route path="/pricing" element={<Layout><PricingPage /></Layout>} />
         <Route path="/success" element={<PrivateRoute><Layout><PaymentResultPage /></Layout></PrivateRoute>} />
@@ -222,6 +231,9 @@ export default function App() {
           <PrivateRoute>
             <Layout><EditorPage /></Layout>
           </PrivateRoute>
+        } />
+        <Route path="/present/:id" element={
+          <PrivateRoute><PresentPage /></PrivateRoute>
         } />
         <Route path="/documents" element={
           <PrivateRoute>

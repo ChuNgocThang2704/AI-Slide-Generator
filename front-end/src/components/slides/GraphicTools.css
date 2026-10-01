@@ -1,0 +1,71 @@
+.graphic-picker, .graphic-inspector {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1000;
+  width: 292px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #171727;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  color: #fff;
+}
+.graphic-inspector { width: 250px; display: flex; flex-direction: column; gap: 10px; }
+
+.gp-tabs { display: flex; gap: 4px; padding: 3px; margin-bottom: 8px; border-radius: 9px; background: rgba(0, 0, 0, 0.3); }
+.gp-tabs button {
+  flex: 1; padding: 6px; border: 0; border-radius: 7px; background: transparent; cursor: pointer;
+  color: rgba(255, 255, 255, 0.6); font: 600 .74rem/1 Inter, sans-serif;
+}
+.gp-tabs button.active { background: rgba(108, 99, 255, 0.85); color: #fff; }
+
+.gp-grid { display: grid; gap: 6px; max-height: 260px; overflow-y: auto; }
+.gp-grid.shapes { grid-template-columns: repeat(3, 1fr); }
+.gp-grid.icons { grid-template-columns: repeat(6, 1fr); }
+.gp-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 8px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 9px; background: rgba(255, 255, 255, 0.03); cursor: pointer; color: #fff;
+}
+.gp-item:hover { border-color: #a89fff; background: rgba(108, 99, 255, 0.18); }
+.gp-item small { font: 500 .62rem/1.1 Inter, sans-serif; color: rgba(255, 255, 255, 0.6); }
+.gp-item.icon { padding: 8px 0; }
+.gp-preview { position: relative; display: block; width: 44px; height: 32px; }
+
+.gi-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .74rem; color: rgba(255, 255, 255, 0.7); }
+.gi-inline { display: inline-flex; align-items: center; gap: 8px; }
+.gi-check {
+  display: inline-flex; align-items: center; padding: 4px 9px; border-radius: 999px; cursor: pointer; user-select: none;
+  border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.04); color: rgba(255, 255, 255, 0.7);
+  font: 600 .68rem/1 Inter, sans-serif; transition: background .15s, border-color .15s, color .15s;
+}
+.gi-check:hover { border-color: rgba(255, 255, 255, 0.3); }
+.gi-check:has(input:checked) { background: rgba(108, 99, 255, 0.28); border-color: #8478ff; color: #fff; }
+.gi-check input { position: absolute; opacity: 0; pointer-events: none; }
+
+/* Colour well: a round swatch instead of the browser's grey rectangle. */
+.graphic-inspector input[type="color"] {
+  -webkit-appearance: none; appearance: none; width: 26px; height: 26px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 2px solid rgba(255, 255, 255, 0.28); background: none; overflow: hidden;
+}
+.graphic-inspector input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.graphic-inspector input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.graphic-inspector input[type="color"]::-moz-color-swatch { border: 0; border-radius: 50%; }
+.graphic-inspector input[type="color"]:disabled { opacity: .35; cursor: not-allowed; }
+
+/* Slider: thin track, filled part in the accent colour, round white thumb — the same as ThemeTuner's. */
+.graphic-inspector input[type="range"] {
+  -webkit-appearance: none; appearance: none; width: 110px; height: 18px; background: transparent; cursor: pointer;
+  --pct: 50%;
+}
+.graphic-inspector input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.16); }
+.graphic-inspector input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%;
+  background: #fff; border: 2px solid #6c63ff; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.5);
+}
+.graphic-inspector input[type="range"]::-moz-range-track { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.16); }
+.graphic-inspector input[type="range"]::-moz-range-progress { height: 4px; border-radius: 4px; background: #6c63ff; }
+.graphic-inspector input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 2px solid #6c63ff; }
+
+.element-canvas-actions .ea-anchor { position: relative; display: inline-flex; }
+.element-canvas-actions.open { opacity: 1; }

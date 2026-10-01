@@ -40,7 +40,7 @@ export const useAuthStore = create(
 
 export const usePresentationStore = create(
   persist(
-    (set, get) => ({
+    (set) => ({
       presentations: [],
       currentPresentation: null,
 
@@ -110,7 +110,7 @@ export const useUIStore = create((set) => ({
 // ─────────────────────────────────────────────
 export const useProjectStore = create(
   persist(
-    (set, get) => ({
+    (set) => ({
       projects: [],
       currentProject: null,
       projectsPage: { content: [], totalElements: 0, totalPages: 0 },
@@ -170,7 +170,7 @@ export const useProjectStore = create(
 // ─────────────────────────────────────────────
 export const useDocumentStore = create(
   persist(
-    (set, get) => ({
+    (set) => ({
       documents: [],
       currentDocument: null,
       documentsPage: { content: [], totalElements: 0, totalPages: 0 },

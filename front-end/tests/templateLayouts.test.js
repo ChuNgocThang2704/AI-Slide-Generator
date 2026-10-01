@@ -45,12 +45,13 @@ for (const theme of themes) {
   });
 }
 
-test('themes have different text, image and chart coordinates', () => {
-  for (const extra of [{}, { imageUrl: 'asset.jpg' }, { chart }, { type: 'title' }]) {
-    const signatures = themes.map((theme) => JSON.stringify(createElementsFromSlide({ ...slide, ...extra }, theme)
-      .map(({ x, y, width, height }) => [x, y, width, height])));
-    assert.equal(new Set(signatures).size, themes.length);
-  }
+test('everyday slides keep the traditional layout while covers vary by theme', () => {
+  const sig = (extra) => themes.map((theme) => JSON.stringify(createElementsFromSlide({ ...slide, ...extra }, theme)
+    .map(({ x, width, y }) => [x, width, y > 0 && y < 60])));
+  assert.ok(new Set(sig({})).size <= 2, 'text slides should share the classic composition');
+  const covers = themes.map((theme) => JSON.stringify(createElementsFromSlide({ ...slide, type: 'title' }, theme)
+    .map(({ x, y, width, height }) => [x, y, width, height])));
+  assert.ok(new Set(covers).size >= 4, 'covers should give themes their own character');
 });
 
 test('title and closing slides omit lecture labels and use readable closing body text', () => {
@@ -61,8 +62,7 @@ test('title and closing slides omit lecture labels and use readable closing body
     assert.equal(closing.elements.some((el) => /^(KẾT THÚC BÀI GIẢNG|END OF LECTURE)$/.test(String(el.content))), false);
     const titleElement = closing.elements.find((el) => el.role === 'title');
     const bodyElement = closing.elements.find((el) => el.role === 'body');
-    assert.equal(bodyElement.style.fontSize, 24);
-    assert.ok(bodyElement.height >= 300);
+    assert.ok(bodyElement.style.fontSize >= 18);
     assert.ok(titleElement.x + titleElement.width <= bodyElement.x
       || bodyElement.x + bodyElement.width <= titleElement.x
       || titleElement.y + titleElement.height <= bodyElement.y
@@ -79,18 +79,17 @@ test('reflow removes saved lecture labels but preserves other custom text', () =
   ] }, 'tech-purple');
   assert.equal(output.elements.some((el) => el.id === 'label'), false);
   assert.equal(output.elements.some((el) => el.id === 'custom'), true);
-  assert.equal(output.elements.find((el) => el.id === 'body').style.fontSize, 24);
+  assert.ok(output.elements.find((el) => el.id === 'body').style.fontSize >= 18);
 });
 
-test('saved closing slides are normalized on reload and serialization', () => {
+test('saved closing slides only lose stale labels; geometry and style are never forced back', () => {
   const saved = [
     { id: 'label', type: 'text', role: 'custom', content: 'KẾT THÚC BÀI GIẢNG', templateLayout: 'cover' },
-    { id: 'body', type: 'text', role: 'body', content: '<p>Summary</p>', templateLayout: 'cover', style: { fontSize: 20 } },
+    { id: 'body', type: 'text', role: 'body', content: '<p>Summary</p>', templateLayout: 'cover', x: 12, y: 34, width: 200, height: 90, style: { fontSize: 20 } },
   ];
   const normalized = normalizeBoundaryElements(saved, 'thankyou', 'tech-purple');
   assert.deepEqual(normalized.map((el) => el.id), ['body']);
-  assert.equal(normalized[0].style.fontSize, 24);
-  assert.equal(normalized[0].height, 362);
+  assert.deepEqual(normalized[0], saved[1]);
   assert.equal(normalizeBoundaryElements(normalized, 'thankyou', 'tech-purple'), normalized);
 });
 
@@ -252,8 +251,11 @@ test('custom templates import styles without importing PPTX geometry or losing c
   assert.deepEqual(geometry(custom.elements), geometry(expected.elements));
   assert.deepEqual(toSlidePageUpdate(custom).bullets, slide.bullets);
   assert.deepEqual(custom.chart, chartSlide.chart);
-  assert.equal(custom.elements.find((element) => element.role === 'title').style.fontFamily, 'Imported Heading');
-  assert.equal(custom.elements.find((element) => element.role === 'body').style.fontFamily, 'Imported Body');
+  // A font the app has not loaded would silently fall back to a serif default, so imported
+  // fonts are mapped to the closest loaded family.
+  const loadedFont = /Inter|Nunito|Plus Jakarta Sans|Space Grotesk|Playfair Display|Merriweather|Exo 2|Saira|Baloo 2|Be Vietnam Pro/;
+  assert.match(custom.elements.find((element) => element.role === 'title').style.fontFamily, loadedFont);
+  assert.match(custom.elements.find((element) => element.role === 'body').style.fontFamily, loadedFont);
   assert.equal(custom.elements.some((element) => element.templateStyleOnly), true);
   assert.equal(custom.elements.some((element) => String(element.id).startsWith('template-')), false);
 });

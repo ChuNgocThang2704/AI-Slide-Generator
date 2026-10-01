@@ -1,20 +1,26 @@
-import { fitTextToBox } from './textFit';
-import { inferImageFit } from './imageFit';
+import { fitTextToBox } from './textFit.js';
+import { inferImageFit } from './imageFit.js';
 import { layoutTemplateElements } from './templateLayouts.js';
+import { withGeneratedThemes } from './generatedTheme.js';
 
 const id = () => `el-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const THEME_TEXT = {
+const BASE_THEME_TEXT = {
   'soft-blue': { title: "'Nunito', sans-serif", body: "'Inter', sans-serif", text: '#0b2e4a', sub: '#4a6a85' },
   'royal-purple': { title: "'Playfair Display', serif", body: "'Inter', sans-serif", text: '#ffffff', sub: '#c0a8e0' },
   'clean-white': { title: "'Playfair Display', serif", body: "'Inter', sans-serif", text: '#1a1a1a', sub: '#555555' },
   'modern-dark': { title: "'Space Grotesk', sans-serif", body: "'Inter', sans-serif", text: '#ffffff', sub: 'rgba(255,255,255,0.65)' },
-  'playful-yellow': { title: "'Fredoka One', cursive", body: "'Inter', sans-serif", text: '#2e1e0a', sub: 'rgba(46,30,10,0.72)' },
+  'playful-yellow': { title: "'Baloo 2', cursive", body: "'Inter', sans-serif", text: '#2e1e0a', sub: 'rgba(46,30,10,0.72)' },
   'gradient-border': { title: "'Plus Jakarta Sans', sans-serif", body: "'Inter', sans-serif", text: '#0f172a', sub: '#475569' },
   'blue-planet': { title: "'Exo 2', sans-serif", body: "'Inter', sans-serif", text: '#ffffff', sub: 'rgba(255,255,255,0.65)' },
   'nature-green': { title: "'Merriweather', serif", body: "'Inter', sans-serif", text: '#e8f5e2', sub: 'rgba(232,245,226,0.75)' },
-  'tech-purple': { title: "'Rajdhani', sans-serif", body: "'Inter', sans-serif", text: '#ffffff', sub: 'rgba(255,255,255,0.65)' },
+  'tech-purple': { title: "'Saira', sans-serif", body: "'Inter', sans-serif", text: '#ffffff', sub: 'rgba(255,255,255,0.65)' },
+  'ocean-teal': { title: "'Nunito', sans-serif", body: "'Inter', sans-serif", text: '#083344', sub: '#3f6b73' },
+  'editorial-paper': { title: "'Merriweather', serif", body: "'Inter', sans-serif", text: '#2b1d12', sub: '#6b5646' },
+  'midnight-gold': { title: "'Playfair Display', serif", body: "'Inter', sans-serif", text: '#f8f5e6', sub: 'rgba(248,245,230,0.72)' },
 };
+
+const THEME_TEXT = withGeneratedThemes(BASE_THEME_TEXT, (built) => built.textPalette);
 
 const textElement = (role, content, x, y, width, height, style = {}) => ({
   id: id(), type: 'text', role, x, y, width, height, rotation: 0,
@@ -60,24 +66,6 @@ const contentPartsFromBullets = (bullets) => {
   return { body: list, code: code.join('\n'), normal, codeLines: code };
 };
 
-const splitBalancedBullets = (items) => {
-  if (!Array.isArray(items) || items.length < 2) return [items || [], []];
-  const total = items.reduce((sum, item) => sum + String(item || '').length, 0);
-  let consumed = 0;
-  let splitAt = 1;
-  for (let index = 0; index < items.length - 1; index += 1) {
-    consumed += String(items[index] || '').length;
-    splitAt = index + 1;
-    if (consumed >= total / 2) break;
-  }
-  splitAt = Math.max(2, Math.min(items.length - 2, splitAt));
-  return [items.slice(0, splitAt), items.slice(splitAt)];
-};
-
-const bulletListHtml = (items, className = 'slide-content-flow') => (
-  `<ul class="${className}">${items.map(richBulletHtml).join('')}</ul>`
-);
-
 const isVietnameseSlide = (slide) => {
   const language = String(slide?.language || slide?.lang || '').toLowerCase();
   if (language.startsWith('vi')) return true;
@@ -109,7 +97,6 @@ function createBaseElements(slide, theme = 'clean-white') {
   const colors = THEME_TEXT[theme] || THEME_TEXT['clean-white'];
   const elements = [];
   const isVietnamese = isVietnameseSlide(slide);
-  const isLecture = String(slide?.presentationMode || '').toLowerCase() === 'lecture';
 
   if (slide?.type === 'title') {
     const introTitle = slide?.title || slide?.richText?.title || '';
@@ -123,17 +110,6 @@ function createBaseElements(slide, theme = 'clean-white') {
     const introSubtitleSize = fitTextToBox(introSubtitle, {
       width: 600, height: 90, min: 15, max: 24, lineHeight: 1.45,
     });
-    const introLabel = isLecture
-      ? (isVietnamese ? 'BÀI GIẢNG' : 'LECTURE')
-      : (isVietnamese ? 'BÀI THUYẾT TRÌNH' : 'PRESENTATION');
-    elements.push(textElement('custom', introLabel, 110, 116, 740, 34, {
-      fontFamily: colors.body,
-      fontSize: 14,
-      color: colors.sub,
-      fontWeight: 700,
-      textAlign: 'center',
-      letterSpacing: 2,
-    }));
     elements.push(textElement('title', introTitle, 110, 164, 740, 132, {
       fontFamily: colors.title,
       fontSize: introTitleSize,
@@ -165,17 +141,6 @@ function createBaseElements(slide, theme = 'clean-white') {
     const closingBodySize = fitTextToBox(closingItems.join('\n'), {
       width: 660, height: 168, min: 16, max: 24, lineHeight: 1.45, itemCount: closingItems.length,
     });
-    const closingLabel = isLecture
-      ? (isVietnamese ? 'KẾT THÚC BÀI GIẢNG' : 'END OF LECTURE')
-      : (isVietnamese ? 'KẾT LUẬN' : 'CLOSING');
-    elements.push(textElement('custom', closingLabel, 130, 112, 700, 34, {
-      fontFamily: colors.body,
-      fontSize: 14,
-      color: colors.sub,
-      fontWeight: 700,
-      textAlign: 'center',
-      letterSpacing: 2,
-    }));
     elements.push(textElement('title', closingTitle, 120, 164, 720, 112, {
       fontFamily: colors.title,
       fontSize: closingTitleSize,
@@ -198,6 +163,44 @@ function createBaseElements(slide, theme = 'clean-white') {
           color: colors.sub,
           lineHeight: 1.45,
           textAlign: 'left',
+        },
+      ));
+    }
+    return elements;
+  }
+
+  if (slide?.type === 'quote') {
+    const quoteBullets = Array.isArray(slide?.bullets) ? slide.bullets.filter(Boolean) : [];
+    const quoteText = quoteBullets[0] || slide?.subtitle || slide?.title || '';
+    const attribution = quoteBullets[1] || slide?.attribution || slide?.author || '';
+    const quoteFontSize = fitTextToBox(quoteText, {
+      width: 680, height: 220, min: 22, max: 38, lineHeight: 1.4,
+    });
+    elements.push(textElement(
+      'quote',
+      `<p class="slide-quote-text">${escapeHtml(quoteText)}</p>`,
+      140, 158, 680, 220,
+      {
+        fontFamily: colors.title,
+        fontSize: quoteFontSize,
+        color: colors.text,
+        fontWeight: 600,
+        lineHeight: 1.4,
+        textAlign: 'center',
+      },
+    ));
+    if (attribution) {
+      elements.push(textElement(
+        'custom',
+        `— ${escapeHtml(attribution)}`,
+        180, 398, 600, 40,
+        {
+          fontFamily: colors.body,
+          fontSize: 17,
+          color: colors.sub,
+          fontWeight: 600,
+          letterSpacing: 0.5,
+          textAlign: 'center',
         },
       ));
     }
@@ -227,7 +230,7 @@ function createBaseElements(slide, theme = 'clean-white') {
     lineHeight: 1.2,
     padding: 0,
   });
-  elements.push(textElement('title', slide?.title || slide?.richText?.title, 64, 44, 832, 66, {
+  elements.push(textElement('title', slide?.title || slide?.richText?.title || slide?.table?.title, 64, 40, 832, 66, {
     fontFamily: colors.title, fontSize: titleFontSize, color: colors.text, fontWeight: 700, lineHeight: 1.2,
   }));
 
@@ -243,34 +246,7 @@ function createBaseElements(slide, theme = 'clean-white') {
     { ...slide, imageUrl: showImage ? slide?.imageUrl : '', bullets: contentParts.normal },
     { height: bodyHeight },
   );
-  const useTextColumns = !hasCode
-    && !hasVisual
-    && contentParts.normal.length >= 6
-    && contentParts.normal.length <= 10;
-  if (useTextColumns) {
-    const [leftItems, rightItems] = splitBalancedBullets(contentParts.normal);
-    const columnStyle = (items) => ({
-      fontFamily: colors.body,
-      fontSize: fitTextToBox(items.join('\n'), {
-        width: 380,
-        height: 332,
-        min: 16,
-        max: 22,
-        lineHeight: 1.5,
-        itemCount: items.length,
-      }),
-      color: colors.sub,
-      lineHeight: 1.5,
-    });
-    elements.push(textElement(
-      'body-left', bulletListHtml(leftItems, 'slide-content-flow slide-content-column'),
-      64, 126, 388, 344, columnStyle(leftItems),
-    ));
-    elements.push(textElement(
-      'body-right', bulletListHtml(rightItems, 'slide-content-flow slide-content-column'),
-      508, 126, 388, 344, columnStyle(rightItems),
-    ));
-  } else if (body && !slide?.table && !slide?.chart) {
+  if (body && !slide?.table) {
     elements.push(textElement(
       'body',
       body,
@@ -286,7 +262,7 @@ function createBaseElements(slide, theme = 'clean-white') {
       },
     ));
   }
-  if (hasCode && !slide?.table && !slide?.chart) {
+  if (hasCode && !slide?.table) {
     const codeY = body ? 126 + bodyHeight + 12 : 126;
     const codeHeight = 470 - codeY;
     const codeWidth = 832;

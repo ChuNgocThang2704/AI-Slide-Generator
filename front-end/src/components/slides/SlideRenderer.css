@@ -79,7 +79,7 @@
   font-weight: 700;
   letter-spacing: 2px;
   opacity: 0.5;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   z-index: 2;
 }
 
@@ -112,11 +112,11 @@
   letter-spacing: 2px;
   border: 1px solid;
   text-transform: uppercase;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
 }
 
 .slide-main-title {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 54px;
   font-weight: 800;
   line-height: 1.1;
@@ -158,7 +158,7 @@
 }
 
 .slide-section-title {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 36px;
   font-weight: 700;
   line-height: 1.2;
@@ -215,7 +215,7 @@
 }
 
 .slide-col-heading {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 16px;
   font-weight: 700;
 }
@@ -260,7 +260,7 @@
 }
 
 .slide-image-caption {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 1px;
@@ -289,7 +289,7 @@
 }
 
 .slide-quote-mark {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 120px;
   line-height: 0.8;
   font-weight: 900;
@@ -298,7 +298,7 @@
 }
 
 .slide-quote-text {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 22px;
   font-weight: 500;
   line-height: 1.55;
@@ -319,7 +319,7 @@
 }
 
 .slide-quote-name {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 16px;
   font-weight: 700;
 }
@@ -539,7 +539,7 @@
   font-weight: 800 !important;
   color: #0f4c81 !important;
   box-shadow: 0 4px 10px rgba(15, 76, 129, 0.06) !important;
-  font-family: 'Outfit', sans-serif !important;
+  font-family: 'Be Vietnam Pro', sans-serif !important;
   opacity: 1 !important;
   letter-spacing: 0 !important;
 }
@@ -682,7 +682,7 @@
   color: #1c3d5a !important;
   text-align: center !important;
   line-height: 1.65 !important;
-  font-family: 'Outfit', sans-serif !important;
+  font-family: 'Be Vietnam Pro', sans-serif !important;
   padding: 0 !important;
 }
 
@@ -691,7 +691,7 @@
   color: #0f4c81 !important;
   font-size: 15px !important;
   font-weight: 700 !important;
-  font-family: 'Outfit', sans-serif !important;
+  font-family: 'Be Vietnam Pro', sans-serif !important;
 }
 
 .slide-renderer-root[data-theme="royal-purple"] .slide-quote-inner {

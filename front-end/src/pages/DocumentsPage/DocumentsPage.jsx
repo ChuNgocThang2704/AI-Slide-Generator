@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { confirmDialog } from '../../services/dialogService';
 import { useDocumentStore, useUIStore } from '../../store';
 import { documentService } from '../../services/documentService';
 import { 
   FileText, Trash2, Eye, Plus, Sparkles, 
-  Search, Clock, HardDrive, Loader2, ArrowRight
+  Search, Clock, HardDrive, Loader2
 } from 'lucide-react';
 import './DocumentsPage.css';
 
@@ -77,7 +78,7 @@ export default function DocumentsPage() {
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    if (!window.confirm('Bạn có chắc chắn muốn xóa tài liệu này? Điều này có thể ảnh hưởng đến slide được tạo từ nó.')) return;
+    if (!(await confirmDialog({ title: 'Xóa tài liệu', message: 'Bạn có chắc chắn muốn xóa tài liệu này? Điều này có thể ảnh hưởng đến slide được tạo từ nó.', confirmLabel: 'Xóa', danger: true }))) return;
 
     setDeletingId(id);
     try {

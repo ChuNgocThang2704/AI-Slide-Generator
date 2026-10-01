@@ -19,3 +19,6 @@
 .settings-field input:disabled { color:rgba(255,255,255,.4); cursor:not-allowed; }
 .settings-actions { display:flex; justify-content:flex-end; padding:18px 24px; }
 @media (max-width:680px) { .settings-grid { grid-template-columns:1fr; } .settings-heading { align-items:center; } .settings-profile-row { align-items:flex-start; flex-direction:column; } }
+
+.settings-field input[type="date"] { color-scheme: dark; min-height: 42px; }
+.settings-field input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .7; }

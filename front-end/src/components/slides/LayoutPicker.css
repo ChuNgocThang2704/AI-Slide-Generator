@@ -1,0 +1,32 @@
+.lp-root {
+  --lp-title: rgba(167, 160, 255, 0.95);
+  --lp-body: rgba(255, 255, 255, 0.28);
+  --lp-image: rgba(94, 200, 255, 0.55);
+  --lp-visual: rgba(255, 178, 102, 0.6);
+  padding: 12px 0 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.lp-head { display: flex; align-items: center; margin-bottom: 9px; font-size: 0.78rem; color: rgba(255, 255, 255, 0.72); }
+.lp-head span { display: inline-flex; align-items: center; gap: 6px; }
+.lp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.lp-item {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 6px 4px 7px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035); color: rgba(255, 255, 255, 0.7);
+  font-size: 0.68rem; line-height: 1.2; text-align: center; cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.lp-item:hover:not(:disabled) { border-color: rgba(108, 99, 255, 0.6); background: rgba(108, 99, 255, 0.1); color: #fff; }
+.lp-item.active { border-color: #6c63ff; background: rgba(108, 99, 255, 0.2); color: #fff; }
+.lp-item:disabled { opacity: 0.5; cursor: default; }
+.lp-thumb { width: 100%; height: auto; display: block; }
+.lp-thumb-bg { fill: rgba(8, 8, 20, 0.85); stroke: rgba(255, 255, 255, 0.08); stroke-width: 3; }
+.lp-note { margin: 9px 0 8px; font-size: 0.7rem; line-height: 1.5; color: rgba(255, 255, 255, 0.4); }
+.lp-actions { display: flex; gap: 6px; margin-bottom: 10px; }
+.lp-actions button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 30px; padding: 0 6px; border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045); color: rgba(255, 255, 255, 0.78); font-size: 0.7rem; cursor: pointer;
+}
+.lp-actions button:hover:not(:disabled) { border-color: rgba(108, 99, 255, 0.55); background: rgba(108, 99, 255, 0.1); color: #fff; }
+.lp-actions button:disabled { opacity: 0.5; cursor: default; }

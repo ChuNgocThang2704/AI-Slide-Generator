@@ -5,11 +5,12 @@ import './StructuredVisual.css';
 import { resolveAssetUrl } from '../../utils/assetUrl';
 import AssetImage from './AssetImage';
 import { inferImageFit } from '../../utils/imageFit';
+import { withGeneratedThemes, isGeneratedTheme, buildGeneratedTheme } from '../../utils/generatedTheme';
 
 // ─────────────────────────────────────────────
 // Template Themes (colors, fonts, accent styles)
 // ─────────────────────────────────────────────
-const THEMES = {
+const BASE_THEMES = {
   'soft-blue': {
     id: 'soft-blue',
     bg: '#f8fbff', bgGrad: 'linear-gradient(160deg, #f0f7ff 0%, #ffffff 55%, #e8f4fd 100%)',
@@ -60,7 +61,7 @@ const THEMES = {
     text: '#2e1e0a', textSub: 'rgba(46,30,10,0.72)',
     surface: 'rgba(245,158,11,0.08)', surfaceBorder: 'rgba(245,158,11,0.25)',
     accentGrad: 'linear-gradient(135deg,#f59e0b,#8b5cf6)',
-    fontTitle: "'Fredoka One', cursive", fontBody: "'Inter', sans-serif",
+    fontTitle: "'Baloo 2', cursive", fontBody: "'Inter', sans-serif",
     isLight: true,
   },
   'gradient-border': {
@@ -100,15 +101,113 @@ const THEMES = {
     text: '#ffffff', textSub: 'rgba(255,255,255,0.65)',
     surface: 'rgba(255,255,255,0.06)', surfaceBorder: 'rgba(224,86,253,0.35)',
     accentGrad: 'linear-gradient(135deg,#9b59b6,#e056fd)',
-    fontTitle: "'Rajdhani', sans-serif", fontBody: "'Inter', sans-serif",
+    fontTitle: "'Saira', sans-serif", fontBody: "'Inter', sans-serif",
+    isLight: false,
+  },
+  'ocean-teal': {
+    id: 'ocean-teal',
+    bg: '#f0fdfa', bgGrad: 'linear-gradient(160deg, #ecfeff 0%, #ffffff 55%, #d9f6f3 100%)',
+    primary: '#0f766e', accent: '#14b8a6', accentAlt: '#5eead4',
+    text: '#083344', textSub: '#3f6b73',
+    surface: '#e6f7f5', surfaceAlt: '#ffffff', surfaceBorder: 'rgba(20, 184, 166, 0.28)',
+    accentGrad: 'linear-gradient(135deg, #0f766e 0%, #14b8a6 60%, #5eead4 100%)',
+    panelBg: 'linear-gradient(160deg, #0f766e 0%, #14b8a6 100%)',
+    fontTitle: "'Nunito', sans-serif", fontBody: "'Inter', sans-serif",
+    isLight: true,
+  },
+  'editorial-paper': {
+    id: 'editorial-paper',
+    bg: '#f6efe3', bgGrad: 'linear-gradient(160deg, #f9f2e6 0%, #f3e9d8 100%)',
+    primary: '#7c2d12', accent: '#c2410c',
+    text: '#2b1d12', textSub: '#6b5646',
+    surface: '#efe4d0', surfaceAlt: '#fbf6ec', surfaceBorder: 'rgba(124, 45, 18, 0.22)',
+    accentGrad: 'linear-gradient(135deg, #7c2d12, #c2410c)',
+    fontTitle: "'Merriweather', serif", fontBody: "'Inter', sans-serif",
+    isLight: true,
+  },
+  'midnight-gold': {
+    id: 'midnight-gold',
+    bg: '#0b0f1a', bgGrad: 'linear-gradient(145deg, #0a0e19 0%, #121a2f 100%)',
+    primary: '#d4a72c', accent: '#f5c542',
+    text: '#f8f5e6', textSub: 'rgba(248,245,230,0.72)',
+    surface: 'rgba(245,197,66,0.07)', surfaceBorder: 'rgba(245,197,66,0.3)',
+    accentGrad: 'linear-gradient(135deg, #d4a72c, #f5c542)',
+    fontTitle: "'Playfair Display', serif", fontBody: "'Inter', sans-serif",
     isLight: false,
   },
 };
 
+const THEMES = withGeneratedThemes(BASE_THEMES, (built) => built.theme);
+
 // ─────────────────────────────────────────────
 // Decorative background shapes per template
 // ─────────────────────────────────────────────
+function GeneratedDecorations({ code }) {
+  const built = buildGeneratedTheme(code);
+  if (built.theme.decorKind === 'none') return null;
+  const [ar, ag, ab] = built.accentRgb;
+  const [pr, pg, pb] = built.primaryRgb;
+  const accent = (alpha) => `rgba(${ar}, ${ag}, ${ab}, ${alpha})`;
+  const primary = (alpha) => `rgba(${pr}, ${pg}, ${pb}, ${alpha})`;
+  const dark = !built.theme.isLight;
+  const abs = { position: 'absolute' };
+  let shapes;
+  switch (built.theme.decorKind) {
+    case 'frame':
+      shapes = (
+        <>
+          <div style={{ ...abs, inset: 20, border: `1px solid ${accent(dark ? 0.32 : 0.28)}` }} />
+          <div style={{ ...abs, top: 14, left: 14, width: 34, height: 34, borderTop: `3px solid ${accent(0.9)}`, borderLeft: `3px solid ${accent(0.9)}` }} />
+          <div style={{ ...abs, bottom: 14, right: 14, width: 34, height: 34, borderBottom: `3px solid ${accent(0.9)}`, borderRight: `3px solid ${accent(0.9)}` }} />
+        </>
+      );
+      break;
+    case 'waves':
+      shapes = (
+        <svg style={{ ...abs, left: 0, bottom: 0, width: '100%', height: 150 }} viewBox="0 0 960 150" preserveAspectRatio="none">
+          <path d="M0 70 C 160 20, 300 130, 480 80 S 800 20, 960 70 L960 150 L0 150 Z" fill={primary(dark ? 0.16 : 0.1)} />
+          <path d="M0 105 C 200 60, 340 140, 520 105 S 820 70, 960 110 L960 150 L0 150 Z" fill={accent(dark ? 0.14 : 0.09)} />
+        </svg>
+      );
+      break;
+    case 'dots':
+      shapes = (
+        <>
+          <div style={{ ...abs, top: 26, right: 30, width: 230, height: 130, backgroundImage: `radial-gradient(${accent(0.5)} 1.6px, transparent 1.7px)`, backgroundSize: '18px 18px' }} />
+          <div style={{ ...abs, bottom: 26, left: 30, width: 150, height: 90, backgroundImage: `radial-gradient(${primary(0.4)} 1.6px, transparent 1.7px)`, backgroundSize: '18px 18px' }} />
+        </>
+      );
+      break;
+    case 'rings':
+      shapes = (
+        <>
+          {[300, 210, 120].map((size, index) => (
+            <div key={size} style={{ ...abs, right: -size / 3, bottom: -size / 3, width: size, height: size, borderRadius: '50%', border: `1.5px solid ${accent(0.34 - index * 0.06)}` }} />
+          ))}
+        </>
+      );
+      break;
+    case 'stripe':
+      shapes = (
+        <>
+          <div style={{ ...abs, top: -40, right: 70, width: 90, height: 640, transform: 'rotate(18deg)', background: accent(dark ? 0.1 : 0.08) }} />
+          <div style={{ ...abs, top: -40, right: 40, width: 4, height: 640, transform: 'rotate(18deg)', background: accent(0.5) }} />
+        </>
+      );
+      break;
+    default:
+      shapes = (
+        <>
+          <div style={{ ...abs, bottom: -170, left: -130, width: 420, height: 420, borderRadius: '50%', background: `radial-gradient(circle, ${accent(dark ? 0.22 : 0.16)} 0%, transparent 70%)` }} />
+          <div style={{ ...abs, top: -140, right: -100, width: 340, height: 340, borderRadius: '50%', background: `radial-gradient(circle, ${primary(dark ? 0.24 : 0.14)} 0%, transparent 70%)` }} />
+        </>
+      );
+  }
+  return <div className="slide-bg-deco" aria-hidden="true">{shapes}</div>;
+}
+
 export function BgDecorations({ theme }) {
+  if (isGeneratedTheme(theme)) return <GeneratedDecorations code={theme} />;
   const t = THEMES[theme] || THEMES['clean-white'];
 
   if (t.id === 'royal-purple') {
@@ -314,6 +413,42 @@ export function BgDecorations({ theme }) {
           transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
           style={{ position: 'absolute', width: 160, height: 160, borderRadius: '40% 60% 40% 60% / 50% 40% 60% 50%', background: '#2ecc71', bottom: -50, left: -50, filter: 'blur(40px)', opacity: 0.22 }}
         />
+      </div>
+    );
+  }
+
+  if (t.id === 'ocean-teal') {
+    return (
+      <div className="slide-bg-deco" aria-hidden="true">
+        <div style={{ position: 'absolute', top: -110, right: -70, width: 320, height: 320, borderRadius: '50%', background: 'radial-gradient(circle, #99f6e4 0%, #ccfbf1 55%, transparent 100%)', filter: 'blur(22px)', opacity: 0.65 }} />
+        <div style={{ position: 'absolute', top: 26, right: 96, width: 120, height: 120, borderRadius: '50%', border: '1.5px dashed rgba(15,118,110,0.28)' }} />
+        <svg style={{ position: 'absolute', bottom: -6, left: 0, width: '100%', height: 120 }} viewBox="0 0 960 120" preserveAspectRatio="none">
+          <path d="M0,70 C160,120 360,30 580,76 C760,112 880,54 960,72 L960,120 L0,120 Z" fill="#0f766e" opacity="0.07" />
+          <path d="M0,92 C220,50 470,112 720,70 C850,48 920,86 960,92 L960,120 L0,120 Z" fill="#14b8a6" opacity="0.1" />
+        </svg>
+        <div style={{ position: 'absolute', bottom: 64, left: '42%', width: 7, height: 7, borderRadius: '50%', background: '#14b8a6', opacity: 0.7 }} />
+      </div>
+    );
+  }
+
+  if (t.id === 'editorial-paper') {
+    return (
+      <div className="slide-bg-deco" aria-hidden="true">
+        <div style={{ position: 'absolute', inset: 16, border: '1px solid rgba(124,45,18,0.3)' }} />
+        <div style={{ position: 'absolute', inset: 23, border: '1px solid rgba(124,45,18,0.13)' }} />
+        <div style={{ position: 'absolute', top: 16, left: 16, width: 34, height: 34, borderTop: '3px solid #c2410c', borderLeft: '3px solid #c2410c' }} />
+        <div style={{ position: 'absolute', bottom: 16, right: 16, width: 34, height: 34, borderBottom: '3px solid #c2410c', borderRight: '3px solid #c2410c' }} />
+      </div>
+    );
+  }
+
+  if (t.id === 'midnight-gold') {
+    return (
+      <div className="slide-bg-deco" aria-hidden="true">
+        <div style={{ position: 'absolute', bottom: -170, left: -130, width: 420, height: 420, borderRadius: '50%', background: 'radial-gradient(circle, rgba(245,197,66,0.2) 0%, transparent 70%)', filter: 'blur(26px)' }} />
+        <div style={{ position: 'absolute', top: -140, right: -100, width: 340, height: 340, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.18) 0%, transparent 70%)', filter: 'blur(26px)' }} />
+        <div style={{ position: 'absolute', inset: 18, border: '1px solid rgba(245,197,66,0.3)' }} />
+        <div style={{ position: 'absolute', top: 18, left: '50%', width: 90, height: 3, background: 'linear-gradient(90deg, transparent, #f5c542, transparent)', transform: 'translateX(-50%)' }} />
       </div>
     );
   }

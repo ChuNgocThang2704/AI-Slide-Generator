@@ -1,0 +1,49 @@
+.theme-tuner {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tt-head { display: flex; align-items: center; justify-content: space-between; color: #fff; font-size: .82rem; }
+.tt-reset {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14); background: transparent; color: rgba(255, 255, 255, 0.7);
+  font: 600 .7rem/1 Inter, sans-serif; cursor: pointer;
+}
+.tt-reset:hover:not(:disabled) { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+.tt-field { display: flex; flex-direction: column; gap: 6px; }
+.tt-label { color: rgba(255, 255, 255, 0.5); font-size: .72rem; font-weight: 600; }
+
+.tt-seg { display: flex; padding: 3px; gap: 3px; border-radius: 9px; background: rgba(0, 0, 0, 0.28); }
+.tt-seg button {
+  flex: 1; min-width: 0; padding: 6px 4px; border: 0; border-radius: 7px; background: transparent;
+  color: rgba(255, 255, 255, 0.6); font: 600 .7rem/1.1 Inter, sans-serif; cursor: pointer; transition: background .15s, color .15s;
+}
+.tt-seg button:hover:not(:disabled) { color: #fff; }
+.tt-seg button.active { background: rgba(108, 99, 255, 0.85); color: #fff; }
+.tt-seg button:disabled, .tt-fonts button:disabled, .tt-dot:disabled { opacity: .5; cursor: not-allowed; }
+
+.tt-hue-row { display: flex; align-items: center; gap: 10px; }
+.tt-swatch { width: 26px; height: 26px; flex-shrink: 0; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.25); }
+.tt-hue { flex: 1; height: 10px; border-radius: 999px; appearance: none; -webkit-appearance: none; outline: none; cursor: pointer; }
+.tt-hue::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; border: 2px solid #6c63ff; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+.tt-hue::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #6c63ff; }
+.tt-quick { display: flex; gap: 7px; flex-wrap: wrap; }
+.tt-dot { width: 20px; height: 20px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.2); cursor: pointer; padding: 0; }
+.tt-dot:hover:not(:disabled) { border-color: #fff; }
+
+.tt-fonts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.tt-fonts button {
+  display: flex; align-items: baseline; gap: 7px; padding: 7px 9px; border-radius: 9px; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(0, 0, 0, 0.2); color: #fff; font-size: 1rem; text-align: left;
+}
+.tt-fonts button small { font: 500 .62rem/1.1 Inter, sans-serif; color: rgba(255, 255, 255, 0.5); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-fonts button:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.28); }
+.tt-fonts button.active { border-color: #a89fff; background: rgba(108, 99, 255, 0.22); }

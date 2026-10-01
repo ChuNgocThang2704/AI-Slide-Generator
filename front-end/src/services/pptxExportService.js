@@ -1,11 +1,12 @@
 import { resolveAssetUrl } from '../utils/assetUrl.js';
 import { documentService } from './documentService.js';
+import { withGeneratedThemes } from '../utils/generatedTheme.js';
 
 const SLIDE_W = 13.333333;
 const SLIDE_H = 7.5;
 const EMU_PER_IN = 914400;
 
-const THEMES = {
+const BASE_THEMES = {
   'soft-blue': { bg: 'F8FBFF', primary: '0D5099', accent: '3B96D2', text: '0B2E4A', textSub: '4A6A85', surface: 'EAF4FC' },
   'royal-purple': { bg: '0B0518', primary: '9948FF', accent: 'ED7D31', text: 'FFFFFF', textSub: 'C0A8E0', surface: '241336' },
   'clean-white': { bg: 'FFFFFF', primary: '2D2D2D', accent: '4F46E5', text: '1A1A1A', textSub: '555555', surface: 'F5F5F5' },
@@ -15,7 +16,12 @@ const THEMES = {
   'blue-planet': { bg: '02001A', primary: '00F2FE', accent: '4FACFE', text: 'FFFFFF', textSub: 'C8D3FF', surface: '11164A' },
   'nature-green': { bg: '0A2318', primary: '27AE60', accent: '2ECC71', text: 'E8F5E2', textSub: 'BFD9B8', surface: '173B2A' },
   'tech-purple': { bg: '0A0015', primary: '9B59B6', accent: 'E056FD', text: 'FFFFFF', textSub: 'D9B8E8', surface: '1E0A2E' },
+  'ocean-teal': { bg: 'F0FDFA', primary: '0F766E', accent: '14B8A6', text: '083344', textSub: '3F6B73', surface: 'E6F7F5' },
+  'editorial-paper': { bg: 'F6EFE3', primary: '7C2D12', accent: 'C2410C', text: '2B1D12', textSub: '6B5646', surface: 'EFE4D0' },
+  'midnight-gold': { bg: '0B0F1A', primary: 'D4A72C', accent: 'F5C542', text: 'F8F5E6', textSub: 'C9C6B6', surface: '1A2138' },
 };
+
+const THEMES = withGeneratedThemes(BASE_THEMES, (built) => built.exportPalette);
 
 const relTypes = {
   officeDocument: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
@@ -170,7 +176,12 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
     };
   };
 
-  shapes.push(shape(nextId++, 'Accent', 0.65, 0.55, 0.08, 0.55, t.accent, t.accent));
+  // The fixed accent bar belongs beside a top-left title; freely laid-out slides skip it.
+  const canvasTitle = Array.isArray(slide.elements)
+    ? slide.elements.find((item) => item.type === 'text' && item.role === 'title') : null;
+  if (!canvasTitle || (Number(canvasTitle.x) <= 96 && Number(canvasTitle.y) <= 70)) {
+    shapes.push(shape(nextId++, 'Accent', 0.65, 0.55, 0.08, 0.55, t.accent, t.accent));
+  }
 
   if (Array.isArray(slide.elements) && slide.elements.length) {
     slide.elements.forEach((element) => {
@@ -232,6 +243,13 @@ function buildSlideShapes(slide, index, theme, imageRefs = []) {
       holder.innerHTML = element.content || '';
       const lines = holder.innerText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       const style = element.style || {};
+      const decorHex = String(style['--decor-accent'] || '').replace('#', '').toUpperCase();
+      if (element.decor && /^[0-9A-F]{6}$/.test(decorHex)) {
+        if (element.decor === 'band') shapes.push(shape(nextId++, 'Title band', x, y, w, h, decorHex, decorHex, 'roundRect'));
+        else if (element.decor === 'underline') shapes.push(shape(nextId++, 'Title rule', x + 0.05, y + h - 0.07, 0.9, 0.055, decorHex, decorHex));
+        else if (element.decor === 'underline-center') shapes.push(shape(nextId++, 'Title rule', x + (w - 0.9) / 2, y + h - 0.07, 0.9, 0.055, decorHex, decorHex));
+        else if (element.decor === 'rule-left') shapes.push(shape(nextId++, 'Text rule', x + 0.05, y + 0.08, 0.045, Math.max(0.1, h - 0.16), decorHex, decorHex));
+      }
       shapes.push(textBox(nextId++, `Canvas text ${nextId}`, x, y, w, h,
         (lines.length ? lines : ['']).map((line) => paragraph(line, {
           size: Number(style.fontSize) || 20,

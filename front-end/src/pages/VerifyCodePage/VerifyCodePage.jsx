@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore, useUIStore } from '../../store';
 import { authService } from '../../services/authService';
@@ -54,7 +54,7 @@ export default function VerifyCodePage() {
       await authService.resendVerification(pendingEmail);
       addToast('Mã xác thực đã được gửi lại. Kiểm tra email của bạn.', 'success');
       setResendCountdown(60);
-    } catch (err) {
+    } catch {
       addToast('Không thể gửi lại mã. Vui lòng thử lại sau.', 'error');
     } finally {
       setLoading(false);
@@ -71,7 +71,7 @@ export default function VerifyCodePage() {
         <div className="verify-left">
           <Link to="/" className="verify-logo">
             <div className="logo-icon"><Sparkles size={20} /></div>
-            <span style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.3rem' }}>
+            <span style={{ fontFamily: 'Be Vietnam Pro', fontWeight: 800, fontSize: '1.3rem' }}>
               Lec<span className="gradient-text">Gen</span>
             </span>
           </Link>

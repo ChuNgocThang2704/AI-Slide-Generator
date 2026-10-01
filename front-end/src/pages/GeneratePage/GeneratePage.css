@@ -12,7 +12,7 @@
 .gen2-container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
 
 .gen2-header { text-align: center; margin-bottom: 36px; }
-.gen2-title { font-family:'Outfit',sans-serif; font-size:2rem; font-weight:800; display:flex; align-items:center; justify-content:center; gap:12px; }
+.gen2-title { font-family:'Be Vietnam Pro',sans-serif; font-size:2rem; font-weight:800; display:flex; align-items:center; justify-content:center; gap:12px; }
 .gen2-desc  { color:rgba(255,255,255,0.5); margin-top:10px; font-size:0.95rem; }
 
 .gen2-form-card {
@@ -23,7 +23,8 @@
 }
 
 .gen2-field { display:flex; flex-direction:column; gap:10px; }
-.gen2-label { font-size:0.875rem; font-weight:600; color:rgba(255,255,255,0.75); }
+.gen2-label { display:inline-flex; align-items:center; gap:7px; font-size:0.875rem; font-weight:600; color:rgba(255,255,255,0.75); }
+.gen2-label svg { color:#a89fff; flex-shrink:0; }
 .gen2-textarea { resize:vertical; min-height:110px; }
 
 .gen2-prompt-quality {
@@ -40,10 +41,23 @@
 .gen2-prompt-quality > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .gen2-prompt-quality strong { font-size: 0.78rem; color: rgba(255,255,255,0.78); }
 .gen2-prompt-quality span { font-size: 0.74rem; line-height: 1.45; }
-.gen2-prompt-quality.unclear,
-.gen2-prompt-quality.empty { border-color: rgba(251,191,36,0.25); color: #fbbf24; }
+.gen2-prompt-quality.unclear {
+  border-color: rgba(251,191,36,0.25); color: #fbbf24; }
+.gen2-prompt-quality.empty { border-color: rgba(255,255,255,0.08); color: rgba(255,255,255,0.5); }
 .gen2-prompt-quality.sufficient { border-color: rgba(56,189,248,0.25); color: #7dd3fc; }
 .gen2-prompt-quality.detailed { border-color: rgba(52,211,153,0.28); color: #6ee7b7; }
+.gen2-prompt-quality.error { border-color: rgba(255,107,107,0.38); background: rgba(255,91,91,0.07); color: #ff9a9a; }
+.gen2-prompt-quality.error strong { color: #ffd0d0; font-size: 0.82rem; }
+.gen2-prompt-quality.error span { color: rgba(255,255,255,0.72); font-size: 0.78rem; }
+.gen2-error-actions { display: flex; gap: 8px; margin-top: 8px; }
+.gen2-error-btn {
+  padding: 6px 12px; border-radius: 8px; cursor: pointer; font: 650 0.74rem Inter, sans-serif;
+  border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.06); color: #fff;
+}
+.gen2-error-btn:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
+.gen2-error-btn.primary { background: #6c63ff; border-color: #7b73ff; }
+.gen2-error-btn.primary:hover:not(:disabled) { background: #7b73ff; }
+.gen2-error-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 .gen2-suggestions { display:flex; flex-wrap:wrap; gap:8px; }
 
@@ -59,7 +73,7 @@
   color:rgba(255,255,255,0.6);
   font-family:'Inter',sans-serif;
 }
-.gen2-count-btn b { font-size:1.2rem; font-weight:800; font-family:'Outfit',sans-serif; }
+.gen2-count-btn b { font-size:1.2rem; font-weight:800; font-family:'Be Vietnam Pro',sans-serif; }
 .gen2-count-btn span { font-size:0.65rem; opacity:.6; }
 .gen2-count-btn:hover { border-color:rgba(108,99,255,0.35); }
 .gen2-count-btn.active { border-color:#6c63ff; background:rgba(108,99,255,0.15); color:white; }
@@ -79,6 +93,7 @@
 .gen2-lang-btn:disabled { opacity:.4; cursor:not-allowed; }
 
 .gen2-submit { width:100%; justify-content:center; }
+.gen2-submit:disabled { opacity:1; cursor:not-allowed; background:rgba(255,255,255,0.06); color:rgba(255,255,255,0.35); box-shadow:none; border:1px dashed rgba(255,255,255,0.14); }
 
 /* Analyzing */
 .gen2-analyzing { display:flex; flex-direction:column; gap:14px; }
@@ -131,7 +146,7 @@
 
 .gen2-outline-main { display:flex; flex-direction:column; gap:16px; }
 .gen2-outline-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
-.gen2-outline-title { font-family:'Outfit',sans-serif; font-size:1.35rem; font-weight:700; }
+.gen2-outline-title { font-family:'Be Vietnam Pro',sans-serif; font-size:1.35rem; font-weight:700; }
 
 .gen2-outline-list { display:flex; flex-direction:column; gap:10px; }
 
@@ -151,7 +166,7 @@
 
 .outline-idx { display:flex; flex-direction:column; align-items:center; gap:3px; flex-shrink:0; }
 .outline-type-icon { font-size:1.2rem; line-height:1; }
-.outline-num { font-size:0.7rem; font-weight:700; color:rgba(255,255,255,0.3); font-family:'Outfit',sans-serif; }
+.outline-num { font-size:0.7rem; font-weight:700; color:rgba(255,255,255,0.3); font-family:'Be Vietnam Pro',sans-serif; }
 
 .outline-item-content { flex:1; min-width:0; }
 .outline-item-title { font-size:0.9rem; font-weight:700; color:white; margin-bottom:4px; }
@@ -388,7 +403,7 @@
 
 .gen2-library-header h2 {
   margin: 0;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 1.15rem;
 }
 
@@ -563,7 +578,7 @@
 }
 
 .gen2-progress-modal h3 {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 1.5rem;
   font-weight: 800;
   color: white;
@@ -597,7 +612,7 @@
 }
 
 .gen2-progress-percent {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Be Vietnam Pro', sans-serif;
   font-size: 2.2rem;
   font-weight: 800;
   color: white;

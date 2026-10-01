@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { confirmDialog } from '../../services/dialogService';
 import { useAuthStore, useUIStore } from '../../store';
 import { adminService } from '../../services/adminService';
 import { 
-  Users, Settings, ShieldAlert, Trash2, Plus, 
-  Check, AlertTriangle, ShieldCheck, Loader2,
+  Users, ShieldAlert, Trash2,
+  AlertTriangle, ShieldCheck, Loader2,
   TrendingUp, DollarSign, BarChart3, Activity,
-  Calendar, RefreshCw, Zap, AlertCircle,
+  RefreshCw, Zap, AlertCircle,
   ArrowUpRight, ArrowDownRight, Sparkles, Clock, CreditCard
 } from 'lucide-react';
 import './AdminPage.css';
@@ -35,7 +36,7 @@ export default function AdminPage() {
   const [usersList, setUsersList] = useState([]);
   const [rolesList, setRolesList] = useState([]);
   const [permsList, setPermsList] = useState([]);
-  const [aiConfigs, setAiConfigs] = useState([
+  const [, setAiConfigs] = useState([
     {
       roleCode: 'USER_FREE',
       configName: 'Gói Miễn Phí',
@@ -112,7 +113,7 @@ export default function AdminPage() {
           if (configs && configs.length > 0) {
             setAiConfigs(configs);
           }
-        } catch (e) {
+        } catch {
           console.log('Sử dụng cấu hình mặc định cho gói AI');
         }
       }
@@ -144,28 +145,8 @@ export default function AdminPage() {
     loadTabData(start, end);
   };
 
-  const handleSyncConfigs = async () => {
-    setLoading(true);
-    try {
-      await adminService.syncAIConfigs(aiConfigs);
-      addToast('🎉 Đồng bộ cấu hình AI thành công!', 'success');
-    } catch (err) {
-      addToast(err.message || 'Đồng bộ cấu hình thất bại', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleConfigChange = (index, field, value) => {
-    setAiConfigs(prev => {
-      const updated = [...prev];
-      updated[index] = { ...updated[index], [field]: value };
-      return updated;
-    });
-  };
-
   const handleDeleteUser = async (userId) => {
-    if (!window.confirm('Bạn có chắc muốn xóa tài khoản này?')) return;
+    if (!(await confirmDialog({ title: 'Xóa tài khoản', message: 'Bạn có chắc muốn xóa tài khoản này?', confirmLabel: 'Xóa', danger: true }))) return;
     try {
       await adminService.deleteUser(userId);
       setUsersList(prev => prev.filter(u => u.id !== userId));

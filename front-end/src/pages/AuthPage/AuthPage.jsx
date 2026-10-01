@@ -90,7 +90,7 @@ export default function AuthPage({ mode = 'login' }) {
         <div className="auth-left">
           <Link to="/" className="auth-logo">
             <div className="logo-icon"><Sparkles size={20} /></div>
-            <span style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.3rem' }}>
+            <span style={{ fontFamily: 'Be Vietnam Pro', fontWeight: 800, fontSize: '1.3rem' }}>
               Lec<span className="gradient-text">Gen</span>
             </span>
           </Link>
@@ -102,7 +102,7 @@ export default function AuthPage({ mode = 'login' }) {
             </p>
 
             <div className="auth-features">
-              {['Miễn phí 5 slides đầu tiên', '6 template thiết kế đẹp', 'Xuất PDF chất lượng cao', 'Không cần kỹ năng thiết kế'].map((f) => (
+              {['Miễn phí 3 bài mỗi ngày', '12 template thiết kế đẹp', 'Xuất PDF chất lượng cao', 'Không cần kỹ năng thiết kế'].map((f) => (
                 <div key={f} className="auth-feat-item">
                   <div className="auth-feat-dot" />
                   <span>{f}</span>
@@ -250,7 +250,7 @@ export default function AuthPage({ mode = 'login' }) {
               Đăng nhập bằng Google
             </button>
 
-            {/* Quick demo */}
+            {import.meta.env.DEV && (
             <div className="auth-demo" style={{ flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
               <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>Dùng thử nhanh tài khoản:</span>
               <div style={{ display: 'flex', gap: '16px', marginTop: 4 }}>
@@ -277,6 +277,7 @@ export default function AuthPage({ mode = 'login' }) {
                 </button>
               </div>
             </div>
+            )}
 
             <p className="auth-switch">
               {isLogin ? 'Chưa có tài khoản? ' : 'Đã có tài khoản? '}

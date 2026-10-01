@@ -1,6 +1,4 @@
 import apiClient from './apiClient';
-import { useAuthStore } from '../store';
-import { lecgenService } from './lecgenService';
 
 const normalizeApiResponse = (response) => {
   if (!response) {
@@ -51,41 +49,6 @@ const mapUser = (userResponse) => {
   };
 };
 
-/**
- * Hàm tự động đồng bộ Đăng nhập / Đăng ký song song với LecGen Server khi đã Đăng nhập thành công
- * Quy tắc: username = email, password = password
- */
-const syncLecgenSession = async (email, password) => {
-  if (!email || !password) return;
-
-  try {
-    console.log('🔄 [Dual Sync] Đang đồng bộ tài khoản với LecGen Server cho Email:', email);
-    // 1. Thử đăng nhập LecGen trước
-    try {
-      await lecgenService.loginLecgen(email, password);
-      console.log('🎉 [Dual Sync] Đăng nhập LecGen thành công!');
-    } catch (loginErr) {
-      // 2. Nếu chưa có tài khoản bên LecGen (vừa mới xác thực OTP xong), tự động Đăng ký mới song song
-      console.log('⚡ Tài khoản chưa tạo ở LecGen, đang tự động Đăng ký & Đăng nhập mới...');
-      try {
-        await lecgenService.registerLecgen(email, password);
-        await lecgenService.loginLecgen(email, password);
-        console.log('🎉 [Dual Sync] Đăng ký Kép & Đăng nhập LecGen THÀNH CÔNG!');
-      } catch (regErr) {
-        console.warn('⚠️ [Dual Sync] Đăng ký Kép thất bại:', regErr.response?.data || regErr.message);
-      }
-    }
-
-    // 3. Kiểm tra gọi thử API /users/me của LecGen Server
-    if (localStorage.getItem('lecgen_token')) {
-      const lecgenMe = await lecgenService.getUsersMe();
-      console.log('✅ [LecGen Server /users/me]:', lecgenMe);
-    }
-  } catch (err) {
-    console.warn('⚠️ [Dual Sync Error]:', err.message);
-  }
-};
-
 export const authService = {
   async getMe() {
     const response = await apiClient.get('/users/my-info');
@@ -127,7 +90,7 @@ export const authService = {
     try {
       const response = await apiClient.get('/auth/google/login');
       return normalizeApiResponse(response.data);
-    } catch (err) {
+    } catch {
       try {
         const fallback = await apiClient.get('/auth/google/url');
         return normalizeApiResponse(fallback.data);
@@ -142,7 +105,7 @@ export const authService = {
     let response;
     try {
       response = await apiClient.post('/auth/google/redirect', { code });
-    } catch (err) {
+    } catch {
       response = await apiClient.post('/auth/google/callback', { code });
     }
     const authData = normalizeApiResponse(response.data);

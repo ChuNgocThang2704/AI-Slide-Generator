@@ -1,23 +1,23 @@
 import { createElementsFromSlide, reflowSlideTemplate } from './slideElements.js';
 import { toSlidePageUpdate } from './slideMapping.js';
-import { ADAPTIVE_TEMPLATES } from './templateLayouts.js';
+import { ADAPTIVE_TEMPLATES, isBoundaryLabel } from './templateLayouts.js';
+import { mapTemplateFont } from './templateFonts.js';
+import { isUserGraphic } from './shapeLibrary.js';
+import { buildTemplateArt, withoutTemplateArt } from './templateArt.js';
 
 const escapeHtml = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const STYLE_KEYS = ['fontFamily', 'fontSize', 'fontWeight', 'color', 'textAlign', 'verticalAlign', 'lineHeight'];
-
-const clamp = (value, min, max, fallback) => {
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? Math.min(max, Math.max(min, numeric)) : fallback;
-};
+// Alignment and size are deliberately not imported: the layout engine already
+// fits text to its frame and keeps the traditional left-aligned reading order,
+// while a PPTX placeholder's right-aligned or tiny defaults broke both.
+const STYLE_KEYS = ['fontFamily', 'fontWeight', 'color', 'lineHeight'];
 
 function styleForRole(match, role) {
   const explicit = role === 'title' ? match?.titleStyle : match?.bodyStyle;
   const fallback = match?.elements?.find((el) => el.type === 'text' && el.role === role)?.style;
   const source = explicit && Object.keys(explicit).length ? explicit : fallback || {};
   const style = Object.fromEntries(STYLE_KEYS.filter((key) => source[key] !== undefined).map((key) => [key, source[key]]));
-  style.fontSize = role === 'title'
-    ? clamp(style.fontSize, 26, 54, 34)
-    : clamp(style.fontSize, 14, 26, 18);
+  // Only fonts this app has loaded; an unknown template font would fall back to a serif default.
+  style.fontFamily = mapTemplateFont(style.fontFamily || (role === 'title' ? match?.headingFont : match?.bodyFont));
   return style;
 }
 
@@ -32,8 +32,8 @@ function importedTheme(match, titleStyle, bodyStyle) {
     background: '#ffffff',
     text: titleStyle.color || '#1f2937',
     textSub: bodyStyle.color || '#374151',
-    fontTitle: titleStyle.fontFamily || match?.headingFont || 'Arial, sans-serif',
-    fontBody: bodyStyle.fontFamily || match?.bodyFont || 'Arial, sans-serif',
+    fontTitle: titleStyle.fontFamily || mapTemplateFont(match?.headingFont),
+    fontBody: bodyStyle.fontFamily || mapTemplateFont(match?.bodyFont),
   };
 }
 
@@ -42,9 +42,10 @@ function supplements(elements) {
   return elements.filter((el) => {
     if (el.templateSupplement) return true;
     if (String(el.id).startsWith('template-')) return false;
+    if (isUserGraphic(el)) return true;
     if (el.type === 'image' && el.src && el !== primaryImage) return true;
     if (el.type !== 'text' || el.role !== 'custom') return false;
-    return !(el.templateLayout === 'cover' && ['BÀI GIẢNG', 'LECTURE', 'KẾT THÚC BÀI GIẢNG', 'END OF LECTURE'].includes(el.content));
+    return !isBoundaryLabel(el);
   }).map((el) => ({ ...el, templateSupplement: true }));
 }
 
@@ -76,7 +77,16 @@ export function applyCustomTemplateResult(slide, match, preferredBaseTheme) {
   const bodyStyle = styleForRole(match, 'body');
   const theme = importedTheme(match, titleStyle, bodyStyle);
   const extras = supplements(slide.elements || []);
-  const rebuilt = reflowSlideTemplate({ ...slide, elements: [] }, baseTheme);
+  // The sample slide's background and pictures live beside the elements, and tell the
+  // layout where the art sits so the text keeps clear of it.
+  const art = buildTemplateArt(match);
+  const richText = withoutTemplateArt(slide.richText);
+  if (art.decor.length) {
+    richText._decor = art.decor;
+    if (art.pageColor) richText._tplBg = art.pageColor;
+    if (art.safe) richText._safe = art.safe;
+  }
+  const rebuilt = reflowSlideTemplate({ ...slide, richText, elements: [] }, baseTheme);
   const elements = rebuilt.elements.map((element) => {
     const importedStyle = element.type === 'text' && element.role === 'title'
       ? titleStyle
@@ -91,14 +101,24 @@ export function applyCustomTemplateResult(slide, match, preferredBaseTheme) {
   });
   return {
     ...slide,
+    richText,
     templateLayoutId: match.layoutId,
     elements: [...elements, ...extras],
   };
 }
 
+const withoutTemplateFlags = (element) => {
+  const next = { ...element };
+  delete next.templateTheme;
+  delete next.templateStyleOnly;
+  delete next.templateBaseTheme;
+  return next;
+};
+
 export function restoreBuiltInTemplate(slide, theme) {
   const content = prepareTemplateContent(slide, theme);
-  const extras = supplements(content.elements);
+  // Carried-over extras must not keep a custom template's palette or style-only flag.
+  const extras = supplements(content.elements).map(withoutTemplateFlags);
   const images = content.elements.filter((el) => el.type === 'image' && el.src && !el.templateSupplement);
   const uniqueImages = images.filter((el, index) => images.findIndex((item) => item.src === el.src) === index);
   const rebuilt = reflowSlideTemplate({
@@ -106,10 +126,10 @@ export function restoreBuiltInTemplate(slide, theme) {
     elements: [],
     // Remove imported inline styling while keeping literal user text safe as HTML.
     title: escapeHtml(content.title),
-    bullets: content.bullets.map(escapeHtml),
+    bullets: content.bullets, // plain text: the element builder escapes list items itself
     subtitle: content.bullets.map(escapeHtml).join('<br>'),
     text: content.bullets.map(escapeHtml).join('<br>'),
-    richText: { ...content.richText, title: '', bullets: '', subtitle: '', text: '' },
+    richText: { ...withoutTemplateArt(content.richText), title: '', bullets: '', subtitle: '', text: '' },
   }, theme);
   const primary = rebuilt.elements.find((el) => el.type === 'image');
   if (primary && uniqueImages[0]) {
@@ -119,6 +139,7 @@ export function restoreBuiltInTemplate(slide, theme) {
   }
   return {
     ...content, templateLayoutId: undefined,
+    richText: withoutTemplateArt(content.richText),
     elements: [...rebuilt.elements, ...extras, ...uniqueImages.slice(1)
       .filter((el) => !extras.some((extra) => extra.id === el.id))
       .map((el) => ({ ...el, templateSupplement: true }))],

@@ -1,8 +1,15 @@
 .element-canvas { position:relative; width:960px; height:540px; overflow:hidden; color:#111; }
 .element-canvas-template { position:absolute; inset:0; z-index:0; pointer-events:none; }
+.element-canvas-art { position:absolute; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+.element-canvas-art.pickable > div { pointer-events:auto; cursor:pointer; }
+.element-canvas-art.pickable > div:hover { outline:1px dashed rgba(108,99,255,.75); outline-offset:2px; }
+.element-canvas-art img { user-select:none; }
 .element-canvas-template > * { width:100%; height:100%; }
 .element-canvas-template .es-slide > :not(.es-deco) { visibility:hidden; }
 .element-canvas.preserve-template::before { display:none; }
+/* Uploaded templates: title decor and bullets follow the template's own accent
+   instead of the built-in theme's (which is set inline by the layout engine). */
+.element-canvas.custom-theme .canvas-text { --decor-accent: var(--slide-accent) !important; }
 .element-canvas > .slide-bg-deco { z-index:0; pointer-events:none; }
 .element-canvas[data-theme="soft-blue"]::before,
 .element-canvas[data-theme="royal-purple"]::before {
@@ -30,6 +37,13 @@
 .element-canvas.readonly .canvas-text { user-select:none; }
 .canvas-element { position:absolute; border:1px solid transparent; }
 .canvas-element.selected { border-color:#6c63ff; box-shadow:0 0 0 1px rgba(108,99,255,.25); }
+.canvas-element.multi-selected { outline:2px solid #8478ff; outline-offset:1px; }
+.canvas-multi-frame { position:absolute; z-index:9990; border:1.5px dashed #a89fff; border-radius:4px; pointer-events:none; }
+.canvas-multi-frame span {
+  position:absolute; left:-1px; top:-24px; padding:3px 8px; border-radius:6px; white-space:nowrap;
+  background:#6c63ff; color:#fff; font:600 11px/1 Inter, sans-serif;
+}
+.canvas-marquee { position:absolute; z-index:9991; border:1px solid #6c63ff; background:rgba(108,99,255,.14); pointer-events:none; }
 .canvas-element.locked.selected { border-style:dashed; border-color:#94a3b8; box-shadow:none; }
 .canvas-element img { width:100%; height:100%; object-fit:cover; display:block; }
 .canvas-image-placeholder {
@@ -41,7 +55,10 @@
   background:rgba(148,163,184,.08);
   border:1px dashed #94a3b8;
 }
-.canvas-shape { width:100%; height:100%; border:1px solid transparent; }
+.canvas-shape { width:100%; height:100%; border:1px solid transparent; box-sizing:border-box; }
+.canvas-shape-svg { width:100%; height:100%; display:block; overflow:visible; pointer-events:none; }
+.canvas-icon { width:100%; height:100%; display:flex; pointer-events:none; }
+.canvas-icon svg { width:100%; height:100%; }
 .canvas-element.role-image { isolation:isolate; }
 .canvas-image-viewport { position:absolute; inset:0; z-index:1; overflow:hidden; border-radius:inherit; }
 .canvas-image-viewport > img { position:relative; z-index:1; border-radius:inherit; transition:transform .12s ease-out; }
@@ -109,6 +126,20 @@
 .element-canvas[data-theme="blue-planet"] .canvas-element.role-image > .canvas-image-viewport {
   border-radius:10px !important;
 }
+.element-canvas[data-theme="ocean-teal"] .canvas-element.role-image > .canvas-image-viewport {
+  border-radius:24px 24px 24px 6px;
+  box-shadow:0 14px 30px rgba(15,118,110,.22);
+}
+.element-canvas[data-theme="editorial-paper"] .canvas-element.role-image > .canvas-image-viewport {
+  border:8px solid #fbf6ec;
+  border-radius:2px;
+  box-shadow:0 10px 26px rgba(43,29,18,.24);
+}
+.element-canvas[data-theme="midnight-gold"] .canvas-element.role-image > .canvas-image-viewport {
+  border:2px solid rgba(245,197,66,.7);
+  border-radius:6px;
+  box-shadow:0 0 0 6px rgba(245,197,66,.08);
+}
 .canvas-element.cropping { border-color:#ec4899; box-shadow:0 0 0 2px rgba(236,72,153,.25); }
 .canvas-element.cropping img { cursor:move; }
 .canvas-element.cropping::after {
@@ -128,6 +159,7 @@
   pointer-events:none;
 }
 .canvas-text { width:100%; height:100%; outline:none; overflow:hidden; line-height:1.35; padding:4px; cursor:default; user-select:none; }
+.canvas-element.selected .canvas-text { cursor:text; }
 .canvas-element.editing .canvas-text { cursor:text; user-select:text; }
 .canvas-text ul { margin:0; padding-left:1.2em; }
 .canvas-text ol { margin:0; padding-left:1.65em; list-style:decimal; }
@@ -149,6 +181,22 @@
 .canvas-text .slide-content-flow > li {
   margin:0 0 0 1.25em;
   padding-left:.25em;
+}
+.canvas-text .slide-content-flow > li:not(.slide-section-label) {
+  list-style:none;
+  position:relative;
+  margin-left:1.4em;
+}
+.canvas-text .slide-content-flow > li:not(.slide-section-label)::before {
+  content:'';
+  position:absolute;
+  left:-1.2em;
+  top:.5em;
+  width:7px;
+  height:7px;
+  border-radius:2px;
+  background:var(--slide-accent, currentColor);
+  transform:translateY(-50%) rotate(45deg);
 }
 .canvas-text .slide-content-flow > li::marker {
   color:currentColor;
@@ -189,9 +237,95 @@
   margin:0 0 .35em;
   padding-left:.2em;
 }
+/* Generated bullet lists keep a visible marker so the indent reads as a list. */
+.canvas-element.role-body .canvas-text ul.slide-content-flow > li:not(.slide-section-label) { list-style:disc; }
+.canvas-element.role-body .canvas-text ul.slide-content-flow > li:not(.slide-section-label)::marker { color:var(--decor-accent, var(--slide-accent, currentColor)); }
 .canvas-element.role-body .canvas-text li::before {
   content:none !important;
   display:none !important;
+}
+/* Cover, closing and every other slide are ordinary canvases: alignment and
+   position come from each element's own style, never from the slide type. */
+.canvas-element.role-title .canvas-text { text-wrap:balance; }
+
+/* Card surfaces are plain rgba (not color-mix): html2canvas, which powers the
+   PDF and "keep appearance" PPTX exports, cannot parse color-mix(). */
+.element-canvas { --card-bg:rgba(15,23,42,.055); --card-border:rgba(15,23,42,.13); }
+.element-canvas[data-theme="royal-purple"],
+.element-canvas[data-theme="modern-dark"],
+.element-canvas[data-theme="blue-planet"],
+.element-canvas[data-theme="nature-green"],
+.element-canvas[data-theme="tech-purple"],
+.element-canvas[data-theme="midnight-gold"] { --card-bg:rgba(255,255,255,.085); --card-border:rgba(255,255,255,.17); }
+
+/* Layout variants (single editable body; no hidden splitting of content). */
+.canvas-text .ProseMirror { column-count:var(--slide-cols, auto); column-gap:40px; }
+.canvas-text .ProseMirror li { break-inside:avoid; }
+.canvas-element .canvas-text ul.slide-cards {
+  display:grid !important;
+  grid-template-columns:repeat(var(--slide-card-cols, 2), minmax(0, 1fr));
+  gap:14px; margin:0; padding:0 !important; list-style:none !important;
+}
+.canvas-element .canvas-text ul.slide-cards > li {
+  position:relative; margin:0 !important; padding:13px 16px !important;
+  list-style:none !important; break-inside:avoid;
+  border:1px solid var(--card-border);
+  border-radius:14px;
+  background:var(--card-bg);
+  box-shadow:0 8px 22px rgba(0,0,0,.05);
+}
+.canvas-element .canvas-text ul.slide-cards > li::before,
+.canvas-element .canvas-text ul.slide-cards > li::after { content:none !important; display:none !important; }
+.canvas-element .canvas-text ul.slide-plain { list-style:none !important; padding-left:0 !important; }
+.canvas-element .canvas-text ul.slide-plain > li { margin:0 0 .6em !important; padding-left:0 !important; list-style:none !important; }
+.canvas-element .canvas-text ul.slide-plain > li::before { content:none !important; display:none !important; }
+
+/* Title treatments drawn as pseudo-elements so they never fight text editing. */
+.canvas-text.decor-underline { padding-bottom:16px !important; }
+.canvas-text.decor-underline::after,
+.canvas-text.decor-underline-center::after {
+  content:''; position:absolute; bottom:3px; width:64px; height:4px; border-radius:3px;
+  background:var(--decor-accent, var(--slide-accent, currentColor)); pointer-events:none;
+}
+.canvas-text.decor-underline::after { left:4px; }
+.canvas-text.decor-underline-center { padding-bottom:16px !important; }
+.canvas-text.decor-underline-center::after { left:50%; transform:translateX(-50%); }
+.canvas-text.decor-band { isolation:isolate; padding:10px 26px !important; }
+.canvas-text.decor-band::before {
+  content:''; position:absolute; inset:0; z-index:-1; border-radius:14px; pointer-events:none;
+  background:var(--decor-accent, var(--slide-accent, currentColor));
+}
+.canvas-text.decor-rule-left { padding-left:22px !important; }
+.canvas-text.decor-rule-left::before {
+  content:''; position:absolute; left:4px; top:6px; bottom:6px; width:3px; border-radius:2px; pointer-events:none;
+  background:var(--decor-accent, var(--slide-accent, currentColor));
+}
+.element-canvas[data-title-tl="false"]::before { display:none !important; }
+.canvas-element.role-body-right .canvas-text {
+  border-left:1px solid var(--card-border);
+  padding-left:16px;
+}
+.canvas-element.role-quote .canvas-text {
+  display:flex; align-items:center; justify-content:center; padding:0 8px; text-wrap:balance;
+}
+.canvas-text .slide-quote-text {
+  position:relative;
+  margin:0;
+  padding-top:.6em;
+  font-style:italic;
+}
+.canvas-text .slide-quote-text::before {
+  content:'\201C';
+  position:absolute;
+  left:50%;
+  top:-.28em;
+  transform:translateX(-50%);
+  font-style:normal;
+  font-family:Georgia, 'Times New Roman', serif;
+  font-size:2.6em;
+  line-height:1;
+  color:var(--slide-accent, currentColor);
+  opacity:.5;
 }
 .canvas-drag-handle { position:absolute; left:50%; top:-24px; transform:translateX(-50%); width:34px; height:22px; border:0; border-radius:5px 5px 0 0; background:#6c63ff; color:#fff; display:flex; align-items:center; justify-content:center; cursor:move; }
 .canvas-resize-handle { position:absolute; z-index:4; width:11px; height:11px; padding:0; border:2px solid #fff; border-radius:2px; background:#6c63ff; }
@@ -208,3 +342,13 @@
 .canvas-guide { position:absolute; z-index:998; pointer-events:none; background:#ec4899; }
 .canvas-guide.vertical { top:0; bottom:0; width:1px; }
 .canvas-guide.horizontal { left:0; right:0; height:1px; }
+
+.canvas-master-overlay { position:absolute; inset:0; z-index:500; }
+.canvas-master-overlay .cmo-logo { position:absolute; object-fit:contain; object-position:left center; }
+.canvas-master-overlay .cmo-footer {
+  position:absolute; left:32px; right:120px; bottom:14px; font:500 11px/1.3 Inter, sans-serif;
+  opacity:.75; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.canvas-master-overlay .cmo-page-number {
+  position:absolute; right:24px; bottom:14px; font:600 11px/1 Inter, sans-serif; opacity:.75;
+}

@@ -5,22 +5,54 @@ import ElementCanvas from '../../components/slides/ElementCanvas';
 import VideoGenerationModal from '../../components/video/VideoGenerationModal';
 import VideoLibraryModal from '../../components/video/VideoLibraryModal';
 import { projectService } from '../../services/documentService';
+import { confirmDialog, promptDialog } from '../../services/dialogService';
+import { parseDeckMaster, serializeDeckMaster } from '../../utils/deckMaster';
+import { createPageNumberElement, hasPageNumbers, isPageNumber, renumberPages } from '../../utils/pageNumber';
+import { newElementId } from '../../utils/selection';
+import { countRevealStages } from '../../utils/reveal';
+import { explainGenerationError } from '../../utils/generationErrors';
+import PresenterView from '../../components/slides/PresenterView';
+import SlideTransition from '../../components/slides/SlideTransition';
 import { isCustomTemplateId, templateService } from '../../services/templateService';
 import { exportSlidesToPptx } from '../../services/pptxExportService';
 import { captureSlides, exportSnapshotsToPdf } from '../../services/visualExportService';
 import { formatSlideDeck, formatSlidePage, toSlidePageUpdate } from '../../utils/slideMapping';
 import { reflowSlideTemplate } from '../../utils/slideElements';
+import { suggestVariant } from '../../utils/templateLayouts';
+import LayoutPicker from '../../components/slides/LayoutPicker';
+import ThemeTuner from '../../components/slides/ThemeTuner';
+import { hasOwnOrnaments, themeOrnaments } from '../../utils/themeOrnaments';
+import { artToElements, isBackdrop } from '../../utils/templateArt';
 import { applyCustomTemplateResult, prepareTemplateContent, restoreBuiltInTemplate } from '../../utils/templateSwitching';
+import { recommendTemplateForDeck } from '../../utils/dynamicTemplate';
+import { buildGeneratedTheme, codeFromBrief, isGeneratedTheme, makeThemeCode, parseThemeCode, subjectOf } from '../../utils/generatedTheme';
 import {
   ChevronLeft, ChevronRight, Download, ArrowLeft,
   LayoutTemplate, Check, Loader2, Maximize2, Minimize2,
   Info, Palette, Save, Sparkles, X, FileText, Play, Presentation, Cloud, CloudOff,
-  Undo2, Redo2, Copy, Trash2, GripVertical, Plus, ZoomIn, ZoomOut, Clapperboard, Library, UploadCloud
+  Undo2, Redo2, Copy, Trash2, GripVertical, Plus, ZoomIn, ZoomOut, Clapperboard, Library, UploadCloud,
+  ImagePlus, Scissors, Type, BarChart3, ChevronDown, MonitorPlay, Hash, AlertCircle
 } from 'lucide-react';
 import './EditorPage.css';
 
 // Template definitions (tạm thời hardcoded)
 const TEMPLATES = [
+  {
+    id: 'auto-topic',
+    name: 'Tự động theo chủ đề',
+    colors: { primary: '#a78bfa' },
+    preview: 'linear-gradient(135deg,#071a3d 0%,#4338ca 48%,#db2777 100%)',
+    isLight: false,
+    isDynamic: true,
+  },
+  {
+    id: 'gen-topic',
+    name: 'Template theo prompt',
+    colors: { primary: '#ff6584' },
+    preview: 'linear-gradient(135deg,#ff6584 0%,#f9b34a 35%,#3ddc97 65%,#6c63ff 100%)',
+    isLight: false,
+    isGenerative: true,
+  },
   { 
     id: 'soft-blue', 
     name: 'Soft Blue', 
@@ -85,6 +117,27 @@ const TEMPLATES = [
     preview: 'linear-gradient(135deg,#0a0015,#160026)', 
     isLight: false 
   },
+  {
+    id: 'ocean-teal',
+    name: 'Ocean Teal',
+    colors: { primary: '#14b8a6' },
+    preview: 'linear-gradient(135deg,#ecfeff,#ccfbf1)',
+    isLight: true,
+  },
+  {
+    id: 'editorial-paper',
+    name: 'Editorial Paper',
+    colors: { primary: '#c2410c' },
+    preview: 'linear-gradient(135deg,#f9f2e6,#efe4d0)',
+    isLight: true,
+  },
+  {
+    id: 'midnight-gold',
+    name: 'Midnight Gold',
+    colors: { primary: '#f5c542' },
+    preview: 'linear-gradient(135deg,#0a0e19,#1c2542)',
+    isLight: false,
+  },
 ];
 
 const DEFAULT_LEFT_PANEL_WIDTH = 180;
@@ -110,7 +163,24 @@ const SLIDE_LAYOUTS = [
   { value: 'thankyou', label: 'Kết thúc' },
 ];
 
-function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
+// A template made from the prompt: its whole look lives in the code itself.
+const generatedTemplateOption = (code) => {
+  const built = buildGeneratedTheme(code);
+  return {
+    id: code,
+    name: built.name,
+    colors: { primary: built.theme.primary },
+    preview: built.theme.bgGrad,
+    isLight: built.theme.isLight,
+    isGenerated: true,
+  };
+};
+
+const layoutThemeFor = (slide, templateId) => (isCustomTemplateId(templateId)
+  ? (slide?.elements?.find((el) => el.templateBaseTheme)?.templateBaseTheme || 'soft-blue')
+  : (templateId || 'soft-blue'));
+
+function UnifiedSlideView({ slide, theme, scale = 1, revealStage = null }) {
   return (
     <div style={{ width: 960 * scale, height: 540 * scale, overflow: 'hidden' }}>
       <div style={{ width: 960, height: 540, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
@@ -120,6 +190,7 @@ function UnifiedSlideView({ slide, theme, index = 0, scale = 1 }) {
           scale={1}
           readonly
           preserveTemplateStyles={isCustomTemplateId(theme)}
+          revealStage={revealStage}
         />
       </div>
     </div>
@@ -130,6 +201,8 @@ async function formatPagesWithTemplate(pages, templateId, force = false, sourceT
   return Promise.all(pages.map(async (page) => {
     const formatted = page.type ? page : formatSlidePage(page);
     if (!force && formatted.elements?.some((element) => element.templateStyleOnly)) return formatted;
+    // A slide opened from a PPTX is already laid out exactly as in the file.
+    if (!force && formatted.richText?._imported) return formatted;
     const current = prepareTemplateContent(formatted, sourceTheme);
     const match = await templateService.match(templateId, current);
     return applyCustomTemplateResult(current, match, sourceTheme);
@@ -148,8 +221,9 @@ function toCustomTemplateOption(template) {
 }
 
 function TemplateCard({ template, selected, disabled, deleting, onSelect, onDelete }) {
+  const deletable = template.isCustom || template.isSaved;
   return (
-    <div className={`e2-tmpl-card ${selected ? 'selected' : ''} ${template.isCustom ? 'has-delete' : ''} ${disabled ? 'disabled' : ''}`}>
+    <div className={`e2-tmpl-card ${selected ? 'selected' : ''} ${deletable ? 'has-delete' : ''} ${disabled ? 'disabled' : ''}`}>
       <button
         type="button"
         className="e2-tmpl-select"
@@ -165,10 +239,14 @@ function TemplateCard({ template, selected, disabled, deleting, onSelect, onDele
           <span className="e2-tmpl-th-bar" style={{ background: template.colors.primary }} />
         </span>
         <span className="e2-tmpl-name" title={template.name}>{template.name}</span>
+        {template.isDynamic && <span className="e2-tmpl-custom-tag">Linh hoạt</span>}
+        {template.isGenerative && <span className="e2-tmpl-custom-tag">Sinh mới</span>}
+        {template.isGenerated && <span className="e2-tmpl-custom-tag">Của bài này</span>}
+        {template.isSaved && <span className="e2-tmpl-custom-tag">Đã lưu</span>}
         {template.isCustom && <span className="e2-tmpl-custom-tag">PowerPoint</span>}
         {template.isDefault && <span className="e2-tmpl-default-tag">Mặc định</span>}
       </button>
-      {template.isCustom && (
+      {deletable && (
         <button
           type="button"
           className="e2-tmpl-delete"
@@ -205,9 +283,22 @@ export default function EditorPage() {
   const [fullscreen, setFullscreen] = useState(false);
   const [presenting, setPresenting] = useState(false);
   const [presentationViewport, setPresentationViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [revealStage, setRevealStage] = useState(0);
+  const activeIdxRef = useRef(0);
+  const revealStageRef = useRef(0);
+  const presentChannelRef = useRef(null);
+  const [presenterMode, setPresenterMode] = useState(false);
+  const [audienceOpen, setAudienceOpen] = useState(false);
+  const revealEnabledRef = useRef(false);
   const [rightTab, setRightTab] = useState('ai');
   const [slides, setSlides] = useState([]);
   const [customTemplates, setCustomTemplates] = useState([]);
+  const [savedThemes, setSavedThemes] = useState([]);
+  const [generatingTheme, setGeneratingTheme] = useState(false);
+  const [tunerOpen, setTunerOpen] = useState(false);
+  const genOriginRef = useRef({ projectId: null, code: null });
+  const briefRef = useRef({ subject: null, brief: null });
+  const lastBriefLabelRef = useRef('');
   const [applyingTemplate, setApplyingTemplate] = useState(false);
   const [templateMode, setTemplateMode] = useState('default');
   const [templateUploading, setTemplateUploading] = useState(false);
@@ -216,8 +307,7 @@ export default function EditorPage() {
   const [revising, setRevising] = useState(false);
   const [revisionProgress, setRevisionProgress] = useState(0);
   const [revisionStatus, setRevisionStatus] = useState('');
-  const [exportsList, setExportsList] = useState([]);
-  const [loadingExports, setLoadingExports] = useState(false);
+  const [revisionError, setRevisionError] = useState(null);
   const [loadingSlides, setLoadingSlides] = useState(true);
   const [generationProgress, setGenerationProgress] = useState({ active: false, value: 0, status: 'Đang tạo slide...' });
   const [leftPanelWidth, setLeftPanelWidth] = useState(() => Number(localStorage.getItem('editor-left-panel-width')) || DEFAULT_LEFT_PANEL_WIDTH);
@@ -316,6 +406,7 @@ export default function EditorPage() {
       .then((templates) => {
         if (active) {
           setCustomTemplates(templates.filter((template) => template.sourceType === 'CUSTOM_PPTX'));
+          setSavedThemes(templates.filter((template) => template.sourceType === 'GENERATED_THEME'));
         }
       })
       .catch(() => {
@@ -363,24 +454,6 @@ export default function EditorPage() {
   }, [slides.length]);
 
   useEffect(() => {
-    const project = projects.find((p) => p.id === id);
-    if (project && (project.status === 1 || project.status === 3 || project.status === 'completed' || project.status === 'DONE')) {
-      const fetchExports = async () => {
-        setLoadingExports(true);
-        try {
-          const list = await projectService.getExports(id);
-          setExportsList(list || []);
-        } catch (err) {
-          console.error('Không thể tải danh sách file xuất bản:', err);
-        } finally {
-          setLoadingExports(false);
-        }
-      };
-      fetchExports();
-    }
-  }, [id, projects]);
-
-  useEffect(() => {
     const project = projects.find((item) => item.id === id);
     const status = typeof project?.status === 'string' ? project.status.toUpperCase() : project?.status;
     const stillProcessing = status === 0 || status === 'CREATE' || status === 'PROCESSING';
@@ -404,7 +477,11 @@ export default function EditorPage() {
         if (done) {
           const pages = await projectService.getSlidePages(id);
           if (disposed || !Array.isArray(pages) || !pages.length) return;
-          const formattedSlides = formatSlideDeck(pages, project.presentationMode);
+          const formattedSlides = formatSlideDeck(
+            pages,
+            project.presentationMode,
+            isCustomTemplateId(project.templateId) ? undefined : project.templateId,
+          );
           slidesRef.current = formattedSlides;
           setSlides(formattedSlides);
           setSelectedSlideIndexes(new Set([0]));
@@ -467,24 +544,76 @@ export default function EditorPage() {
     localStorage.setItem('editor-right-panel-width', String(rightPanelWidth));
   }, [rightPanelWidth]);
 
+  useEffect(() => { activeIdxRef.current = activeIdx; }, [activeIdx]);
+  useEffect(() => { revealStageRef.current = revealStage; }, [revealStage]);
+  useEffect(() => {
+    revealEnabledRef.current = Boolean(parseDeckMaster(projects.find((item) => item.id === id)?.deckMaster).revealBullets);
+  }, [projects, id]);
+
+  // Tells a presenter-view popup window (if one is open) what's on screen now, so its
+  // notes/next-slide preview stay in lockstep with whichever side actually moved.
+  const broadcastPresentState = (index, stage) => {
+    presentChannelRef.current?.postMessage({
+      type: 'goto', index, stage, total: slidesRef.current.length, reveal: revealEnabledRef.current,
+    });
+  };
+
+  // Advancing "next" during a presentation first steps through the current slide's bullets
+  // (see utils/reveal.js) and only moves to the next slide once they're all shown.
+  const presentNext = () => {
+    const idx = activeIdxRef.current;
+    const stage = revealStageRef.current;
+    const stages = revealEnabledRef.current ? countRevealStages(slidesRef.current[idx]) : 0;
+    if (stage < stages) {
+      setRevealStage(stage + 1);
+      broadcastPresentState(idx, stage + 1);
+      return;
+    }
+    if (idx >= slidesRef.current.length - 1) return;
+    setActiveIdx(idx + 1);
+    setRevealStage(0);
+    broadcastPresentState(idx + 1, 0);
+  };
+
+  const presentPrev = () => {
+    const idx = activeIdxRef.current;
+    const stage = revealStageRef.current;
+    if (stage > 0) {
+      setRevealStage(stage - 1);
+      broadcastPresentState(idx, stage - 1);
+      return;
+    }
+    if (idx <= 0) return;
+    // Stepping back onto the previous slide shows it fully built, not bullet-by-bullet again.
+    const targetStage = revealEnabledRef.current ? countRevealStages(slidesRef.current[idx - 1]) : 0;
+    setActiveIdx(idx - 1);
+    setRevealStage(targetStage);
+    broadcastPresentState(idx - 1, targetStage);
+  };
+
+  const presentGoto = (targetIdx) => {
+    const clamped = Math.max(0, Math.min(slidesRef.current.length - 1, targetIdx));
+    setActiveIdx(clamped);
+    setRevealStage(0);
+    broadcastPresentState(clamped, 0);
+  };
+
   useEffect(() => {
     if (!presenting) return undefined;
 
-    const nextSlide = () => setActiveIdx((index) => Math.min(slides.length - 1, index + 1));
-    const previousSlide = () => setActiveIdx((index) => Math.max(0, index - 1));
     const handleKeyDown = (event) => {
       if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(event.key)) {
         event.preventDefault();
-        nextSlide();
+        presentNext();
       } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) {
         event.preventDefault();
-        previousSlide();
+        presentPrev();
       } else if (event.key === 'Home') {
         event.preventDefault();
-        setActiveIdx(0);
+        presentGoto(0);
       } else if (event.key === 'End') {
         event.preventDefault();
-        setActiveIdx(Math.max(0, slides.length - 1));
+        presentGoto(slidesRef.current.length - 1);
       } else if (event.key === 'Escape') {
         setPresenting(false);
       }
@@ -494,6 +623,18 @@ export default function EditorPage() {
       if (!document.fullscreenElement) setPresenting(false);
     };
 
+    // A presenter-view popup (see startPresenterView) is a second, independent tab: it
+    // can't share React state, so it asks for the current slide/stage and issues next/prev
+    // the same way local controls do, over a BroadcastChannel scoped to this project.
+    const channel = new BroadcastChannel(`lecgen-present-${id}`);
+    presentChannelRef.current = channel;
+    channel.onmessage = (event) => {
+      const message = event.data || {};
+      if (message.type === 'next') presentNext();
+      else if (message.type === 'prev') presentPrev();
+      else if (message.type === 'request-state') broadcastPresentState(activeIdxRef.current, revealStageRef.current);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('resize', handleResize);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -501,8 +642,10 @@ export default function EditorPage() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      channel.close();
+      presentChannelRef.current = null;
     };
-  }, [presenting, slides.length]);
+  }, [presenting, id]);
 
   // ── Handlers ──
   const historyBusyRef = useRef(false);
@@ -511,17 +654,22 @@ export default function EditorPage() {
     templateId: projects.find((item) => item.id === id)?.templateId,
   }), [id, projects]);
 
-  const handleSlideUpdate = useCallback((updatedSlide) => {
-    const now = Date.now();
-    const startsNewHistoryStep = activeIdx !== lastHistorySlideRef.current || now - lastHistoryAtRef.current > 800;
-    if (startsNewHistoryStep) {
-      undoStackRef.current.push(historySnapshot());
-      if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+  const handleSlideUpdate = useCallback((updatedSlide, meta) => {
+    // An automatic layout correction is saved like any change, but it is not something the user
+    // did: counting it as a history step made every undo re-create the step it had just undone
+    // (undo never ran out) and cleared the redo list.
+    if (!meta?.silent) {
+      const now = Date.now();
+      const startsNewHistoryStep = activeIdx !== lastHistorySlideRef.current || now - lastHistoryAtRef.current > 800;
+      if (startsNewHistoryStep) {
+        undoStackRef.current.push(historySnapshot());
+        if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+      }
+      lastHistoryAtRef.current = now;
+      lastHistorySlideRef.current = activeIdx;
+      redoStackRef.current = [];
+      setHistoryVersion((version) => version + 1);
     }
-    lastHistoryAtRef.current = now;
-    lastHistorySlideRef.current = activeIdx;
-    redoStackRef.current = [];
-    setHistoryVersion((version) => version + 1);
     editVersionRef.current += 1;
     hasUnsavedChangesRef.current = true;
     setHasUnsavedChanges(true);
@@ -575,9 +723,10 @@ export default function EditorPage() {
     redoStackRef.current = [];
     lastHistoryAtRef.current = 0;
     lastHistorySlideRef.current = -1;
-    slidesRef.current = nextSlides;
-    setSlides(nextSlides);
-    setActiveIdx(Math.max(0, Math.min(nextActiveIdx, nextSlides.length - 1)));
+    const numbered = renumberPages(nextSlides);
+    slidesRef.current = numbered;
+    setSlides(numbered);
+    setActiveIdx(Math.max(0, Math.min(nextActiveIdx, numbered.length - 1)));
     editVersionRef.current += 1;
     hasUnsavedChangesRef.current = true;
     setHasUnsavedChanges(true);
@@ -592,8 +741,7 @@ export default function EditorPage() {
     const nextSlides = [...slidesRef.current];
     nextSlides.splice(index + 1, 0, duplicate);
     handleDeckUpdate(nextSlides, index + 1);
-    addToast('Đã nhân bản slide', 'success');
-  }, [addToast, handleDeckUpdate]);
+  }, [handleDeckUpdate]);
 
   const addSlide = useCallback((afterIndex = activeIdx) => {
     const blankSlide = {
@@ -610,11 +758,12 @@ export default function EditorPage() {
       likelyMultiPptxSlides: false,
     };
     const insertIndex = Math.max(0, Math.min(afterIndex + 1, slidesRef.current.length));
+    // A deck that already numbers its slides numbers the new one too (renumbering fixes the digit).
+    if (hasPageNumbers(slidesRef.current)) blankSlide.elements = [createPageNumberElement(insertIndex)];
     const nextSlides = [...slidesRef.current];
     nextSlides.splice(insertIndex, 0, blankSlide);
     handleDeckUpdate(nextSlides, insertIndex);
-    addToast('Đã thêm slide mới', 'success');
-  }, [activeIdx, addToast, handleDeckUpdate]);
+  }, [activeIdx, handleDeckUpdate]);
 
   const deleteSlide = useCallback((index) => {
     if (slidesRef.current.length <= 1) {
@@ -624,7 +773,6 @@ export default function EditorPage() {
     const nextSlides = slidesRef.current.filter((_, slideIndex) => slideIndex !== index);
     const nextActive = activeIdx > index ? activeIdx - 1 : Math.min(activeIdx, nextSlides.length - 1);
     handleDeckUpdate(nextSlides, nextActive);
-    addToast('Đã xóa slide', 'success');
   }, [activeIdx, addToast, handleDeckUpdate]);
 
   const reorderSlides = useCallback((fromIndex, toIndex) => {
@@ -682,6 +830,57 @@ export default function EditorPage() {
     handleSlideUpdate(nextSlide);
   }, [activeIdx, handleSlideUpdate]);
 
+  // Changing the content type rebuilds the slide's frames from scratch, so warn
+  // when the slide carries manual position/size edits that would be lost.
+  const requestSlideTypeChange = useCallback(async (nextType) => {
+    const slide = slidesRef.current[activeIdx];
+    if (!slide || slide.type === nextType) return;
+    const theme = layoutThemeFor(slide, projects.find((item) => item.id === id)?.templateId);
+    const fresh = reflowSlideTemplate({ ...slide, elements: [] }, theme).elements;
+    const current = Array.isArray(slide.elements) ? slide.elements : [];
+    const edited = current.length > 0 && (current.length !== fresh.length || current.some((element, index) => (
+      !fresh[index] || ['x', 'y', 'width'].some((key) => Math.abs((element[key] || 0) - (fresh[index][key] || 0)) > 3)
+    )));
+    if (edited && !(await confirmDialog({ title: 'Đổi loại nội dung', message: 'Đổi loại nội dung sẽ dựng lại các khung của slide này và mất chỉnh sửa vị trí, kích thước đã làm. Tiếp tục?', confirmLabel: 'Tiếp tục', danger: true }))) return;
+    changeSlideLayout(nextType);
+  }, [activeIdx, changeSlideLayout, id, projects]);
+
+  const currentTemplateId = useCallback(
+    () => projects.find((item) => item.id === id)?.templateId || 'soft-blue',
+    [projects, id],
+  );
+
+  // A layout only re-arranges the frames; text, tables, charts, images and
+  // notes are carried over untouched, and every frame stays freely editable.
+  const changeSlideVariant = useCallback((variantId) => {
+    const slide = slidesRef.current[activeIdx];
+    if (!slide) return;
+    const theme = layoutThemeFor(slide, currentTemplateId());
+    handleSlideUpdate(reflowSlideTemplate({ ...slide, richText: { ...(slide.richText || {}), _layoutVariant: variantId } }, theme));
+  }, [activeIdx, currentTemplateId, handleSlideUpdate]);
+
+  const autoMixLayouts = useCallback(() => {
+    const templateIdNow = currentTemplateId();
+    const next = slidesRef.current.map((slide, index) => {
+      const theme = layoutThemeFor(slide, templateIdNow);
+      const variant = suggestVariant(slide, index, theme);
+      if (!variant) return slide;
+      return reflowSlideTemplate({ ...slide, richText: { ...(slide.richText || {}), _layoutVariant: variant } }, theme);
+    });
+    handleDeckUpdate(next, activeIdx);
+  }, [activeIdx, currentTemplateId, handleDeckUpdate]);
+
+  const resetAllLayouts = useCallback(() => {
+    const templateIdNow = currentTemplateId();
+    const next = slidesRef.current.map((slide) => {
+      const theme = layoutThemeFor(slide, templateIdNow);
+      const { _layoutVariant: dropped, ...richText } = slide.richText || {};
+      void dropped;
+      return reflowSlideTemplate({ ...slide, richText }, theme);
+    });
+    handleDeckUpdate(next, activeIdx);
+  }, [activeIdx, currentTemplateId, handleDeckUpdate]);
+
   useEffect(() => {
     const handleDeckShortcut = (event) => {
       if (!(event.ctrlKey || event.metaKey)) return;
@@ -733,15 +932,25 @@ export default function EditorPage() {
       const key = event.key.toLowerCase();
       if (key !== 'z' && key !== 'y') return;
       event.preventDefault();
+      const wantsRedo = key === 'y' || event.shiftKey;
+      // Blurring a focused text box commits its pending edit via onSave,
+      // which itself pushes/updates undo-stack state. Reading history in the
+      // very same synchronous call can race that commit; deferring to the
+      // next tick lets the commit fully land first, so undo/redo always
+      // acts on the latest state instead of occasionally being a no-op.
       document.activeElement?.blur();
-      if (key === 'y' || event.shiftKey) handleRedo();
-      else handleUndo();
+      window.setTimeout(() => {
+        if (wantsRedo) handleRedo();
+        else handleUndo();
+      }, 0);
     };
-    window.addEventListener('keydown', handleHistoryShortcut);
-    return () => window.removeEventListener('keydown', handleHistoryShortcut);
+    // Capture phase: a focused contentEditable text box has its own native
+    // Ctrl+Z undo behavior that otherwise wins over this global shortcut.
+    window.addEventListener('keydown', handleHistoryShortcut, true);
+    return () => window.removeEventListener('keydown', handleHistoryShortcut, true);
   }, [handleRedo, handleUndo]);
 
-  const applyTemplate = async (tmpl, successMessage) => {
+  const applyTemplate = async (tmpl, successMessage, { mixLayouts = false, clearBoundaryVariants = false, keepOrnaments = false } = {}) => {
     if (applyingTemplate || historyBusyRef.current) return false;
     const previousTemplateId = projects.find((item) => item.id === id)?.templateId;
     setApplyingTemplate(true);
@@ -749,12 +958,49 @@ export default function EditorPage() {
       const customSlides = tmpl.isCustom
         ? await formatPagesWithTemplate(slidesRef.current, tmpl.id, true, previousTemplateId)
         : null;
-      await projectService.update(id, { templateId: tmpl.id });
-      const matchedSlides = customSlides || slidesRef.current.map((slide) => isCustomTemplateId(previousTemplateId)
+      const previousSlides = slidesRef.current;
+      // A built-in or generated template needs no server round trip before it can show, so the
+      // change appears at once and is saved afterwards (see below); an uploaded one is matched first.
+      if (tmpl.isCustom) await projectService.update(id, { templateId: tmpl.id });
+      // A cover/closing style chosen in the tuner must show, so their remembered composition is dropped first.
+      // Ornaments turned into elements belong to the template they came from, so a different
+      // template starts with its own (the tuner adjusts the same template and keeps them).
+      const sourceSlides = slidesRef.current.map((slide) => {
+        let next = slide;
+        if (!keepOrnaments && hasOwnOrnaments(next)) {
+          const { _noOrnaments: hidden, ...richText } = next.richText || {};
+          void hidden;
+          next = { ...next, richText, elements: (next.elements || []).filter((element) => !element.ornament) };
+        }
+        if (clearBoundaryVariants && ['title', 'thankyou'].includes(next.type)) {
+          const { _layoutVariant: dropped, ...richText } = next.richText || {};
+          void dropped;
+          next = { ...next, richText };
+        }
+        return next;
+      });
+      let matchedSlides = customSlides || sourceSlides.map((slide) => isCustomTemplateId(previousTemplateId)
         ? restoreBuiltInTemplate(slide, tmpl.id) : reflowSlideTemplate(slide, tmpl.id));
+      if (mixLayouts && !customSlides) {
+        // Theme and composition are chosen together so the deck is varied from the start.
+        matchedSlides = matchedSlides.map((slide, index) => {
+          const variant = suggestVariant(slide, index, tmpl.id);
+          if (!variant) return slide;
+          return reflowSlideTemplate({ ...slide, richText: { ...(slide.richText || {}), _layoutVariant: variant } }, tmpl.id);
+        });
+      }
       handleDeckUpdate(matchedSlides, activeIdx);
       updateProject(id, { templateId: tmpl.id });
-      addToast(successMessage || `Template đổi sang "${tmpl.name}" ✓`, 'success');
+      if (!tmpl.isCustom) {
+        try {
+          await projectService.update(id, { templateId: tmpl.id });
+        } catch (error) {
+          // It already looked applied; take it back if the server refused it.
+          handleDeckUpdate(previousSlides, activeIdx);
+          updateProject(id, { templateId: previousTemplateId });
+          throw error;
+        }
+      }
       const denseSlides = matchedSlides.flatMap((slide, index) => slide.elements?.some((element) =>
         (element.type === 'table' && ((element.data?.rows?.length || 0) > 10 || (element.data?.headers?.length || 0) > 6))
         || (element.type === 'text' && element.role === 'body' && String(element.content || '').length > 1600)
@@ -769,8 +1015,184 @@ export default function EditorPage() {
     }
   };
 
+  const genRollRef = useRef(0);
+
+  const savedThemeOption = (saved) => ({
+    ...generatedTemplateOption(saved.description),
+    id: saved.description,
+    name: saved.name,
+    isGenerated: false,
+    isSaved: true,
+    savedId: saved.id,
+  });
+
+  // While the colour slider is dragged the slide is only tinted (a GPU filter, no re-render), which
+  // keeps the drag smooth; the real theme is applied once, on release.
+  const previewHue = useCallback((delta) => {
+    const frame = document.querySelector('.e2-canvas-frame');
+    if (!frame) return;
+    frame.style.filter = delta ? `hue-rotate(${delta}deg)` : '';
+    frame.style.willChange = delta ? 'filter' : '';
+  }, []);
+
+  // ── Template ornaments: hide them, or turn them into shapes the user can edit ──
+  const ornamentsAdopted = slides.some((slide) => slide.elements?.some((element) => element.ornament));
+
+  // Clicking a decoration on the slide turns the template's art into real shapes and
+  // selects nothing else — from then on it behaves like any other shape: drag, restyle, delete.
+  const adoptArtAt = () => {
+    adoptOrnaments();
+  };
+
+  const adoptOrnaments = () => {
+    const code = projects.find((item) => item.id === id)?.templateId;
+    const next = slidesRef.current.map((slide) => {
+      if (hasOwnOrnaments(slide) && slide.elements?.some((element) => element.ornament)) return slide;
+      const decor = slide.richText?._decor;
+      const fromArt = Array.isArray(decor) ? artToElements(decor) : [];
+      const fromTheme = isGeneratedTheme(code) ? themeOrnaments(code) : [];
+      const ornaments = [...fromTheme, ...fromArt];
+      if (!ornaments.length) return slide;
+      const richText = { ...(slide.richText || {}), _noOrnaments: true };
+      if (Array.isArray(decor)) richText._decor = decor.filter(isBackdrop);
+      return { ...slide, richText, elements: [...ornaments, ...(slide.elements || [])] };
+    });
+    handleDeckUpdate(next, activeIdx);
+  };
+
+  const restoreOrnaments = () => {
+    const code = projects.find((item) => item.id === id)?.templateId;
+    if (!isGeneratedTheme(code)) return;
+    const next = slidesRef.current.map((slide) => {
+      const { _noOrnaments: dropped, ...richText } = slide.richText || {};
+      void dropped;
+      return { ...slide, richText, elements: (slide.elements || []).filter((element) => !element.ornament) };
+    });
+    handleDeckUpdate(next, activeIdx);
+  };
+
+  // "Put this on every slide": the plain way to repeat a logo, a footer line or a watermark,
+  // instead of a separate deck-master layer — each copy is then an ordinary box on its slide.
+  const copyElementToAllSlides = (element) => {
+    if (!element) return;
+    const source = slidesRef.current[activeIdx];
+    const next = slidesRef.current.map((slide, index) => {
+      if (slide === source) return slide;
+      const copy = { ...element, id: newElementId(), style: element.style ? { ...element.style } : undefined };
+      void index;
+      return { ...slide, elements: [...(slide.elements || []), copy] };
+    });
+    handleDeckUpdate(next, activeIdx);
+  };
+
+  const togglePageNumbers = () => {
+    const on = !hasPageNumbers(slidesRef.current);
+    const next = slidesRef.current.map((slide, index) => {
+      const elements = (slide.elements || []).filter((element) => !isPageNumber(element));
+      if (!on) return { ...slide, elements };
+      return { ...slide, elements: [...elements, createPageNumberElement(index)] };
+    });
+    handleDeckUpdate(next, activeIdx);
+  };
+
+  const tuneTheme = async (nextCode) => {
+    const current = projects.find((item) => item.id === id)?.templateId;
+    if (!isGeneratedTheme(current) || nextCode === current) return;
+    if (genOriginRef.current.projectId !== id) genOriginRef.current = { projectId: id, code: current };
+    const before = parseThemeCode(current);
+    const after = parseThemeCode(nextCode);
+    try {
+      await applyTemplate(
+        generatedTemplateOption(nextCode),
+        'Đã cập nhật template ✓',
+        { clearBoundaryVariants: before?.cover !== after?.cover || before?.closing !== after?.closing, keepOrnaments: true },
+      );
+    } finally {
+      previewHue(null);
+    }
+  };
+
+  const resetTunedTheme = async () => {
+    const origin = genOriginRef.current;
+    if (origin.projectId !== id || !origin.code) return;
+    await applyTemplate(generatedTemplateOption(origin.code), 'Đã quay về template ban đầu ✓', { clearBoundaryVariants: true });
+  };
+
+  const saveCurrentTheme = async () => {
+    const code = projects.find((item) => item.id === id)?.templateId;
+    if (!isGeneratedTheme(code)) return;
+    const suggested = lastBriefLabelRef.current || generatedTemplateOption(code).name;
+    const name = await promptDialog({ title: 'Lưu template', message: 'Đặt tên để tìm lại trong thư viện của bạn.', defaultValue: suggested, confirmLabel: 'Lưu' });
+    if (name === null) return;
+    try {
+      const saved = await templateService.saveGenerated(name.trim() || suggested, code);
+      setSavedThemes((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+    } catch (error) {
+      addToast(error.message || 'Không thể lưu template', 'error');
+    }
+  };
+
+  const deleteSavedTheme = async (template) => {
+    if (!(await confirmDialog({ title: 'Xóa template đã lưu', message: `Xóa "${template.name}"? Bài đang dùng nó vẫn giữ nguyên giao diện.`, confirmLabel: 'Xóa', danger: true }))) return;
+    try {
+      await templateService.deleteCustom(template.savedId);
+      setSavedThemes((current) => current.filter((item) => item.id !== template.savedId));
+    } catch (error) {
+      addToast(error.message || 'Không thể xóa template', 'error');
+    }
+  };
   const handleTemplateSwitch = async (tmplId) => {
     const customOptions = customTemplates.map(toCustomTemplateOption);
+    if (tmplId === 'auto-topic') {
+      const project = projects.find((item) => item.id === id);
+      const recommendation = recommendTemplateForDeck(project, slidesRef.current);
+      const recommendedTemplate = TEMPLATES.find((item) => item.id === recommendation.themeId);
+      if (recommendedTemplate) {
+        await applyTemplate(
+          recommendedTemplate,
+          `Chủ đề “${recommendation.label}”: áp dụng ${recommendedTemplate.name} và đa dạng hóa bố cục ✓`,
+          { mixLayouts: true },
+        );
+      }
+      return;
+    }
+    if (isGeneratedTheme(tmplId)) {
+      // A template saved earlier (or picked from the library) is just its code.
+      await applyTemplate(generatedTemplateOption(tmplId), 'Đã áp dụng template đã lưu ✓', { mixLayouts: true });
+      return;
+    }
+    if (tmplId === 'gen-topic') {
+      // One new template per prompt. The AI reads the subject once; pressing again re-rolls the
+      // ornament and composition locally, so later presses are instant.
+      const project = projects.find((item) => item.id === id);
+      const subject = subjectOf(project, slidesRef.current);
+      if (generatingTheme) return;
+      setGeneratingTheme(true);
+      try {
+        if (briefRef.current.subject !== subject) {
+          addToast('AI đang đọc chủ đề để chọn màu sắc và phong cách…', 'info');
+          briefRef.current = { subject, brief: await projectService.themeBrief(subject) };
+        }
+        const { brief } = briefRef.current;
+        const build = (roll) => (brief ? codeFromBrief(brief, subject, roll) : makeThemeCode(subject, roll));
+        let roll = genRollRef.current;
+        let code = build(roll);
+        if (code === project?.templateId) { roll += 1; code = build(roll); }
+        genRollRef.current = roll + 1;
+        lastBriefLabelRef.current = brief?.label || '';
+        genOriginRef.current = { projectId: id, code };
+        await applyTemplate(
+          generatedTemplateOption(code),
+          brief
+            ? 'AI đã thiết kế template theo chủ đề. Bấm lần nữa để thử phong cách khác ✓'
+            : 'Đã tạo template mới theo chủ đề của bài (AI chưa phản hồi nên dùng bộ nhận diện từ khoá) ✓',
+          { mixLayouts: true },
+        );
+      } finally {
+        setGeneratingTheme(false);
+      }
+      return;
+    }
     const tmpl = [...TEMPLATES, ...customOptions].find((item) => item.id === tmplId);
     if (tmpl) await applyTemplate(tmpl);
   };
@@ -811,7 +1233,7 @@ export default function EditorPage() {
     const warning = isActive
       ? `Template "${template.name}" đang được sử dụng. Bài trình chiếu sẽ chuyển về Soft Blue trước khi xóa. Tiếp tục?`
       : `Bạn có chắc muốn xóa template "${template.name}"?`;
-    if (!window.confirm(warning)) return;
+    if (!(await confirmDialog({ title: 'Xóa template', message: warning, confirmLabel: 'Xóa', danger: true }))) return;
 
     setTemplateDeletingId(template.id);
     try {
@@ -821,7 +1243,6 @@ export default function EditorPage() {
       }
       await templateService.deleteCustom(template.id);
       setCustomTemplates((current) => current.filter((item) => item.id !== template.id));
-      addToast(`Đã xóa template "${template.name}"`, 'success');
     } catch (error) {
       addToast(error.message || 'Không thể xóa template', 'error');
     } finally {
@@ -882,6 +1303,7 @@ export default function EditorPage() {
     // snapshot because the request may finish after further async state work.
     const beforeRevision = structuredClone(slidesRef.current);
 
+    setRevisionError(null);
     setRevising(true);
     setRevisionProgress(5);
     setRevisionStatus('Đang lưu slides hiện tại...');
@@ -901,7 +1323,7 @@ export default function EditorPage() {
         contextSlideNumber: activeIdx + 1
       };
 
-      const reviseRes = await projectService.revise(id, payload);
+      await projectService.revise(id, payload);
       setRevisionProgress(30);
       setRevisionStatus('AI đang tiếp nhận yêu cầu...');
 
@@ -934,9 +1356,11 @@ export default function EditorPage() {
             // Fetch pages again
             const pages = await projectService.getSlidePages(id);
             if (pages && pages.length > 0) {
+              const revisedProject = projects.find((item) => item.id === id);
               const formattedSlides = formatSlideDeck(
                 pages,
-                projects.find((item) => item.id === id)?.presentationMode,
+                revisedProject?.presentationMode,
+                isCustomTemplateId(revisedProject?.templateId) ? undefined : revisedProject?.templateId,
               );
 
               undoStackRef.current.push(beforeRevision);
@@ -961,7 +1385,10 @@ export default function EditorPage() {
             setRevisionPrompt('');
           } else if (status === 'failed' || pollCount > 120) {
             clearInterval(pollInterval);
-            addToast(progressRes.errorMessage || 'Lỗi khi AI thực hiện chỉnh sửa', 'error');
+            // The reason is shown beside the prompt (it stays until dismissed), not in a toast.
+            setRevisionError(pollCount > 120 && status !== 'failed'
+              ? { title: 'AI phản hồi quá lâu', detail: 'Yêu cầu chưa hoàn thành sau nhiều phút. Hãy thử lại, hoặc chia nhỏ yêu cầu.', action: 'retry' }
+              : explainGenerationError(progressRes.errorMessage));
             setRevising(false);
           }
         } catch (pollErr) {
@@ -971,7 +1398,7 @@ export default function EditorPage() {
 
     } catch (err) {
       console.error('AI Revise error:', err);
-      addToast(err.message || 'Lỗi khi gửi yêu cầu chỉnh sửa slide', 'error');
+      setRevisionError(explainGenerationError(err.message, { status: err.status }));
       setRevising(false);
     }
   };
@@ -985,7 +1412,6 @@ export default function EditorPage() {
       const pageUpdates = slidesRef.current.map(toSlidePageUpdate);
       const savedPages = await projectService.syncSlidePages(id, pageUpdates);
       applySyncResult(savedPages, savingVersion);
-      addToast('✅ Lưu thay đổi thành công!', 'success');
     } catch (err) {
       setSaveState('error');
       addToast(err.message || 'Lỗi khi lưu slides lên máy chủ', 'error');
@@ -1012,11 +1438,25 @@ export default function EditorPage() {
       const updated = await projectService.update(id, { name: nextTitle });
       updateProject(id, { name: updated?.name || nextTitle });
       setEditingTitle(false);
-      addToast('Đã đổi tên bài trình chiếu', 'success');
     } catch (error) {
       addToast(error.message || 'Không thể đổi tên bài trình chiếu', 'error');
     } finally {
       setSavingTitle(false);
+    }
+  };
+
+  // Logo/slide-number/footer that repeat across the whole deck — a small JSON blob on the
+  // project itself, not on any one slide, patched and persisted the same way `templateId` is.
+  const updateDeckMaster = async (patch) => {
+    const current = parseDeckMaster(projects.find((item) => item.id === id)?.deckMaster);
+    const next = { ...current, ...patch };
+    const serialized = serializeDeckMaster(next);
+    updateProject(id, { deckMaster: serialized });
+    try {
+      await projectService.update(id, { deckMaster: serialized });
+    } catch (error) {
+      updateProject(id, { deckMaster: serializeDeckMaster(current) });
+      addToast(error.message || 'Không thể lưu thiết lập logo/footer', 'error');
     }
   };
 
@@ -1215,23 +1655,45 @@ export default function EditorPage() {
     document.body.classList.add('editor-panel-resizing');
   };
 
-  const startPresentation = () => {
+  const startPresentation = ({ presenter = false } = {}) => {
     if (!slides.length) return;
     setPresentationViewport({ width: window.innerWidth, height: window.innerHeight });
+    setRevealStage(0);
+    setPresenterMode(presenter);
+    setAudienceOpen(false);
     setPresenting(true);
-    document.documentElement.requestFullscreen?.().catch(() => {});
+    // The presenter view is a working screen (notes, clock, a second window to open), so it
+    // stays in the normal browser window; only the plain slideshow goes full screen.
+    if (!presenter) document.documentElement.requestFullscreen?.().catch(() => {});
   };
 
   const stopPresentation = () => {
     setPresenting(false);
+    setPresenterMode(false);
     if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
   };
 
-  const getScale = () => Math.max(0.35, Math.min(
-    1,
-    (centerSize.width - 130) / 960,
-    (centerSize.height - 105) / 540,
-  ));
+  // Like PowerPoint's Presenter View: this window becomes the speaker's screen (current
+  // slide, next slide, notes, clock) and a second, audience-only window is opened on demand
+  // (drag it to the projector). Both stay in step over the BroadcastChannel set up in the
+  // presenting effect above.
+  const startPresenterView = () => startPresentation({ presenter: true });
+
+  const openAudienceWindow = () => {
+    window.open(`/present/${id}`, `lecgen-audience-${id}`, 'width=1280,height=720');
+    setAudienceOpen(true);
+  };
+
+  // On phones the prev/next arrows overlay the slide instead of sitting beside
+  // it, so the slide can use nearly the full width.
+  const getScale = () => {
+    const narrow = centerSize.width > 0 && centerSize.width < 640;
+    return Math.max(narrow ? 0.2 : 0.35, Math.min(
+      1,
+      (centerSize.width - (narrow ? 32 : 130)) / 960,
+      (centerSize.height - 105) / 540,
+    ));
+  };
 
   // ── Render ──
   const project = projects.find((p) => p.id === id);
@@ -1240,15 +1702,16 @@ export default function EditorPage() {
   }
 
   const { name: title, templateId = 'soft-blue' } = project;
+  const deckMaster = parseDeckMaster(project.deckMaster);
+  const pageNumbersOn = hasPageNumbers(slides);
   const customTemplateOptions = customTemplates.map(toCustomTemplateOption);
-  const availableTemplates = [...TEMPLATES, ...customTemplateOptions];
+  const generatedOption = isGeneratedTheme(templateId) ? generatedTemplateOption(templateId) : null;
+  const availableTemplates = [...(generatedOption ? [generatedOption] : []), ...TEMPLATES, ...customTemplateOptions];
   const activeTemplate = availableTemplates.find((template) => template.id === templateId);
   const activeSlide = slides[activeIdx];
   const fitScale = getScale();
   const scale = fitScale * zoomPercent / 100;
 
-  const pptxExport = exportsList.find(exp => exp.exportType === 'PPTX' || exp.type === 'PPTX');
-  const pptxUrl = pptxExport?.s3Url || pptxExport?.url || project.slideUrl || (project.status === 2 ? '#' : null);
 
   return (
     <div className={`editor2-page ${fullscreen ? 'fullscreen' : ''}`}>
@@ -1293,10 +1756,6 @@ export default function EditorPage() {
                 {title}
               </button>
             )}
-            <span className="e2-badge">{slides.length} slides</span>
-            <span className="e2-template-chip" style={{ color: activeTemplate?.colors?.primary || '#666' }}>
-              {activeTemplate?.name || templateId}
-            </span>
           </div>
         </div>
         <div className="e2-top-right">
@@ -1317,8 +1776,11 @@ export default function EditorPage() {
           <button className="btn btn-ghost btn-sm" onClick={() => setFullscreen(!fullscreen)}>
             {fullscreen ? <><Minimize2 size={14}/> Thu nhỏ editor</> : <><Maximize2 size={14}/> Mở rộng editor</>}
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={startPresentation} disabled={!slides.length}>
+          <button className="btn btn-ghost btn-sm" onClick={() => startPresentation()} disabled={!slides.length}>
             <Play size={14}/> Trình chiếu
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={startPresenterView} disabled={!slides.length} title="Mở cửa sổ ghi chú, slide kế tiếp và đồng hồ cho người thuyết trình">
+            <MonitorPlay size={14}/> Chế độ diễn giả
           </button>
           <button
             type="button"
@@ -1356,7 +1818,7 @@ export default function EditorPage() {
             <div className="e2-export-menu">
               <button type="button" onClick={handleExportEditablePPTX}>
                 <strong>Chỉnh sửa được</strong>
-                <span>Text, ảnh, bảng và biểu đồ là object</span>
+                <span>Chữ, ảnh, bảng, biểu đồ và hình khối là object; biểu tượng là ảnh</span>
               </button>
               <button type="button" onClick={handleExportPPTX}>
                 <strong>Giữ nguyên giao diện</strong>
@@ -1384,17 +1846,26 @@ export default function EditorPage() {
         {/* ── LEFT: Slide thumbnails ── */}
         <div className="editor2-thumbs" style={{ width: leftPanelWidth }}>
           <div className="thumbs-header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <LayoutTemplate size={14}/>
-              <span>Slides</span>
-              <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', fontWeight: 400 }}>({slides.length})</span>
+            <div className="thumbs-header-row">
+              <div className="thumbs-header-title">
+                <LayoutTemplate size={15} />
+                <span>Slides</span>
+                <span className="thumbs-header-count">{slides.length}</span>
+              </div>
+              <button type="button" className="thumbs-add" onClick={() => addSlide()} title="Thêm slide mới" aria-label="Thêm slide">
+                <Plus size={15} strokeWidth={2.4} />
+                <span>Thêm</span>
+              </button>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: '0.68rem', color: TEMPLATES.find(t => t.id === templateId)?.colors?.primary || '#888', background: 'rgba(255,255,255,0.07)', borderRadius: 4, padding: '1px 6px', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {TEMPLATES.find((t) => t.id === templateId)?.name || templateId}
-              </span>
-              <button type="button" onClick={() => addSlide()} title="Thêm slide" aria-label="Thêm slide"><Plus size={14} /></button>
-            </div>
+            <button
+              type="button"
+              className="thumbs-theme"
+              onClick={() => handleTabClick('templates')}
+              title={`Template: ${activeTemplate?.name || (isCustomTemplateId(templateId) ? 'Từ file PPTX' : templateId)} — bấm để đổi`}
+            >
+              <i style={{ background: activeTemplate?.colors?.primary || '#888' }} />
+              <span>{activeTemplate?.name || (isCustomTemplateId(templateId) ? 'Từ file PPTX' : templateId)}</span>
+            </button>
           </div>
           <div
             className="thumbs-scroll"
@@ -1432,7 +1903,7 @@ export default function EditorPage() {
               >
                 <span className="thumb2-num">{i + 1}</span>
                 <div className="thumb2-preview">
-                  <UnifiedSlideView slide={sl} theme={templateId} index={i} scale={Math.max(0.1, (leftPanelWidth - 42) / 960)} />
+                  <UnifiedSlideView slide={sl} theme={templateId} scale={Math.max(0.1, (leftPanelWidth - 42) / 960)} />
                   <div className="thumb2-actions">
                     <button type="button" title="Kéo để đổi thứ tự" aria-label="Kéo để đổi thứ tự"><GripVertical size={12} /></button>
                     <button type="button" title="Nhân bản slide" aria-label="Nhân bản slide" onClick={(event) => { event.stopPropagation(); duplicateSlide(i); }}><Copy size={12} /></button>
@@ -1519,6 +1990,8 @@ export default function EditorPage() {
                       onNotify={addToast}
                       readonly={applyingTemplate}
                       preserveTemplateStyles={isCustomTemplateId(templateId)}
+                      onAdoptArt={adoptArtAt}
+                      onCopyToAllSlides={copyElementToAllSlides}
                     />
                   )}
                   </div>
@@ -1570,8 +2043,8 @@ export default function EditorPage() {
               <div className="e2-panel-header">
                 <h3>
                   {rightTab === 'ai' && 'AI Assistant'}
-                  {rightTab === 'templates' && 'Templates'}
-                  {rightTab === 'info' && 'Slide Info'}
+                  {rightTab === 'templates' && 'Template giao diện'}
+                  {rightTab === 'info' && 'Thông tin slide'}
                 </h3>
                 <button className="e2-panel-close-btn" onClick={() => setRightTab(null)}>
                   <X size={16} />
@@ -1582,10 +2055,10 @@ export default function EditorPage() {
                 {rightTab === 'ai' && (
                   <div className="e2-ai-panel">
                     <div className="e2-ai-chat-header">
-                      <div className="e2-ai-avatar">Charles</div>
+                      <div className="e2-ai-avatar"><Sparkles size={18} /></div>
                       <div className="e2-ai-greeting">
-                        <h4>Hey, I'm Charles your AI Assistant</h4>
-                        <p>Tôi có thể giúp bạn chỉnh sửa nội dung, hình ảnh, bảng biểu hoặc thêm/xóa slide bằng ngôn ngữ tự nhiên.</p>
+                        <h4>Trợ lý chỉnh sửa AI</h4>
+                        <p>Mô tả điều bạn muốn đổi: nội dung, hình ảnh, bảng biểu, hoặc thêm/xóa slide.</p>
                       </div>
                     </div>
 
@@ -1605,25 +2078,38 @@ export default function EditorPage() {
                       <>
                         <div className="e2-ai-suggestions">
                           <button className="e2-suggest-btn" onClick={() => setRevisionPrompt('Thêm một ảnh minh họa phù hợp, bám sát nội dung và phong cách của slide này.')}>
-                            Thêm ảnh minh họa
+                            <ImagePlus size={15} /> Thêm ảnh minh họa
                           </button>
                           <button className="e2-suggest-btn" onClick={() => setRevisionPrompt('Rút gọn nội dung slide này, giữ nguyên các thông tin quan trọng và diễn đạt súc tích, dễ thuyết trình.')}>
-                            Rút gọn nội dung
+                            <Scissors size={15} /> Rút gọn nội dung
                           </button>
                           <button className="e2-suggest-btn" onClick={() => setRevisionPrompt('Cải thiện tiêu đề slide này để rõ trọng tâm và thu hút hơn, không làm thay đổi ý nghĩa chính.')}>
-                            Cải thiện tiêu đề
+                            <Type size={15} /> Cải thiện tiêu đề
                           </button>
                           <button className="e2-suggest-btn" onClick={() => setRevisionPrompt('Trình bày nội dung slide này trực quan hơn bằng bảng hoặc biểu đồ phù hợp, giữ nguyên dữ liệu và thông điệp chính.')}>
-                            Trình bày trực quan
+                            <BarChart3 size={15} /> Trình bày trực quan
                           </button>
                         </div>
 
+                        {revisionError && (
+                          <div className="e2-ai-error" role="alert">
+                            <AlertCircle size={15} aria-hidden="true" />
+                            <div>
+                              <strong>{revisionError.title}</strong>
+                              <span>{revisionError.detail}</span>
+                              <div className="e2-ai-error-actions">
+                                {revisionError.action === 'upgrade' && <button type="button" className="primary" onClick={() => navigate('/pricing')}>Nâng cấp gói</button>}
+                                <button type="button" onClick={() => setRevisionError(null)}>Đóng</button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         <div className="e2-ai-input-area">
                           <textarea
                             className="e2-ai-textarea"
                             placeholder="Nhập yêu cầu của bạn (ví dụ: 'Đổi tiêu đề thành...', 'Thêm slide mới...')"
                             value={revisionPrompt}
-                            onChange={(e) => setRevisionPrompt(e.target.value)}
+                            onChange={(e) => { setRevisionPrompt(e.target.value); if (revisionError) setRevisionError(null); }}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && !e.shiftKey) {
                                 e.preventDefault();
@@ -1632,7 +2118,7 @@ export default function EditorPage() {
                             }}
                           />
                           <div className="e2-ai-input-footer">
-                            <span className="e2-ai-input-tip">Nhấn Enter để gửi</span>
+                            <span className="e2-ai-input-tip">Áp dụng cho <strong>slide {activeIdx + 1}</strong> · Enter để gửi</span>
                             <button className="e2-ai-send-btn" onClick={() => handleAIRevise()} disabled={!revisionPrompt.trim()}>
                               <ChevronRight size={16} />
                             </button>
@@ -1666,20 +2152,105 @@ export default function EditorPage() {
                       </button>
                     </div>
 
+                    <div className="e2-settings">
+                      <div className="e2-set-row">
+                        <span><Hash size={15} /> Số trang</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={pageNumbersOn}
+                          aria-label="Số trang"
+                          className={`e2-switch${pageNumbersOn ? ' on' : ''}`}
+                          onClick={togglePageNumbers}
+                          title="Thêm hoặc bỏ số trang ở mọi slide"
+                        />
+                      </div>
+                      <div className="e2-set-row">
+                        <span><Sparkles size={15} /> Hiện từng ý khi trình chiếu</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={deckMaster.revealBullets}
+                          aria-label="Hiện từng ý khi trình chiếu"
+                          className={`e2-switch${deckMaster.revealBullets ? ' on' : ''}`}
+                          onClick={() => updateDeckMaster({ revealBullets: !deckMaster.revealBullets })}
+                        />
+                      </div>
+                      <div className="e2-set-block">
+                        <span className="e2-set-label">Chuyển trang</span>
+                        <div className="e2-seg" role="radiogroup" aria-label="Hiệu ứng chuyển trang">
+                          {[['none', 'Không'], ['fade', 'Mờ'], ['push', 'Trượt'], ['zoom', 'Phóng']].map(([value, label]) => (
+                            <button
+                              key={value}
+                              type="button"
+                              role="radio"
+                              aria-checked={deckMaster.transition === value}
+                              className={deckMaster.transition === value ? 'active' : ''}
+                              onClick={() => updateDeckMaster({ transition: value })}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
                     {templateMode === 'default' ? (
                       <>
-                        <p className="e2-panel-hint">Chọn template để áp dụng ngay cho toàn bộ bài trình chiếu</p>
+                        {ornamentsAdopted && isGeneratedTheme(templateId) && (
+                          <button type="button" className="e2-save-theme-btn" style={{ marginTop: 0, marginBottom: 12 }} onClick={restoreOrnaments}>
+                            Khôi phục trang trí của template
+                          </button>
+                        )}
                         <div className="e2-template-grid">
-                          {TEMPLATES.map((tmpl) => (
+                          {[...(generatedOption ? [generatedOption] : []), ...TEMPLATES].map((tmpl) => (
                             <TemplateCard
                               key={tmpl.id}
                               template={tmpl}
                               selected={templateId === tmpl.id}
-                              disabled={applyingTemplate || templateUploading || Boolean(templateDeletingId)}
+                              disabled={applyingTemplate || generatingTheme || templateUploading || Boolean(templateDeletingId)}
                               onSelect={handleTemplateSwitch}
                             />
                           ))}
                         </div>
+                        {generatedOption && (
+                          <>
+                            <button type="button" className="e2-save-theme-btn e2-tune-toggle" onClick={() => setTunerOpen((open) => !open)} aria-expanded={tunerOpen}>
+                              {tunerOpen ? 'Ẩn tuỳ chỉnh' : 'Tuỳ chỉnh màu, chữ, trang trí…'}
+                            </button>
+                            {tunerOpen && (
+                              <ThemeTuner
+                                code={templateId}
+                                disabled={applyingTemplate || generatingTheme}
+                                onChange={tuneTheme}
+                                onPreviewHue={previewHue}
+                                onReset={genOriginRef.current.projectId === id && genOriginRef.current.code && genOriginRef.current.code !== templateId ? resetTunedTheme : undefined}
+                              />
+                            )}
+                          </>
+                        )}
+                        {generatedOption && !savedThemes.some((item) => item.description === templateId) && (
+                          <button type="button" className="e2-save-theme-btn" onClick={saveCurrentTheme}>
+                            <Save size={14} /> Lưu template này vào thư viện
+                          </button>
+                        )}
+                        {savedThemes.length > 0 && (
+                          <>
+                            <p className="e2-panel-hint">Template đã lưu của bạn</p>
+                            <div className="e2-template-grid">
+                              {savedThemes.map((saved) => savedThemeOption(saved)).map((tmpl) => (
+                                <TemplateCard
+                                  key={tmpl.savedId}
+                                  template={tmpl}
+                                  selected={templateId === tmpl.id}
+                                  disabled={applyingTemplate || generatingTheme || templateUploading || Boolean(templateDeletingId)}
+                                  onSelect={handleTemplateSwitch}
+                                  onDelete={deleteSavedTheme}
+                                />
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </>
                     ) : (
                       <>
@@ -1739,13 +2310,30 @@ export default function EditorPage() {
                   <div className="e2-info-panel">
                     <InfoRow label="Slide hiện tại" value={`${activeIdx + 1} / ${slides.length}`} />
                     <label className="e2-layout-field">
-                      <span>Bố cục</span>
-                      <select value={activeSlide?.type || 'content'} onChange={(event) => changeSlideLayout(event.target.value)}>
-                        {SLIDE_LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
+                      <span>Loại nội dung</span>
+                      <span className="e2-select-wrap">
+                      <select
+                        value={activeSlide?.type || 'content'}
+                        title="Đổi loại nội dung sẽ dựng lại khung của slide này"
+                        onChange={(event) => requestSlideTypeChange(event.target.value)}
+                      >
+                        {SLIDE_LAYOUTS
+                          .filter((layout) => layout.value !== 'twoColumn' || activeSlide?.type === 'twoColumn')
+                          .map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
                       </select>
+                      <ChevronDown size={14} />
+                      </span>
                     </label>
-                    <InfoRow label="Template" value={activeTemplate?.name || templateId} />
-                    <InfoRow label="Tiêu đề" value={activeSlide?.title || '—'} />
+                    <LayoutPicker
+                      slide={activeSlide}
+                      theme={layoutThemeFor(activeSlide, templateId)}
+                      disabled={applyingTemplate}
+                      onPick={changeSlideVariant}
+                      onAutoMix={autoMixLayouts}
+                      onResetAll={resetAllLayouts}
+                    />
+                    <InfoRow label="Template" value={activeTemplate?.name || (isCustomTemplateId(templateId) ? 'Từ file PPTX' : templateId)} />
+                    <InfoRow label="Tiêu đề" value={activeSlide?.title || '—'} stacked />
                     {activeSlide?.pedagogicalRole && (
                       <InfoRow
                         label="Vai trò bài giảng"
@@ -1793,7 +2381,7 @@ export default function EditorPage() {
             </button>
             <button className={`e2-vtab-btn ${rightTab === 'info' ? 'active' : ''}`} onClick={() => handleTabClick('info')}>
               <Info size={18} />
-              <span>Slide info</span>
+              <span>Thông tin</span>
             </button>
           </div>
         </div>
@@ -1817,7 +2405,7 @@ export default function EditorPage() {
       <div ref={exportStageRef} className="e2-export-stage" aria-hidden="true" style={{ position: 'fixed', left: -12000, top: 0, width: 960, pointerEvents: 'none' }}>
         {slides.map((slide, index) => (
           <div key={slide.id || index} data-export-slide style={{ width: 960, height: 540, overflow: 'hidden' }}>
-            <UnifiedSlideView slide={slide} theme={templateId} index={index} scale={1} />
+            <UnifiedSlideView slide={slide} theme={templateId} scale={1} />
           </div>
         ))}
       </div>
@@ -1826,13 +2414,25 @@ export default function EditorPage() {
           ref={presentationRef}
           className="e2-presentation"
           onClick={(event) => {
-            if (event.clientX < window.innerWidth / 2) {
-              setActiveIdx(Math.max(0, activeIdx - 1));
-            } else {
-              setActiveIdx(Math.min(slides.length - 1, activeIdx + 1));
-            }
+            if (event.clientX < window.innerWidth / 2) presentPrev();
+            else presentNext();
           }}
         >
+          {presenterMode ? (
+            <PresenterView
+              slides={slides}
+              activeIdx={activeIdx}
+              revealStage={revealStage}
+              revealEnabled={deckMaster.revealBullets}
+              revealTotal={countRevealStages(activeSlide)}
+              theme={templateId}
+              audienceOpen={audienceOpen}
+              onNext={presentNext}
+              onPrev={presentPrev}
+              onOpenAudience={openAudienceWindow}
+              onExit={stopPresentation}
+            />
+          ) : (
           <div
             className="e2-presentation-slide"
             style={{
@@ -1840,96 +2440,39 @@ export default function EditorPage() {
               height: 540 * Math.min(presentationViewport.width / 960, presentationViewport.height / 540),
             }}
           >
-            <UnifiedSlideView
-              slide={activeSlide}
-              theme={templateId}
-              index={activeIdx}
-              scale={Math.min(presentationViewport.width / 960, presentationViewport.height / 540)}
-            />
+            <SlideTransition slideKey={activeIdx} transition={deckMaster.transition}>
+              <UnifiedSlideView
+                slide={activeSlide}
+                theme={templateId}
+                scale={Math.min(presentationViewport.width / 960, presentationViewport.height / 540)}
+                revealStage={deckMaster.revealBullets ? revealStage : null}
+              />
+            </SlideTransition>
           </div>
-          <div className="e2-presentation-controls" onClick={(event) => event.stopPropagation()}>
-            <button onClick={() => setActiveIdx(Math.max(0, activeIdx - 1))} disabled={activeIdx === 0} title="Slide trước">
+          )}
+          {!presenterMode && <div className="e2-presentation-controls" onClick={(event) => event.stopPropagation()}>
+            <button onClick={presentPrev} disabled={activeIdx === 0 && revealStage === 0} title="Lùi (ý trước / slide trước)">
               <ChevronLeft size={20}/>
             </button>
             <span><Presentation size={16}/> {activeIdx + 1} / {slides.length}</span>
-            <button onClick={() => setActiveIdx(Math.min(slides.length - 1, activeIdx + 1))} disabled={activeIdx === slides.length - 1} title="Slide sau">
+            <button onClick={presentNext} disabled={activeIdx === slides.length - 1 && (!deckMaster.revealBullets || revealStage >= countRevealStages(activeSlide))} title="Tiếp (ý kế / slide sau)">
               <ChevronRight size={20}/>
             </button>
-          </div>
-          <button className="e2-presentation-exit" onClick={(event) => { event.stopPropagation(); stopPresentation(); }} title="Thoát trình chiếu">
+          </div>}
+          {!presenterMode && <button className="e2-presentation-exit" onClick={(event) => { event.stopPropagation(); stopPresentation(); }} title="Thoát trình chiếu">
             <X size={20}/>
-          </button>
+          </button>}
         </div>
       )}
     </div>
   );
 }
 
-function InfoRow({ label, value }) {
+function InfoRow({ label, value, stacked = false }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.85rem' }}>
-      <span style={{ color: 'rgba(255,255,255,0.45)' }}>{label}</span>
-      <strong style={{ color: 'white', textTransform: 'capitalize', textAlign: 'right', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</strong>
+    <div className={`e2-info-row ${stacked ? 'stacked' : ''}`}>
+      <span className="e2-info-label">{label}</span>
+      <strong className="e2-info-value" title={String(value)}>{value}</strong>
     </div>
   );
-}
-
-// Helper sinh mock slides nếu API chưa trả về slide
-function getMockSlides(topic) {
-  return [
-    {
-      id: 's1',
-      type: 'title',
-      title: topic,
-      subtitle: 'Tài liệu thuyết trình được khởi tạo tự động bởi AI',
-      imagePrompt: 'A beautiful slide layout',
-      imageUrl: '',
-      pageIndex: 0
-    },
-    {
-      id: 's2',
-      type: 'content',
-      title: 'Giới thiệu tổng quan',
-      bullets: [
-        `Khái niệm cơ bản liên quan đến ${topic}`,
-        'Các thành phần cốt lõi và nguyên lý hoạt động',
-        'Tầm quan trọng trong bối cảnh hiện đại',
-        'Mục tiêu và đối tượng hướng đến'
-      ],
-      imagePrompt: 'An analysis diagram',
-      imageUrl: '',
-      pageIndex: 1
-    },
-    {
-      id: 's3',
-      type: 'twoColumn',
-      title: 'Phân tích Chi tiết',
-      left: { heading: '✅ Cơ hội & Lợi ích', points: ['Tăng hiệu suất làm việc', 'Tự động hóa quy trình', 'Giảm thiểu sai sót con người'] },
-      right: { heading: '⚠️ Thách thức & Rủi ro', points: ['Chi phí triển khai ban đầu cao', 'Yêu cầu bảo mật thông tin nghiêm ngặt', 'Sự phụ thuộc vào công nghệ'] },
-      imagePrompt: 'A scale showing balance',
-      imageUrl: '',
-      pageIndex: 2
-    },
-    {
-      id: 's4',
-      type: 'quote',
-      title: 'Góc nhìn Chuyên gia',
-      quote: `"${topic} không chỉ là một công nghệ mới, nó là một cuộc cách mạng thay đổi cách chúng ta tư duy và làm việc hàng ngày."`,
-      author: 'Dr. Alex Rivera',
-      role: 'Giám đốc Nghiên cứu AI',
-      imagePrompt: 'A professional portrait illustration',
-      imageUrl: '',
-      pageIndex: 3
-    },
-    {
-      id: 's5',
-      type: 'thankyou',
-      title: 'Cảm ơn!',
-      subtitle: 'Rất mong nhận được câu hỏi và đóng góp ý kiến.',
-      contact: 'contact@lecgen.ai',
-      imagePrompt: 'A simple thank you card',
-      imageUrl: '',
-      pageIndex: 4
-    }
-  ];
 }

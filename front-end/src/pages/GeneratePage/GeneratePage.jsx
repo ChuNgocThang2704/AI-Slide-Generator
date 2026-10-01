@@ -3,9 +3,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
 import { projectService, documentService } from '../../services/documentService';
 import { evaluatePromptQuality } from '../../utils/promptQuality';
+import { codeFromBrief, makeThemeCode } from '../../utils/generatedTheme';
+import { explainGenerationError } from '../../utils/generationErrors';
 import {
   Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X,
-  LayoutDashboard, AlertCircle, CheckCircle2, Library, Search,
+  LayoutDashboard, AlertCircle, CheckCircle2, Library, Search, PenLine, FolderOpen,
 } from 'lucide-react';
 import './GeneratePage.css';
 
@@ -46,6 +48,8 @@ export default function GeneratePage() {
     prompt: '',
     slideCount: 8,
   });
+  // Why the last attempt failed, shown right under the prompt (not a toast that disappears).
+  const [genError, setGenError] = useState(null);
   const promptQuality = evaluatePromptQuality(form.prompt, { hasFile: Boolean(uploadedFileData) });
 
   // Progress states
@@ -212,6 +216,7 @@ export default function GeneratePage() {
     }
 
     let intervalId = null;
+    setGenError(null);
 
     try {
       setLoading(true);
@@ -222,7 +227,8 @@ export default function GeneratePage() {
       
       const project = await projectService.create(
         promptText,
-        'soft-blue',
+        // Every prompt gets its own template, derived from the subject.
+        makeThemeCode(promptText),
         promptText,
         uploadedFileData?.fileUrl || null,
         uploadedFileData?.fileName || null,
@@ -231,6 +237,15 @@ export default function GeneratePage() {
       );
       
       addProject(project);
+      // The keyword-based template is applied at once; the AI's design for the same subject
+      // replaces it in the background (the slides are still being generated meanwhile).
+      projectService.themeBrief(promptText).then((brief) => {
+        if (!brief) return null;
+        const code = codeFromBrief(brief, promptText);
+        return projectService.update(project.id, { templateId: code }).then(() => {
+          updateProject(project.id, { templateId: code });
+        });
+      }).catch(() => {});
       setCurrentProjectId(project.id);
       setProgressVal(0);
       setProgressStatus('Đang bắt đầu tạo slide...');
@@ -259,7 +274,7 @@ export default function GeneratePage() {
             setPollingIntervalId(null);
             setShowProgress(false);
             setLoading(false);
-            addToast('Không thể tạo slide. Vui lòng kiểm tra nội dung và thử lại.', 'error');
+            setGenError(explainGenerationError(res.errorMessage));
           } else if (status === 'cancelled') {
             clearInterval(intervalId);
             setPollingIntervalId(null);
@@ -276,7 +291,7 @@ export default function GeneratePage() {
       setPollingIntervalId(intervalId);
 
     } catch (err) {
-      addToast(err.message || 'Tạo project thất bại', 'error');
+      setGenError(explainGenerationError(err.message, { status: err.status }));
       setShowProgress(false);
       setLoading(false);
     }
@@ -296,25 +311,46 @@ export default function GeneratePage() {
         <div className="gen2-form-card">
           {/* Prompt */}
           <div className="gen2-field">
-            <label className="gen2-label">📝 Chủ đề thuyết trình</label>
+            <label className="gen2-label"><PenLine size={15} /> Chủ đề thuyết trình</label>
             <textarea
               id="gen-prompt"
               className="input gen2-textarea"
               rows={4}
               placeholder="Ví dụ: Giới thiệu về Trí Tuệ Nhân Tạo và ứng dụng trong giáo dục hiện đại..."
               value={form.prompt}
-              onChange={(e) => setForm({ ...form, prompt: e.target.value })}
+              onChange={(e) => { setForm({ ...form, prompt: e.target.value }); if (genError) setGenError(null); }}
               disabled={loading || uploading}
             />
-            <div className={`gen2-prompt-quality ${promptQuality.level}`} role="status">
-              {promptQuality.valid
-                ? <CheckCircle2 size={16} aria-hidden="true" />
-                : <AlertCircle size={16} aria-hidden="true" />}
-              <div>
-                <strong>{promptQuality.label}</strong>
-                <span>{promptQuality.message}</span>
+            {genError ? (
+              <div className="gen2-prompt-quality error" role="alert">
+                <AlertCircle size={16} aria-hidden="true" />
+                <div>
+                  <strong>{genError.title}</strong>
+                  <span>{genError.detail}</span>
+                  {genError.action && (
+                    <div className="gen2-error-actions">
+                      {genError.action === 'upgrade' && (
+                        <button type="button" className="gen2-error-btn primary" onClick={() => navigate('/pricing')}>Nâng cấp gói</button>
+                      )}
+                      {genError.action === 'retry' && (
+                        <button type="button" className="gen2-error-btn primary" onClick={handleCreate} disabled={loading}>Thử lại</button>
+                      )}
+                      <button type="button" className="gen2-error-btn" onClick={() => setGenError(null)}>Đóng</button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className={`gen2-prompt-quality ${promptQuality.level}`} role="status">
+                {promptQuality.valid
+                  ? <CheckCircle2 size={16} aria-hidden="true" />
+                  : <AlertCircle size={16} aria-hidden="true" />}
+                <div>
+                  <strong>{promptQuality.label}</strong>
+                  <span>{promptQuality.message}</span>
+                </div>
+              </div>
+            )}
             <div className="gen2-suggestions">
               {PROMPT_SUGGESTIONS.map((suggestion) => (
                 <button
@@ -333,7 +369,7 @@ export default function GeneratePage() {
           {/* File Upload Zone */}
           <div className="gen2-field">
             <div className="gen2-source-heading">
-              <label className="gen2-label">📁 Tài liệu nguồn (PDF / DOCX)</label>
+              <label className="gen2-label"><FolderOpen size={15} /> Tài liệu nguồn (PDF / DOCX)</label>
               <button
                 type="button"
                 className="gen2-library-trigger"

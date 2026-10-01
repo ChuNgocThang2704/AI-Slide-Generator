@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { withGeneratedThemes } from '../../utils/generatedTheme';
 import { motion } from 'framer-motion';
 import { TiptapInlineEditor } from './TiptapEditor';
 import './EditableSlide.css';
@@ -11,7 +12,7 @@ import { fitTextToBox } from '../../utils/textFit';
 import { inferImageFit } from '../../utils/imageFit';
 
 // ─── Theme map (same as SlideRenderer) ───────────────────────────────────────
-export const THEMES = {
+export const BASE_THEMES = {
   'soft-blue': {
     id: 'soft-blue',
     bg: '#f8fbff', bgGrad: 'linear-gradient(160deg, #f0f7ff 0%, #ffffff 55%, #e8f4fd 100%)',
@@ -62,7 +63,7 @@ export const THEMES = {
     text: '#2e1e0a', textSub: 'rgba(46,30,10,0.72)',
     surface: 'rgba(245,158,11,0.08)', surfaceBorder: 'rgba(245,158,11,0.25)',
     accentGrad: 'linear-gradient(135deg,#f59e0b,#8b5cf6)',
-    fontTitle: "'Fredoka One', cursive", fontBody: "'Inter', sans-serif",
+    fontTitle: "'Baloo 2', cursive", fontBody: "'Inter', sans-serif",
     isLight: true,
   },
   'gradient-border': {
@@ -102,10 +103,43 @@ export const THEMES = {
     text: '#ffffff', textSub: 'rgba(255,255,255,0.65)',
     surface: 'rgba(255,255,255,0.06)', surfaceBorder: 'rgba(224,86,253,0.35)',
     accentGrad: 'linear-gradient(135deg,#9b59b6,#e056fd)',
-    fontTitle: "'Rajdhani', sans-serif", fontBody: "'Inter', sans-serif",
+    fontTitle: "'Saira', sans-serif", fontBody: "'Inter', sans-serif",
+    isLight: false,
+  },
+  'ocean-teal': {
+    id: 'ocean-teal',
+    bg: '#f0fdfa', bgGrad: 'linear-gradient(160deg, #ecfeff 0%, #ffffff 55%, #d9f6f3 100%)',
+    primary: '#0f766e', accent: '#14b8a6', accentAlt: '#5eead4',
+    text: '#083344', textSub: '#3f6b73',
+    surface: '#e6f7f5', surfaceAlt: '#ffffff', surfaceBorder: 'rgba(20, 184, 166, 0.28)',
+    accentGrad: 'linear-gradient(135deg, #0f766e 0%, #14b8a6 60%, #5eead4 100%)',
+    panelBg: 'linear-gradient(160deg, #0f766e 0%, #14b8a6 100%)',
+    fontTitle: "'Nunito', sans-serif", fontBody: "'Inter', sans-serif",
+    isLight: true,
+  },
+  'editorial-paper': {
+    id: 'editorial-paper',
+    bg: '#f6efe3', bgGrad: 'linear-gradient(160deg, #f9f2e6 0%, #f3e9d8 100%)',
+    primary: '#7c2d12', accent: '#c2410c',
+    text: '#2b1d12', textSub: '#6b5646',
+    surface: '#efe4d0', surfaceAlt: '#fbf6ec', surfaceBorder: 'rgba(124, 45, 18, 0.22)',
+    accentGrad: 'linear-gradient(135deg, #7c2d12, #c2410c)',
+    fontTitle: "'Merriweather', serif", fontBody: "'Inter', sans-serif",
+    isLight: true,
+  },
+  'midnight-gold': {
+    id: 'midnight-gold',
+    bg: '#0b0f1a', bgGrad: 'linear-gradient(145deg, #0a0e19 0%, #121a2f 100%)',
+    primary: '#d4a72c', accent: '#f5c542',
+    text: '#f8f5e6', textSub: 'rgba(248,245,230,0.72)',
+    surface: 'rgba(245,197,66,0.07)', surfaceBorder: 'rgba(245,197,66,0.3)',
+    accentGrad: 'linear-gradient(135deg, #d4a72c, #f5c542)',
+    fontTitle: "'Playfair Display', serif", fontBody: "'Inter', sans-serif",
     isLight: false,
   },
 };
+
+export const THEMES = withGeneratedThemes(BASE_THEMES, (built) => built.theme);
 
 // ─── Inline editable text (Tiptap-powered) ───────────────────────────────────
 function plainTextLength(value) {

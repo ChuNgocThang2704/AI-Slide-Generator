@@ -1,38 +1,227 @@
-export const ADAPTIVE_TEMPLATES = new Set([
+import { plainText as htmlToPlain } from './textFit.js';
+import { isGeneratedTheme, buildGeneratedTheme } from './generatedTheme.js';
+
+/* ───────────────────────────── Themes & tokens ───────────────────────────── */
+
+// Generated (prompt-driven) templates use the same adaptive layout engine.
+class AdaptiveTemplateSet extends Set {
+  has(value) { return super.has(value) || isGeneratedTheme(value); }
+}
+export const ADAPTIVE_TEMPLATES = new AdaptiveTemplateSet([
   'soft-blue', 'clean-white', 'blue-planet', 'royal-purple', 'modern-dark',
   'playful-yellow', 'gradient-border', 'nature-green', 'tech-purple',
+  'ocean-teal', 'editorial-paper', 'midnight-gold',
 ]);
 
-const BOUNDARY_LABELS = new Set(['BÀI GIẢNG', 'LECTURE', 'KẾT THÚC BÀI GIẢNG', 'END OF LECTURE']);
-const plainText = (value) => String(value || '').replace(/<[^>]*>/g, '').trim().toUpperCase();
+// Per-theme design tokens. Themes differ by palette, typography, title
+// treatment and their default cover/closing composition — NOT by moving the
+// everyday content slide away from the traditional "title on top, text below".
+const DESIGN = {
+  'soft-blue': { accent: '#0d5099', onAccent: '#fefefe', titleSize: 36, weight: 700, decor: null, cover: 'cover-left', closing: 'closing-cards' },
+  'royal-purple': { accent: '#9948ff', onAccent: '#fefefe', titleSize: 36, weight: 700, decor: null, cover: 'cover-center', closing: 'closing-center' },
+  'clean-white': { accent: '#4f46e5', onAccent: '#fefefe', titleSize: 36, weight: 700, decor: null, cover: 'cover-split', closing: 'closing-list' },
+  'modern-dark': { accent: '#6c63ff', onAccent: '#fefefe', titleSize: 36, weight: 700, decor: 'underline', cover: 'cover-hero', closing: 'closing-cards' },
+  'playful-yellow': { accent: '#f59e0b', onAccent: '#2e1e0a', titleSize: 38, weight: 400, decor: 'underline', cover: 'cover-center', closing: 'closing-center' },
+  'gradient-border': { accent: '#6c63ff', onAccent: '#fefefe', titleSize: 36, weight: 700, decor: 'underline', cover: 'cover-left', closing: 'closing-cards' },
+  'blue-planet': { accent: '#00f2fe', onAccent: '#031233', titleSize: 36, weight: 700, decor: 'underline', cover: 'cover-left', closing: 'closing-cards', safeRight: 740, circleImages: true },
+  'nature-green': { accent: '#2ecc71', onAccent: '#062314', titleSize: 34, weight: 700, decor: 'underline', cover: 'cover-split', closing: 'closing-cards' },
+  'tech-purple': { accent: '#e056fd', onAccent: '#1a0526', titleSize: 36, weight: 700, decor: 'underline', cover: 'cover-center', closing: 'closing-cards' },
+  'ocean-teal': { accent: '#0f766e', onAccent: '#fefefe', titleSize: 36, weight: 700, decor: 'underline', cover: 'cover-left', closing: 'closing-cards' },
+  'editorial-paper': { accent: '#c2410c', onAccent: '#fefefe', titleSize: 34, weight: 700, decor: 'underline', cover: 'cover-split', closing: 'closing-list' },
+  'midnight-gold': { accent: '#f5c542', onAccent: '#1a1300', titleSize: 38, weight: 700, decor: 'underline', cover: 'cover-hero', closing: 'closing-center' },
+};
+const designOf = (theme) => ({
+  pad: 64,
+  safeRight: 896,
+  ...(DESIGN[theme] || (isGeneratedTheme(theme) ? buildGeneratedTheme(theme).design : null) || DESIGN['soft-blue']),
+});
 
-export function normalizeBoundaryElements(elements = [], type, theme) {
-  if (!['title', 'thankyou'].includes(type)) return elements;
-  const closingLayout = type === 'thankyou' ? CLOSING_LAYOUTS[theme] : null;
-  let changed = false;
-  const normalized = elements.flatMap((element) => {
-    if (element.type === 'text' && element.role === 'custom' && BOUNDARY_LABELS.has(plainText(element.content))) {
-      changed = true;
-      return [];
-    }
-    if (closingLayout && element.type === 'text' && ['title', 'body'].includes(element.role)
-      && element.templateLayout === 'cover') {
-      const bounds = element.role === 'title' ? closingLayout.title : closingLayout.body;
-      const fontSize = element.role === 'body' && [20, 22, 26].includes(Number(element.style?.fontSize))
-        ? 24 : element.style?.fontSize;
-      const next = { ...element, ...bounds, style: { ...element.style, fontSize } };
-      if (['x', 'y', 'width', 'height'].some((key) => next[key] !== element[key])
-        || fontSize !== element.style?.fontSize) changed = true;
-      return [next];
-    }
-    if (type === 'thankyou' && element.type === 'text' && element.role === 'body'
-      && element.templateLayout === 'cover' && [20, 22].includes(Number(element.style?.fontSize))) {
-      changed = true;
-      return [{ ...element, style: { ...element.style, fontSize: 24 } }];
-    }
-    return [element];
+/* ───────────────────────────── Variant catalogue ─────────────────────────── */
+
+export const LAYOUT_VARIANTS = {
+  text: [
+    { id: 'classic', label: 'Cổ điển' },
+    { id: 'columns', label: '2 cột' },
+    { id: 'cards', label: 'Thẻ' },
+    { id: 'rail', label: 'Tiêu đề trái' },
+    { id: 'centered', label: 'Căn giữa' },
+    { id: 'banner', label: 'Banner' },
+  ],
+  image: [
+    { id: 'image-right', label: 'Ảnh phải' },
+    { id: 'image-left', label: 'Ảnh trái' },
+    { id: 'image-top', label: 'Ảnh ngang' },
+    { id: 'image-focus', label: 'Ảnh lớn' },
+  ],
+  data: [
+    { id: 'data-full', label: 'Toàn chiều rộng' },
+    { id: 'data-side', label: 'Chữ trái' },
+    { id: 'data-side-right', label: 'Chữ phải' },
+  ],
+  cover: [
+    { id: 'cover-center', label: 'Giữa' },
+    { id: 'cover-left', label: 'Trái' },
+    { id: 'cover-split', label: 'Chia đôi' },
+    { id: 'cover-hero', label: 'Nổi bật' },
+  ],
+  closing: [
+    { id: 'closing-cards', label: 'Thẻ' },
+    { id: 'closing-list', label: 'Danh sách' },
+    { id: 'closing-center', label: 'Căn giữa' },
+    { id: 'closing-split', label: 'Chia đôi' },
+  ],
+};
+
+const VARIANT_KEYS = new Set(['--slide-cols', '--slide-card-cols', '--decor-accent']);
+const LIST_VARIANT_CLASSES = ['slide-cards', 'slide-plain'];
+
+/* ───────────────────────────── Small helpers ─────────────────────────────── */
+
+const box = (x, y, width, height) => ({ x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) });
+const textLength = (value) => String(value || '').replace(/<[^>]*>/g, '').length;
+const itemCount = (html) => (String(html || '').match(/<li\b/gi) || []).length;
+
+// The layout model mirrors what the canvas actually paints (list indent, item
+// spacing, unbreakable column items, card padding) so a saved box always holds
+// its text — thumbnails and presentations never get to auto-grow a clipped box.
+const GLYPH = 0.55;
+const LIST_INDENT_EM = 1.75;
+const ITEM_GAP_EM = 0.7;
+
+function splitItems(html) {
+  const source = String(html || '');
+  if (/<li\b/i.test(source)) {
+    return source.split(/<\/li>/i).map((part) => htmlToPlain(part)).filter(Boolean);
+  }
+  return htmlToPlain(source).split(/\n+/).filter(Boolean);
+}
+
+function linesFor(text, width, size, glyph = GLYPH) {
+  const cpl = Math.max(6, Math.floor(width / (size * glyph)));
+  return Math.max(1, Math.ceil(text.length / cpl));
+}
+
+function itemHeights(items, width, size, lineHeight, indent) {
+  const usable = Math.max(40, width - 16 - indent * size);
+  return items.map((text) => linesFor(text, usable, size) * size * lineHeight);
+}
+
+// Smallest column height that fits the items when an item cannot split.
+function packColumns(heights, gap, cols) {
+  if (cols <= 1) return heights.reduce((sum, h) => sum + h, 0) + gap * Math.max(0, heights.length - 1);
+  const tallest = Math.max(0, ...heights);
+  let low = tallest;
+  let high = heights.reduce((sum, h) => sum + h, 0) + gap * heights.length;
+  const fits = (limit) => {
+    let used = 1;
+    let filled = 0;
+    heights.forEach((h) => {
+      const next = filled ? filled + gap + h : h;
+      if (next > limit) { used += 1; filled = h; } else filled = next;
+    });
+    return used <= cols;
+  };
+  for (let i = 0; i < 24; i += 1) {
+    const mid = (low + high) / 2;
+    if (fits(mid)) high = mid; else low = mid;
+  }
+  return Math.ceil(high);
+}
+
+// mode: 'list' (bulleted flow), 'plain' (no markers, e.g. centred), 'cards'.
+function measureBody(html, width, size, { lineHeight = 1.5, cols = 1, mode = 'list', cardCols = 2 } = {}) {
+  const items = splitItems(html);
+  if (!items.length) return Math.ceil(size * lineHeight + 16);
+  const gap = size * (mode === 'plain' ? 0.82 : ITEM_GAP_EM);
+  if (mode === 'cards') {
+    const cardW = (width - 14 * (cardCols - 1)) / cardCols;
+    const heights = itemHeights(items, cardW - 34, size, 1.45, 0).map((h) => h + 28);
+    let total = 0;
+    for (let row = 0; row < heights.length; row += cardCols) total += Math.max(...heights.slice(row, row + cardCols));
+    return Math.ceil(total + 14 * (Math.ceil(heights.length / cardCols) - 1) + 8);
+  }
+  const indent = mode === 'plain' ? 0 : LIST_INDENT_EM;
+  const colW = cols > 1 ? (width - 40 * (cols - 1)) / cols : width;
+  const heights = itemHeights(items, colW, size, lineHeight, indent);
+  const trailing = mode === 'plain' && items.length > 1 ? size * 0.6 : 0;
+  return Math.ceil(packColumns(heights, gap, cols) + 10 + trailing);
+}
+
+// Largest size whose measured height fits; falls back to `min` (clamped to the
+// area so geometry stays on the canvas even for extreme amounts of text).
+// Sizes below `min` are tried only when the text would otherwise be clipped.
+function planBody(html, width, maxHeight, { min = 13, max = 24, ...options } = {}) {
+  const floor = Math.min(min, 11);
+  for (let size = max; size >= floor; size -= 0.5) {
+    const height = measureBody(html, width, size, options);
+    if (height <= maxHeight) return { fs: size, h: Math.max(44, height) };
+  }
+  return { fs: floor, h: Math.min(maxHeight, Math.max(44, measureBody(html, width, floor, options))) };
+}
+
+// `extra` is padding a title treatment adds (the underline reserves space below).
+function fitTitle(text, width, { max, min = 22, maxLines = 2, weight = 700, extra = 0 }) {
+  const len = Math.max(1, textLength(text));
+  const glyph = weight >= 700 ? 0.54 : 0.5;
+  let size = max;
+  for (; size > min; size -= 1) {
+    const cpl = Math.max(6, Math.floor((width - 16) / (size * glyph)));
+    if (Math.ceil(len / cpl) <= maxLines) break;
+  }
+  const cpl = Math.max(6, Math.floor((width - 16) / (size * glyph)));
+  const lines = Math.max(1, Math.min(maxLines + 1, Math.ceil(len / cpl)));
+  return { size, lines, height: Math.ceil(lines * size * 1.18 + 8 + extra) };
+}
+
+function restyleLists(html, add = []) {
+  return String(html || '').replace(/<(ul|ol)\b([^>]*)>/gi, (match, tag, attrs) => {
+    const existing = (attrs.match(/class="([^"]*)"/i)?.[1] || '').split(/\s+/).filter(Boolean);
+    const kept = existing.filter((cls) => !LIST_VARIANT_CLASSES.includes(cls));
+    const rest = attrs.replace(/\s*class="[^"]*"/i, '');
+    const cls = [...kept, ...add].join(' ');
+    return `<${tag}${cls ? ` class="${cls}"` : ''}${rest}>`;
   });
-  return changed ? normalized : elements;
+}
+
+// Older split layouts stored one list per box; merging the boxes leaves several
+// adjacent lists. Editing, columns and cards all expect a single list.
+function unifyLists(html) {
+  const source = String(html || '');
+  const lists = source.match(/<ul\b[^>]*>[\s\S]*?<\/ul>/gi) || [];
+  if (lists.length < 2) return source;
+  const remainder = source.replace(/<ul\b[^>]*>[\s\S]*?<\/ul>/gi, '').replace(/\s+/g, '');
+  if (remainder || lists.some((list) => (list.match(/<ul\b/gi) || []).length > 1)) return source;
+  const open = lists[0].match(/<ul\b[^>]*>/i)[0];
+  return `${open}${lists.map((list) => list.replace(/^<ul\b[^>]*>/i, '').replace(/<\/ul>$/i, '')).join('')}</ul>`;
+}
+
+// Choosing a layout re-aligns the text; a paragraph-level alignment left over
+// from an earlier manual edit would otherwise fight the new composition.
+const stripParagraphAlign = (html) => String(html || '')
+  .replace(/\s*text-align:\s*[a-z]+;?/gi, '')
+  .replace(/\sstyle="\s*"/gi, '');
+
+const hasNestedList = (html) => /<li\b[^>]*>(?:(?!<\/li>)[\s\S])*<(?:ul|ol)\b/i.test(String(html || ''));
+
+/* ───────────────────────── Boundary / table normalisation ────────────────── */
+
+const BOUNDARY_LABELS = new Set([
+  'BÀI GIẢNG', 'LECTURE', 'KẾT THÚC BÀI GIẢNG', 'END OF LECTURE',
+  'BÀI THUYẾT TRÌNH', 'PRESENTATION', 'KẾT LUẬN', 'CLOSING',
+]);
+const plainUpper = (value) => String(value || '').replace(/<[^>]*>/g, '').trim().toUpperCase();
+
+// Generated eyebrow labels were retired; anything still carrying one is stale
+// output from an older generator and would only pile up on template switches.
+export const isBoundaryLabel = (element) => element?.type === 'text' && element?.role === 'custom'
+  && BOUNDARY_LABELS.has(plainUpper(element.content));
+
+// Only removes stale generated labels. It never touches geometry or styling:
+// cover and closing slides are ordinary, freely editable canvases.
+export function normalizeBoundaryElements(elements = [], type) {
+  if (!['title', 'thankyou'].includes(type)) return elements;
+  if (!elements.some(isBoundaryLabel)) return elements;
+  return elements.filter((element) => !isBoundaryLabel(element));
 }
 
 export function normalizeTableElements(elements = []) {
@@ -53,85 +242,21 @@ export function orderedBodyElements(elements = []) {
   return [...bodies].sort((a, b) => (a.layoutOrder || 0) - (b.layoutOrder || 0));
 }
 
-const box = (x, y, width, height) => ({ x, y, width, height });
-const textLength = (value) => String(value || '').replace(/<[^>]*>/g, '').length;
-
-// Closing slides reserve enough room for four medium-length bullets at 24px.
-// The variants keep each theme's characteristic composition without triggering auto-fit.
-const CLOSING_LAYOUTS = {
-  'soft-blue': { title: box(64, 36, 832, 102), body: box(64, 158, 832, 362), titleAlign: 'left' },
-  'royal-purple': { title: box(100, 36, 760, 102), body: box(64, 158, 832, 362), titleAlign: 'center' },
-  'clean-white': { title: box(64, 36, 832, 102), body: box(64, 158, 832, 362), titleAlign: 'left' },
-  'modern-dark': { title: box(64, 36, 832, 102), body: box(64, 158, 832, 362), titleAlign: 'left' },
-  'playful-yellow': { title: box(80, 36, 800, 102), body: box(64, 158, 832, 362), titleAlign: 'center' },
-  'gradient-border': { title: box(64, 418, 832, 92), body: box(64, 34, 832, 362), titleAlign: 'left' },
-  'blue-planet': { title: box(100, 36, 760, 102), body: box(64, 158, 832, 362), titleAlign: 'center' },
-  'nature-green': { title: box(64, 36, 832, 102), body: box(64, 158, 832, 362), titleAlign: 'left' },
-  'tech-purple': { title: box(96, 36, 800, 102), body: box(64, 158, 832, 362), titleAlign: 'left' },
-};
-
-const EXTRA_LAYOUTS = {
-  'royal-purple': {
-    columns: 2,
-    text: { title: box(128, 52, 704, 104), body: box(96, 194, 768, 286), align: 'center' },
-    cover: { title: box(120, 176, 720, 178), body: box(160, 386, 640, 100), eyebrow: box(120, 106, 720, 32), align: 'center' },
-    image: { title: box(72, 62, 376, 124), body: box(72, 218, 376, 270), visual: box(496, 62, 392, 426) },
-    data: { title: box(64, 66, 232, 180), body: box(64, 282, 232, 202), visual: box(336, 62, 560, 426) },
-  },
-  'modern-dark': {
-    columns: 2,
-    text: { title: box(56, 72, 256, 348), body: box(352, 80, 552, 404) },
-    cover: { title: box(64, 156, 540, 242), body: box(656, 242, 248, 218), eyebrow: box(64, 86, 540, 32) },
-    image: { title: box(56, 60, 460, 126), body: box(56, 218, 460, 270), visual: box(564, 60, 340, 428) },
-    data: { title: box(672, 60, 232, 196), body: box(672, 294, 232, 192), visual: box(56, 60, 572, 428) },
-  },
-  'playful-yellow': {
-    columns: 2,
-    text: { title: box(80, 44, 800, 104), body: box(80, 184, 800, 304), align: 'center' },
-    cover: { title: box(80, 106, 800, 180), body: box(160, 338, 640, 126), eyebrow: box(80, 52, 800, 30), align: 'center' },
-    image: { title: box(64, 52, 832, 100), body: box(64, 198, 360, 284), visual: box(480, 188, 416, 294) },
-    data: { title: box(72, 48, 816, 84), body: box(648, 188, 240, 296), visual: box(72, 168, 536, 316), align: 'center' },
-  },
-  'gradient-border': {
-    columns: 2,
-    text: { title: box(80, 394, 800, 102), body: box(80, 60, 800, 294) },
-    cover: { title: box(80, 252, 800, 188), body: box(80, 104, 720, 104), eyebrow: box(80, 54, 720, 30) },
-    image: { title: box(64, 378, 496, 112), body: box(608, 70, 288, 414), visual: box(64, 60, 496, 280) },
-    data: { title: box(64, 410, 832, 90), body: box(652, 76, 244, 290), visual: box(64, 60, 548, 310) },
-  },
-  'nature-green': {
-    columns: 1,
-    text: { title: box(646, 90, 250, 348), body: box(64, 74, 526, 414) },
-    cover: { title: box(80, 122, 454, 288), body: box(588, 228, 292, 224), eyebrow: box(80, 62, 454, 30) },
-    image: { title: box(64, 44, 832, 96), body: box(462, 170, 434, 318), visual: box(64, 170, 348, 318) },
-    data: { title: box(64, 48, 832, 94), body: box(64, 192, 252, 296), visual: box(364, 166, 532, 322) },
-  },
-  'tech-purple': {
-    columns: 3,
-    text: { title: box(64, 52, 832, 106), body: box(64, 202, 832, 286) },
-    cover: { title: box(320, 126, 560, 240), body: box(320, 390, 560, 100), eyebrow: box(64, 132, 208, 76) },
-    image: { title: box(536, 64, 360, 144), body: box(536, 240, 360, 248), visual: box(64, 64, 424, 424) },
-    data: { title: box(64, 58, 220, 194), body: box(64, 296, 220, 192), visual: box(324, 58, 572, 430) },
-  },
-};
-
-function listItems(content, generated) {
-  if (typeof DOMParser === 'undefined') return null;
-  const doc = new DOMParser().parseFromString(content, 'text/html');
-  const lists = [...doc.body.children];
-  if (!lists.length || (!generated && lists.length !== 1) || lists.some((el) => el.tagName !== 'UL')) return null;
-  if ([...doc.body.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim())) return null;
-  const items = lists.flatMap((list) => [...list.children]);
-  // Keep nested and ordered lists intact, including their numbering.
-  if (items.some((child) => child.tagName !== 'LI' || child.querySelector('ul, ol'))) return null;
-  return items.map((child) => child.outerHTML);
-}
-
 function mergeLayoutBodies(elements) {
   const generated = orderedBodyElements(elements).filter((el) => el.layoutGroup);
   if (generated.length < 2 || !generated.every((el) => el.layoutGroup === generated[0].layoutGroup)) return elements;
-  const merged = { ...generated[0], content: generated.map((el) => el.content).join('') };
+  const merged = { ...generated[0], content: unifyLists(generated.map((el) => el.content).join('')) };
   return elements.flatMap((el) => el.id === merged.id ? [merged] : generated.includes(el) ? [] : [el]);
+}
+
+// Older decks stored a two-column text slide as separate left/right boxes.
+// One body with CSS columns is easier to edit and keeps bullets in one place.
+function mergeColumnPairs(elements) {
+  const left = elements.find((el) => el.type === 'text' && el.role === 'body-left');
+  const right = elements.find((el) => el.type === 'text' && el.role === 'body-right');
+  if (!left || !right || elements.some((el) => el.type === 'text' && el.role === 'body')) return elements;
+  const merged = { ...left, role: 'body', content: unifyLists(`${left.content || ''}${right.content || ''}`) };
+  return elements.flatMap((el) => el === left ? [merged] : el === right ? [] : [el]);
 }
 
 export function isDenseVisual(element) {
@@ -143,153 +268,408 @@ export function isDenseVisual(element) {
   return (data.labels?.length || 0) > 6 || (data.series?.length || 0) > 2;
 }
 
+/* ───────────────────────────── Kind & variant choice ─────────────────────── */
+
+export function layoutKindOf(slide, elements = []) {
+  if (elements.some((el) => el.type === 'text' && el.role === 'quote')) return 'quote';
+  const visuals = elements.some((el) => el.type === 'table' || el.type === 'chart') || slide?.table || slide?.chart;
+  const images = elements.some((el) => el.type === 'image') || slide?.imageUrl;
+  if (slide?.type === 'title' && !visuals && !images) return 'cover';
+  if (slide?.type === 'thankyou' && !visuals && !images) return 'closing';
+  if (visuals) return 'data';
+  if (images) return 'image';
+  return 'text';
+}
+
+export function defaultVariant(kind, theme, ctx = {}) {
+  const design = designOf(theme);
+  if (kind === 'cover') return design.cover;
+  if (kind === 'closing') return design.closing;
+  if (kind === 'image') return 'image-right';
+  if (kind === 'data') return 'data-full';
+  if (kind === 'text') {
+    if (ctx.bullets >= 8 || ctx.chars > 620) return 'columns';
+    return 'classic';
+  }
+  return null;
+}
+
+export function resolveVariant(kind, requested, theme, ctx) {
+  const list = LAYOUT_VARIANTS[kind];
+  if (!list) return null;
+  return list.some((item) => item.id === requested) ? requested : defaultVariant(kind, theme, ctx);
+}
+
+export function variantsForSlide(slide) {
+  const kind = layoutKindOf(slide, Array.isArray(slide?.elements) ? slide.elements : []);
+  return { kind, variants: LAYOUT_VARIANTS[kind] || [] };
+}
+
+// Spreads richer layouts across a deck without ever leaving the traditional
+// one behind: only every other suitable slide gets a variation.
+export function suggestVariant(slide, index, theme) {
+  const elements = Array.isArray(slide?.elements) ? slide.elements : [];
+  const kind = layoutKindOf(slide, elements);
+  if (kind === 'cover' || kind === 'closing') return defaultVariant(kind, theme);
+  if (kind === 'image') return ['image-right', 'image-left', 'image-focus', 'image-top'][index % 4];
+  if (kind === 'data') return index % 2 ? 'data-side' : 'data-full';
+  if (kind !== 'text') return null;
+  const body = elements.find((el) => el.type === 'text' && el.role === 'body');
+  const html = body?.content || (Array.isArray(slide?.bullets) ? slide.bullets.map((b) => `<li>${b}</li>`).join('') : '');
+  const items = itemCount(html);
+  const avg = items ? textLength(html) / items : textLength(html);
+  const chars = textLength(html);
+  if (items >= 3 && items <= 6 && avg <= 110 && chars <= 520) return index % 3 === 0 ? 'cards' : 'classic';
+  if (items >= 7 || chars > 620) return 'columns';
+  if (chars <= 220 && items <= 3) return index % 2 ? 'centered' : 'rail';
+  return index % 4 === 1 ? 'banner' : 'classic';
+}
+
+/* ───────────────────────────── Layout engine ─────────────────────────────── */
+
 // All bounds share the editor's 960 x 540 coordinate system.
 export function layoutTemplateElements(slide, source, theme, colors) {
-  const content = source.some((el) => el.type === 'table')
+  // An uploaded template's art can reserve part of the slide (see templateArt.js).
+  const D = { ...designOf(theme), ...(slide?.richText?._safe || {}) };
+  const fitT = (text, width, options) => fitTitle(text, width, { ...options, extra: D.decor ? 12 : 0 });
+  const withoutBodies = source.some((el) => el.type === 'table')
     ? source.filter((el) => !(el.type === 'text' && el.role === 'body')) : source;
-  const boundary = ['title', 'thankyou'].includes(slide.type);
-  let elements = normalizeBoundaryElements(mergeLayoutBodies(content), slide.type, theme)
-    .map((el) => ({ ...el, style: el.style ? { ...el.style } : undefined }));
+  const elements = normalizeBoundaryElements(
+    mergeColumnPairs(mergeLayoutBodies(withoutBodies)), slide.type, theme,
+  ).map((el) => ({ ...el, style: el.style ? { ...el.style } : undefined }));
+
+  const kind = layoutKindOf(slide, elements);
+  if (kind === 'quote') return elements.map((el) => ({ ...el, templateLayout: 'quote' }));
+
   const title = elements.find((el) => el.type === 'text' && el.role === 'title');
   const bodies = elements.filter((el) => el.type === 'text' && el.role === 'body');
+  const code = elements.find((el) => el.type === 'text' && el.role === 'code');
   const visuals = elements.filter((el) => el.type === 'table' || el.type === 'chart');
   const images = elements.filter((el) => el.type === 'image');
-  const bodyLength = bodies.reduce((sum, el) => sum + textLength(el.content), 0);
-  const place = (el, bounds, style = {}) => {
-    if (el) Object.assign(el, bounds, { style: { ...el.style, ...style } });
+  const primary = bodies[0];
+  const bodyHtml = bodies.map((el) => el.content).join('');
+  const bullets = itemCount(bodyHtml);
+  const chars = textLength(bodyHtml);
+
+  // Compositions centred on the whole canvas would run into art on one side, so a
+  // slide with a reserved area uses their left-aligned counterparts.
+  const chosenVariant = resolveVariant(kind, slide?.richText?._layoutVariant, theme, { bullets, chars });
+  const variant = slide?.richText?._safe
+    ? ({ centered: 'classic', 'cover-center': 'cover-left', 'closing-center': 'closing-list' }[chosenVariant] || chosenVariant)
+    : chosenVariant;
+  const P = D.pad;
+  const R = D.safeRight;
+  const W = R - P;
+
+  const place = (el, b, style = {}, extra = {}) => {
+    if (!el) return;
+    Object.assign(el, b, extra);
+    const next = { ...el.style, ...style };
+    delete next.fontSizeLocked;
+    if (extra.decor) next['--decor-accent'] = D.accent;
+    else delete next['--decor-accent'];
+    el.style = next;
+    if (!('decor' in extra)) delete el.decor;
+    else if (extra.decor == null) delete el.decor;
   };
-  elements.forEach((el) => {
-    if (el.type !== 'text' || !['title', 'body'].includes(el.role)) return;
-    el.style = { ...el.style, fontFamily: el.role === 'title' ? colors.title : colors.body,
-      color: el.role === 'title' ? colors.text : colors.sub, textAlign: 'left', verticalAlign: 'top' };
+
+  const baseStyles = () => {
+    elements.forEach((el) => {
+      if (el.type !== 'text' || !['title', 'body'].includes(el.role)) return;
+      const next = { ...el.style };
+      VARIANT_KEYS.forEach((key) => delete next[key]);
+      delete next.background;
+      delete next.padding;
+      el.style = {
+        ...next,
+        fontFamily: el.role === 'title' ? colors.title : colors.body,
+        color: el.role === 'title' ? colors.text : colors.sub,
+        textAlign: 'left',
+        verticalAlign: 'top',
+        lineHeight: el.role === 'title' ? 1.18 : 1.5,
+      };
+      el.content = stripParagraphAlign(el.content);
+      if (el.role === 'body') el.content = restyleLists(el.content);
+    });
+  };
+  baseStyles();
+
+  const titleText = title?.content;
+  const titleStyle = (size, align = 'left', extra = {}) => ({
+    fontSize: size, fontWeight: D.weight, textAlign: align, lineHeight: 1.18, ...extra,
   });
-  const adaptive = ADAPTIVE_TEMPLATES.has(theme);
-  const profile = EXTRA_LAYOUTS[theme];
+  const decorFor = (align = 'left') => (D.decor ? (align === 'center' ? 'underline-center' : D.decor) : null);
+  const bodyStyle = (size, align = 'left', extra = {}) => ({
+    fontSize: size, lineHeight: 1.5, textAlign: align, ...extra,
+  });
 
-  let titleBox = theme === 'blue-planet' ? box(96, 42, 768, 86) : box(64, 40, 832, 86);
-  let contentBox = theme === 'blue-planet' ? box(96, 160, 768, 332) : box(64, 150, 832, 342);
-  const titleStyle = { fontSize: textLength(title?.content) > 100 ? 28 : 34, lineHeight: 1.2 };
-  let variant = 'wide';
+  // Sits any extra bodies (rare) under the primary one so nothing overlaps.
+  const stackExtras = (area, fs, align = 'left') => {
+    const extras = bodies.slice(1);
+    if (!extras.length) return;
+    const gap = 14;
+    const share = (area.height - gap * extras.length) / (extras.length + 1);
+    place(primary, box(area.x, area.y, area.width, share), bodyStyle(fs, align));
+    extras.forEach((el, index) => place(el, box(area.x, area.y + (index + 1) * (share + gap), area.width, share), bodyStyle(fs, align)));
+  };
 
-  if (boundary && !visuals.length && !images.length) {
-    variant = 'cover';
-    const eyebrow = elements.find((el) => el.type === 'text' && el.role === 'custom');
-    if (profile) {
-      titleBox = profile.cover.title;
-      contentBox = profile.cover.body;
-      titleStyle.textAlign = profile.cover.align || 'left';
-      place(eyebrow, profile.cover.eyebrow, { textAlign: profile.cover.align || 'left', color: colors.sub });
-    } else if (adaptive && theme === 'soft-blue') {
-      titleBox = box(80, 158, 780, 168);
-      contentBox = box(80, 350, 700, 126);
-      place(eyebrow, box(80, 98, 700, 30), { textAlign: 'left', color: colors.sub });
-    } else if (adaptive && theme === 'clean-white') {
-      titleBox = box(64, 120, 410, 310);
-      contentBox = box(530, 220, 366, 230);
-      place(eyebrow, box(64, 65, 410, 30), { textAlign: 'left', color: colors.sub });
-    } else {
-      titleBox = box(100, 150, 760, 180);
-      contentBox = box(160, 360, 640, 120);
-      titleStyle.textAlign = 'center';
-      place(eyebrow, box(100, 94, 760, 30), { textAlign: 'center', color: colors.sub });
-    }
-    if (slide.type === 'thankyou' && CLOSING_LAYOUTS[theme]) {
-      const closing = CLOSING_LAYOUTS[theme];
-      titleBox = closing.title;
-      contentBox = closing.body;
-      titleStyle.textAlign = closing.titleAlign;
-    }
-    titleStyle.fontSize = textLength(title?.content) > 100 ? 38 : 46;
-  } else if (visuals.length) {
-    const dense = visuals.some(isDenseVisual) || visuals.length > 1 || bodyLength > 320 || images.length > 0;
-    variant = dense ? 'data-wide' : 'data-editorial';
-    if (!dense && profile) {
-      titleBox = profile.data.title;
-      contentBox = profile.data.body;
-      titleStyle.fontSize = titleBox.width < 300 ? 28 : 34;
-      titleStyle.textAlign = profile.data.align || 'left';
-      const visualBox = !bodies.length && titleBox.width > 600
-        ? { ...profile.data.visual, x: titleBox.x, width: titleBox.width }
-        : profile.data.visual;
-      place(visuals[0], visualBox);
-    } else if (!dense && theme === 'clean-white') {
-      titleBox = box(56, 76, 224, 190);
-      contentBox = box(56, 292, 224, 198);
-      titleStyle.fontSize = 28;
-      place(visuals[0], box(314, 66, 590, 424));
-    } else if (!dense && theme === 'blue-planet') {
-      titleBox = box(682, 74, 220, 184);
-      contentBox = box(682, 292, 220, 198);
-      titleStyle.fontSize = 28;
-      place(visuals[0], box(48, 74, 602, 416));
-    } else {
-      const top = bodies.length ? 212 : 132;
-      const slots = [...visuals, ...images];
-      const width = (848 - 20 * (slots.length - 1)) / slots.length;
-      slots.forEach((el, index) => place(el, box(56 + index * (width + 20), top, width, 500 - top)));
-      contentBox = box(64, 130, 832, 70);
-    }
-  } else if (images.length) {
-    variant = 'image-split';
-    let imageBox;
-    if (profile) {
-      titleBox = profile.image.title;
-      contentBox = profile.image.body;
-      imageBox = profile.image.visual;
-    } else if (theme === 'soft-blue' || !adaptive) {
-      contentBox = box(64, 154, bodyLength > 650 ? 470 : 410, 338);
-      imageBox = box(bodyLength > 650 ? 566 : 506, 146, bodyLength > 650 ? 330 : 390, 346);
-    } else if (theme === 'clean-white') {
-      titleBox = box(510, 58, 386, 124);
-      contentBox = box(510, 208, 386, 284);
-      imageBox = box(56, 58, 414, 434);
-    } else {
-      titleBox = box(56, 48, 848, 86);
-      contentBox = box(568, 164, 328, 324);
-      imageBox = box(56, 148, 476, 344);
-    }
-    const height = (imageBox.height - 16 * (images.length - 1)) / images.length;
-    images.forEach((el, index) => place(el, box(imageBox.x, imageBox.y + index * (height + 16), imageBox.width, height)));
-  } else if (profile && bodyLength <= 800) {
-    variant = `${theme}-text`;
-    titleBox = profile.text.title;
-    contentBox = profile.text.body;
-    titleStyle.fontSize = titleBox.width < 300 ? 30 : 34;
-    titleStyle.textAlign = profile.text.align || 'left';
-  } else if (theme === 'clean-white' && bodyLength <= 800) {
-    variant = 'title-rail';
-    titleBox = box(64, 94, 258, 338);
-    contentBox = box(372, 100, 524, 386);
-    titleStyle.fontSize = 32;
-  }
-  if (!boundary && !visuals.length && !images.length && adaptive && bodies.length === 1 && bodyLength <= 600 && theme !== 'clean-white') {
-    const items = listItems(bodies[0].content, bodies[0].layoutGroup);
-    if (items?.length >= 3 && items.length <= 6 && items.every((item) => textLength(item) <= 160)) {
-      variant = profile ? `${theme}-points` : theme === 'soft-blue' ? 'two-column-points' : 'three-column-points';
-      const columns = profile?.columns || (theme === 'soft-blue' ? 2 : 3);
-      const rows = Math.ceil(items.length / columns);
-      const gap = columns === 1 ? 16 : 28;
-      const width = (contentBox.width - gap * (columns - 1)) / columns;
-      const height = (contentBox.height - gap * (rows - 1)) / rows;
-      const original = bodies[0];
-      const parts = items.map((item, index) => ({ ...original,
-        id: index === 0 ? original.id : `${original.id}-point-${index}`,
-        layoutGroup: original.layoutGroup || original.id,
-        layoutOrder: index,
-        content: `<ul>${item}</ul>`,
-        ...box(contentBox.x + (index % columns) * (width + gap), contentBox.y + Math.floor(index / columns) * (height + gap), width, height),
-        style: { ...original.style, fontSize: columns === 1 ? 20 : theme === 'soft-blue' ? 23 : 21, lineHeight: 1.45 },
-      }));
-      elements = elements.flatMap((el) => el === original ? parts : [el]);
-      bodies.length = 0;
+  const putCode = (top, left, width) => {
+    if (!code) return top;
+    const height = Math.max(90, 500 - top);
+    place(code, box(left, top, width, height), { fontSize: 15 });
+    return top + height;
+  };
+
+  const putVisuals = (area) => {
+    const slots = [...visuals, ...images];
+    if (!slots.length) return;
+    const gap = 20;
+    const across = area.width >= area.height * 0.9;
+    slots.forEach((el, index) => {
+      const shared = across
+        ? box(area.x + index * ((area.width - gap * (slots.length - 1)) / slots.length + gap), area.y,
+          (area.width - gap * (slots.length - 1)) / slots.length, area.height)
+        : box(area.x, area.y + index * ((area.height - gap * (slots.length - 1)) / slots.length + gap),
+          area.width, (area.height - gap * (slots.length - 1)) / slots.length);
+      place(el, D.circleImages && el.type === 'image' ? squareIn(shared) : shared);
+    });
+  };
+  // Keeps a centred block symmetric while clearing decorations (Blue Planet's planet).
+  const symWidth = (w, bottom) => (R < 896 && bottom > 340 ? Math.min(w, 2 * (R - 480)) : w);
+  const squareIn = (b) => {
+    const side = Math.min(b.width, b.height);
+    return box(b.x + (b.width - side) / 2, b.y + (b.height - side) / 2, side, side);
+  };
+
+  /* ── text ─────────────────────────────────────────────────────────────── */
+  if (kind === 'text' || kind === 'closing') {
+    const isClosing = kind === 'closing';
+    const flat = ['classic', 'closing-list', 'columns', 'cards', 'closing-cards', 'banner'];
+    const railLike = variant === 'rail' || variant === 'closing-split';
+    const centered = variant === 'centered' || variant === 'closing-center';
+    const maxSize = isClosing ? 24 : 23;
+
+    // Body + optional code block below it, inside `area`.
+    const putBody = (area, options, align = 'left') => {
+      const room = code ? Math.min(area.height, 170) : area.height;
+      const plan = planBody(bodyHtml, area.width, room, options);
+      const style = {};
+      if (options.cols > 1) style['--slide-cols'] = options.cols;
+      if (options.mode === 'cards') style['--slide-card-cols'] = options.cardCols;
+      place(primary, box(area.x, area.y, area.width, plan.h), bodyStyle(plan.fs, align, style));
+      if (bodies.length > 1) stackExtras(area, plan.fs, align);
+      if (code) putCode(area.y + plan.h + 12, area.x, area.width);
+      return plan;
+    };
+
+    if (flat.includes(variant)) {
+      const isBanner = variant === 'banner';
+      const bannerW = Math.min(832, W);
+      const tFit = fitT(titleText, isBanner ? bannerW : W, { max: isClosing ? D.titleSize + 2 : D.titleSize, weight: D.weight });
+      const top = isBanner ? 32 : 40;
+      const tBox = isBanner ? box(P, top, bannerW, tFit.height + 22) : box(P, top, W, tFit.height);
+      place(title, tBox, titleStyle(tFit.size, 'left', isBanner ? { color: D.onAccent } : {}),
+        { decor: isBanner ? 'band' : decorFor('left') });
+      const y = tBox.y + tBox.height + (isBanner ? 30 : 22);
+      const area = box(P, y, W, 500 - y);
+      if (variant === 'cards' || variant === 'closing-cards') {
+        const n = Math.max(1, splitItems(bodyHtml).length);
+        const avg = chars / n;
+        const cardCols = n === 1 ? 1 : n <= 3 && avg <= 90 ? n : n === 4 ? 2 : avg > 110 ? 2 : 3;
+        if (primary && !hasNestedList(bodyHtml)) primary.content = restyleLists(primary.content, ['slide-cards']);
+        putBody(area, { min: 14, max: isClosing ? 22 : 21, lineHeight: 1.45, mode: 'cards', cardCols });
+      } else {
+        putBody(area, { min: 13, max: maxSize, cols: variant === 'columns' ? 2 : 1 });
+      }
+    } else if (railLike) {
+      const rail = 270;
+      const tFit = fitT(titleText, rail, { max: 34, min: 22, maxLines: 5, weight: D.weight });
+      place(title, box(P, 96, rail, tFit.height), titleStyle(tFit.size, 'left'), { decor: decorFor('left') });
+      const bx = P + rail + 44;
+      const area = box(bx, 84, R - bx, 416);
+      if (variant === 'closing-split' && primary && !hasNestedList(bodyHtml)) primary.content = restyleLists(primary.content, ['slide-cards']);
+      putBody(area, variant === 'closing-split'
+        ? { min: 14, max: 22, lineHeight: 1.45, mode: 'cards', cardCols: 1 }
+        : { min: 13, max: 24 });
+    } else if (centered) {
+      const tw = symWidth(720, 200);
+      const tFit = fitT(titleText, tw, { max: D.titleSize + 4, weight: D.weight });
+      const tBox = box(480 - tw / 2, isClosing ? 70 : 60, tw, tFit.height);
+      place(title, tBox, titleStyle(tFit.size, 'center'), { decor: decorFor('center') });
+      const y = tBox.y + tBox.height + 30;
+      const aw = symWidth(660, 500);
+      if (primary) primary.content = restyleLists(primary.content, ['slide-plain']);
+      putBody(box(480 - aw / 2, y, aw, 500 - y), { min: 14, max: 25, mode: 'plain' }, 'center');
     }
   }
-  place(title, titleBox, titleStyle);
-  const bodyHeight = (contentBox.height - 18 * (bodies.length - 1)) / Math.max(1, bodies.length);
-  bodies.forEach((el, index) => place(el, box(contentBox.x, contentBox.y + index * (bodyHeight + 18), contentBox.width, bodyHeight), {
-    fontSize: slide.type === 'thankyou' ? 24 : bodyLength > 800 ? 17 : 22, lineHeight: 1.45,
-    textAlign: slide.type === 'thankyou' ? 'left'
-      : boundary ? profile?.cover.align || (theme === 'blue-planet' ? 'center' : 'left') : 'left',
-  }));
-  return elements.map((el) => ({ ...el, templateLayout: variant }));
+
+  /* ── images ───────────────────────────────────────────────────────────── */
+  if (kind === 'image') {
+    const focus = variant === 'image-focus';
+    const tFit = fitT(titleText, focus ? W - 474 : W, { max: focus ? 32 : D.titleSize, min: 22, maxLines: focus ? 4 : 2, weight: D.weight });
+    const tBox = focus ? null : box(P, 40, W, tFit.height);
+    if (tBox) place(title, tBox, titleStyle(tFit.size, 'left'), { decor: decorFor('left') });
+    const top = tBox ? tBox.y + tBox.height + 24 : 60;
+    const usableH = 500 - top;
+    const stackImages = (imageBox) => {
+      const slot = images.length ? (imageBox.height - 16 * (images.length - 1)) / images.length : 0;
+      images.forEach((el, index) => {
+        const b = box(imageBox.x, imageBox.y + index * (slot + 16), imageBox.width, slot);
+        place(el, D.circleImages ? squareIn(b) : b);
+      });
+    };
+    const putText = (area, options = {}) => {
+      const room = code ? Math.min(area.height, 170) : area.height;
+      const plan = planBody(bodyHtml, area.width, room, { min: 13, max: 22, ...options });
+      place(primary, box(area.x, area.y, area.width, plan.h), bodyStyle(plan.fs, 'left', options.cols > 1 ? { '--slide-cols': options.cols } : {}));
+      if (bodies.length > 1) stackExtras(area, plan.fs);
+      if (code) putCode(area.y + plan.h + 12, area.x, area.width);
+    };
+    if (variant === 'image-left') {
+      stackImages(box(P, top, 380, usableH));
+      putText(box(P + 420, top, R - (P + 420), usableH));
+    } else if (variant === 'image-top') {
+      const imgH = Math.min(190, usableH - 130);
+      const w = (W - 16 * (images.length - 1)) / Math.max(1, images.length);
+      images.forEach((el, index) => {
+        const b = box(P + index * (w + 16), top, w, imgH);
+        place(el, D.circleImages ? squareIn(b) : b);
+      });
+      const y = top + imgH + 18;
+      putText(box(P, y, W, 500 - y), { cols: itemCount(bodyHtml) >= 3 ? 2 : 1, max: 20 });
+    } else if (variant === 'image-focus') {
+      // Themes that keep the lower-right clear put the text column on the left.
+      const flip = D.safeRight < 896;
+      const imageX = flip ? 896 - 400 : P;
+      const textX = flip ? P : P + 474;
+      const textW = flip ? imageX - 40 - P : R - textX;
+      stackImages(box(imageX, 60, flip ? 400 : 430, flip ? 400 : 430));
+      place(title, box(textX, 84, textW, tFit.height), titleStyle(tFit.size, 'left'), { decor: decorFor('left') });
+      const y = 84 + tFit.height + 18;
+      putText(box(textX, y, textW, 500 - y));
+    } else {
+      const textW = images.length ? 440 : W;
+      stackImages(box(P + textW + 36, top, R - (P + textW + 36), usableH));
+      putText(box(P, top, textW, usableH));
+    }
+  }
+
+  /* ── tables & charts ──────────────────────────────────────────────────── */
+  if (kind === 'data') {
+    // Tables and charts have their own opaque surface, so they may use the full
+    // width even where a theme keeps text clear of a decoration.
+    const RW = 896;
+    const WW = RW - P;
+    const side = variant === 'data-side' || variant === 'data-side-right';
+    const describes = bodies.length && bodyHtml && !visuals.some((el) => el.type === 'table');
+    if (!side) {
+      const tFit = fitT(titleText, WW, { max: D.titleSize, weight: D.weight });
+      const tBox = box(P, 40, WW, tFit.height);
+      place(title, tBox, titleStyle(tFit.size, 'left'), { decor: decorFor('left') });
+      let y = tBox.y + tBox.height + 20;
+      if (describes) {
+        const plan = planBody(bodyHtml, WW, 96, { min: 14, max: 19 });
+        place(primary, box(P, y, WW, plan.h), bodyStyle(plan.fs));
+        y += plan.h + 14;
+      }
+      putVisuals(box(P - 8, y, WW + 16, 500 - y));
+      if (code) putCode(y, P, WW);
+    } else {
+      const left = variant === 'data-side';
+      const railW = 236;
+      const rx = left ? P : RW - railW;
+      const vx = left ? P + railW + 36 : P;
+      const vw = WW - railW - 36;
+      const tFit = fitT(titleText, railW, { max: 30, min: 20, maxLines: 5, weight: D.weight });
+      place(title, box(rx, 60, railW, tFit.height), titleStyle(tFit.size, 'left'), { decor: decorFor('left') });
+      let y = 60 + tFit.height + 18;
+      if (describes) {
+        // A right-hand rail sits where some themes draw a decoration low on the slide.
+        const floor = !left && D.safeRight < 896 ? 340 : 500;
+        const plan = planBody(bodyHtml, railW, Math.max(60, floor - y), { min: 13, max: 18 });
+        place(primary, box(rx, y, railW, Math.min(plan.h, floor - y)), bodyStyle(plan.fs));
+        y += plan.h + 14;
+      }
+      putVisuals(box(vx, 60, vw, 440));
+      if (code) putCode(y, rx, railW);
+    }
+  }
+
+  /* ── cover ────────────────────────────────────────────────────────────── */
+  if (kind === 'cover') {
+    const subtitleHtml = bodyHtml;
+    const place2 = (tBox, bBox, align, tFit, bFs) => {
+      place(title, tBox, titleStyle(tFit.size, align), { decor: decorFor(align) });
+      place(primary, bBox, bodyStyle(bFs, align));
+      if (bodies.length > 1) stackExtras(bBox, bFs, align);
+    };
+    const center = variant === 'cover-center';
+    const hero = variant === 'cover-hero';
+    const split = variant === 'cover-split';
+    const width = split ? 470 : Math.min(hero ? 720 : center ? 720 : 660, R - P - (hero ? 0 : 16));
+    const tFit = fitT(titleText, width, { max: hero ? 60 : 54, min: 30, maxLines: split ? 4 : 3, weight: D.weight });
+    const bWidth = split ? R - (P + 470 + 50) : Math.min(center ? 600 : hero ? 600 : 560, R - P - 16);
+    const subPlan = subtitleHtml ? planBody(subtitleHtml, bWidth, 150, { min: 15, max: 22, mode: 'plain' }) : { fs: 20, h: 0 };
+    const bFs = subPlan.fs;
+    const bH = subPlan.h;
+    const gap = 26;
+    const total = tFit.height + (bH ? gap + bH : 0);
+    const topY = hero ? 540 - 72 - total : Math.max(48, (540 - total) / 2 + 6);
+    if (split) {
+      const y = Math.max(60, (540 - tFit.height) / 2 - 10);
+      place2(box(P, y, 470, tFit.height), box(P + 470 + 50, y + 8, bWidth, Math.max(bH, 60)), 'left', tFit, bFs);
+      if (primary) {
+        primary.decor = 'rule-left';
+        primary.style = { ...primary.style, '--decor-accent': D.accent };
+      }
+    } else if (center) {
+      const bw = symWidth(600, topY + tFit.height + gap + bH);
+      place2(box(120, topY, 720, tFit.height), box(480 - bw / 2, topY + tFit.height + gap, bw, bH || 40), 'center', tFit, bFs);
+    } else {
+      const x = hero ? P : 80;
+      place2(box(x, topY, width, tFit.height), box(x, topY + tFit.height + gap, bWidth, bH || 40), 'left', tFit, bFs);
+    }
+  }
+
+  // Closing slides are short; centre the block vertically so the bottom is not
+  // left empty (the plain list variant stays top-aligned like a normal slide).
+  if (kind === 'closing' && variant !== 'closing-list') {
+    const block = [title, primary, code].filter(Boolean);
+    const top = Math.min(...block.map((el) => el.y));
+    const bottom = Math.max(...block.map((el) => el.y + el.height));
+    const shift = Math.max(0, Math.min(Math.round((540 - (bottom - top)) / 2 - 12 - top), 500 - bottom + 12));
+    block.forEach((el) => { el.y += shift; });
+  }
+
+  const marker = variant || kind;
+  return elements.map((el) => ({ ...el, templateLayout: marker }));
+}
+
+/* ───────────────────────────── Preview (for the picker) ──────────────────── */
+
+// Geometry of a variant on a synthetic slide, so the picker thumbnails show
+// exactly what the engine will produce.
+export function previewVariantRects(kind, variantId, theme) {
+  const colors = { title: 'serif', body: 'sans-serif', text: '#111', sub: '#444' };
+  const item = (t) => `<li>${t}</li>`;
+  const base = [
+    { id: 'p-title', type: 'text', role: 'title', content: 'Tiêu đề của slide trình bày', x: 0, y: 0, width: 10, height: 10, style: {} },
+  ];
+  const list = `<ul>${['Ý chính đầu tiên của nội dung', 'Ý thứ hai được nêu ngắn gọn rõ ràng', 'Ý thứ ba bổ sung thêm thông tin', 'Ý cuối cùng chốt lại vấn đề'].map(item).join('')}</ul>`;
+  const body = { id: 'p-body', type: 'text', role: 'body', content: list, x: 0, y: 0, width: 10, height: 10, style: {} };
+  const image = { id: 'p-image', type: 'image', role: 'image', src: 'x', x: 0, y: 0, width: 10, height: 10 };
+  const table = { id: 'p-table', type: 'table', role: 'visual', data: { headers: ['A', 'B', 'C'], rows: [[1, 2, 3]] }, x: 0, y: 0, width: 10, height: 10 };
+  const chart = { id: 'p-chart', type: 'chart', role: 'visual', data: { labels: ['A', 'B'], series: [{ values: [1, 2] }] }, x: 0, y: 0, width: 10, height: 10 };
+  const slideBase = { richText: { _layoutVariant: variantId } };
+  let slide;
+  let source;
+  if (kind === 'cover') { slide = { ...slideBase, type: 'title' }; source = [...base, { ...body, content: 'Phụ đề ngắn gọn cho phần mở đầu' }]; }
+  else if (kind === 'closing') { slide = { ...slideBase, type: 'thankyou' }; source = [...base, body]; }
+  else if (kind === 'image') { slide = { ...slideBase, type: 'imageText', imageUrl: 'x' }; source = [...base, body, image]; }
+  else if (kind === 'data') { slide = { ...slideBase, type: 'chart', chart: {} }; source = [...base, { ...body, content: '<ul><li>Mô tả ngắn cho biểu đồ</li></ul>' }, chart]; }
+  else { slide = { ...slideBase, type: 'content' }; source = [...base, body]; }
+  if (kind === 'data' && variantId && variantId.startsWith('data-')) source = source.filter((el) => el.type !== 'image');
+  const out = layoutTemplateElements(slide, source.map((el) => ({ ...el })), theme, colors);
+  void table;
+  return out.map((el) => ({ role: el.role, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height }));
 }

@@ -7,10 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test:layouts": "node tests/templateLayouts.test.js",
+    "test:layouts": "node --test tests/templateLayouts.test.js tests/layoutMatrix.test.js tests/dynamicTemplate.test.js tests/generatedTheme.test.js tests/templateArt.test.js tests/shapeLibrary.test.js tests/ornaments.test.js tests/selection.test.js tests/generationErrors.test.js tests/pptxImport.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tiptap/extension-text-align": "^3.31.3",
+    "@tiptap/extension-text-style": "^3.31.3",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
     "axios": "^1.15.2",
     "framer-motion": "^12.38.0",
     "html2canvas": "^1.4.1",
@@ -32,6 +37,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
+    "playwright": "^1.63.0",
     "vite": "^8.0.10"
   }
 }

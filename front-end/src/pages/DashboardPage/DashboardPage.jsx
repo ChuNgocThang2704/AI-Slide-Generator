@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { confirmDialog } from '../../services/dialogService';
 import { useAuthStore, useProjectStore, useUIStore, useVideoGenStore } from '../../store';
 import { projectService } from '../../services/documentService';
+import { isCustomTemplateId, templateService } from '../../services/templateService';
 import ElementCanvas from '../../components/slides/ElementCanvas';
-import { formatSlideDeck } from '../../utils/slideMapping';
+import { formatSlideDeck, toSlidePageUpdate } from '../../utils/slideMapping';
+import { slidesFromImportedManifest } from '../../utils/pptxImport';
 import {
   Plus, Trash2, Clock, Loader2,
-  Download, Sparkles, Search, FileText, Eye, ChevronLeft, ChevronRight
+  Sparkles, Search, FileText, Eye, ChevronLeft, ChevronRight, BarChart3, Palette, UploadCloud
 } from 'lucide-react';
 import './DashboardPage.css';
 
@@ -19,16 +22,16 @@ const PLAN_INFO = {
 const getStatusBadge = (status) => {
   const key = typeof status === 'string' ? status.toUpperCase() : status;
   const mapping = {
-    0: { label: '⏳ Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
-    'CREATE': { label: '⏳ Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
-    'PROCESSING': { label: '⏳ Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
-    1: { label: '✅ Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
-    'DONE': { label: '✅ Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
-    'COMPLETED': { label: '✅ Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
-    2: { label: '❌ Thất bại', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
-    'FAILED': { label: '❌ Thất bại', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
+    0: { label: 'Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
+    'CREATE': { label: 'Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
+    'PROCESSING': { label: 'Đang tạo...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' },
+    1: { label: 'Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
+    'DONE': { label: 'Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
+    'COMPLETED': { label: 'Hoàn thành', color: '#10b981', bg: 'rgba(16,185,129,0.15)' },
+    2: { label: 'Thất bại', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
+    'FAILED': { label: 'Thất bại', color: '#ef4444', bg: 'rgba(239,68,68,0.15)' },
   };
-  return mapping[key] || { label: '⏳ Đang xử lý...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' };
+  return mapping[key] || { label: 'Đang xử lý...', color: '#3b82f6', bg: 'rgba(59,130,246,0.15)' };
 };
 const PAGE_SIZE = 12;
 
@@ -91,6 +94,7 @@ export default function DashboardPage() {
   const [page, setPage] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => loadProjects(), search ? 300 : 0);
@@ -145,7 +149,7 @@ export default function DashboardPage() {
         }
         setProjects(items);
         setTotalPages(Number(data.totalPages) || 0);
-        setTotalElements(Number(data.totalElements) || 0);
+        setTotalElements(Number(data.totalElements) || items.length);
       }
     } catch (err) {
       console.error('Load projects error:', err);
@@ -243,7 +247,22 @@ export default function DashboardPage() {
     ? { title: 'Đã mở khóa Ultra', description: 'Toàn bộ tính năng cao cấp', clickable: false }
     : user?.plan === 'pro'
       ? { title: 'Nâng cấp Ultra', description: 'Giới hạn cao nhất + ảnh chất lượng cao', clickable: true }
-      : { title: 'Nâng cấp Pro', description: '20 bài trình chiếu/ngày + ảnh HD', clickable: true };
+      : { title: 'Nâng cấp Pro', description: '20 bài trình chiếu/ngày', clickable: true };
+
+  // A deck opened from a PPTX keeps a private, hidden template behind it (its pictures live
+  // there). It is not in the user's template picker, so once its deck is gone nothing else
+  // can reach it — remove it too, best effort. A template that IS in the picker is a real
+  // custom template the user may still want, and is left alone.
+  const discardImportedTemplate = async (templateId) => {
+    if (!isCustomTemplateId(templateId)) return;
+    try {
+      const visible = await templateService.getAll();
+      if (visible.some((template) => template.id === templateId)) return;
+      await templateService.deleteCustom(templateId);
+    } catch {
+      // Leftover storage only; never worth failing the delete the user asked for.
+    }
+  };
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
@@ -252,11 +271,12 @@ export default function DashboardPage() {
     const confirmation = isGenerating
       ? 'Bài trình chiếu đang được tạo. Bạn có muốn hủy tác vụ và xóa bài này?'
       : 'Bạn có chắc muốn xóa bài trình chiếu này?';
-    if (!window.confirm(confirmation)) return;
+    if (!(await confirmDialog({ title: 'Xóa bài trình chiếu', message: confirmation, confirmLabel: isGenerating ? 'Hủy và xóa' : 'Xóa', danger: true }))) return;
     try {
       setDeleting(id);
       await projectService.deleteMultiple([id]);
       deleteProject(id);
+      discardImportedTemplate(project?.templateId);
       if (projects.length === 1 && page > 0) {
         setPage((current) => current - 1);
       } else {
@@ -274,6 +294,30 @@ export default function DashboardPage() {
     navigate(`/editor/${pres.id}`);
   };
 
+  // Opens a real .pptx for editing: parse it (each slide kept 1-to-1, real text and
+  // pictures), create a blank project with no AI step, then seed its slides straight
+  // from the parse — see utils/pptxImport.js for what does and doesn't come through.
+  const handleImportPptx = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    try {
+      const imported = await templateService.importSlides(file);
+      const slides = slidesFromImportedManifest(imported.manifest);
+      if (!slides.length) throw new Error('Không đọc được slide nào trong file này');
+      const projectName = file.name.replace(/\.(pptx|potx)$/i, '');
+      const project = await projectService.createImported(projectName, imported.templateId);
+      await projectService.syncSlidePages(project.id, slides.map(toSlidePageUpdate));
+      addToast(`Đã mở "${projectName}" — ${slides.length} slide`, 'success');
+      navigate(`/editor/${project.id}`);
+    } catch (err) {
+      addToast(err.message || 'Không thể mở file này', 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const formatDate = (d) => {
     if (!d) return '';
     const date = new Date(d);
@@ -288,22 +332,29 @@ export default function DashboardPage() {
         <div className="dash-header">
           <div>
             <h1 className="dash-title">
-              Xin chào, <span className="gradient-text">{user?.name}</span> 👋
+              Xin chào, <span className="gradient-text">{user?.name}</span>
             </h1>
             <p style={{ color: 'rgba(255,255,255,0.5)', marginTop: 6 }}>
               Quản lý tất cả bài thuyết trình của bạn tại đây
             </p>
           </div>
-          <button className="btn btn-primary btn-lg" onClick={() => navigate('/generate')}>
-            <Plus size={18} /> Tạo slide mới
-          </button>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <label className={`btn btn-ghost btn-lg ${importing ? 'disabled' : ''}`} style={{ cursor: importing ? 'not-allowed' : 'pointer' }}>
+              {importing ? <Loader2 size={18} className="spin" /> : <UploadCloud size={18} />}
+              {importing ? 'Đang mở...' : 'Mở file PPTX có sẵn'}
+              <input type="file" accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation" onChange={handleImportPptx} disabled={importing} hidden />
+            </label>
+            <button className="btn btn-primary btn-lg" onClick={() => navigate('/generate')}>
+              <Plus size={18} /> Tạo slide mới
+            </button>
+          </div>
         </div>
 
         {/* ── Stats cards ── */}
         <div className="dash-stats">
           <div className="dash-stat-card">
             <div className="dsc-icon" style={{ background: 'rgba(108,99,255,0.15)', color: '#a89fff' }}>
-              📊
+              <BarChart3 size={20} />
             </div>
             <div>
               <div className="dsc-value">{loading ? '-' : totalElements}</div>
@@ -375,7 +426,7 @@ export default function DashboardPage() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="dash-empty">
-            <div className="empty-icon">🎨</div>
+            <div className="empty-icon"><Palette size={44} strokeWidth={1.4} /></div>
             <h3>Chưa có presentation nào</h3>
             <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.9rem', marginTop: 8, marginBottom: 24 }}>
               Bắt đầu tạo slide AI đầu tiên của bạn ngay nào!

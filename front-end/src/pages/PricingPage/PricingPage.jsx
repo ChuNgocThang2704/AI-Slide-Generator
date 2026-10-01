@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { confirmDialog } from '../../services/dialogService';
 import { useAuthStore, useUIStore } from '../../store';
 import { Check, Sparkles, Zap, Crown, Loader2 } from 'lucide-react';
 import { subscriptionService } from '../../services/subscriptionService';
@@ -17,13 +18,14 @@ const PLANS = [
       features: [
         'Tối đa 3 bài trình chiếu / ngày',
         'Tối đa 10 slides / presentation',
-      'Tối đa 5 hình ảnh / presentation',
-      'Giới hạn 10.000 ký tự nội dung',
-      '2 lượt chỉnh sửa bằng AI mỗi ngày',
-      'Xuất PDF chất lượng cao',
-      '6 template thiết kế cơ bản',
+        'Tối đa 5 hình ảnh / presentation',
+        'Giới hạn 10.000 ký tự nội dung',
+        '2 lượt chỉnh sửa bằng AI mỗi ngày',
+        'Toàn bộ 12 template thiết kế',
+        'Chỉnh sửa slide tự do: văn bản, bố cục, biểu đồ, bảng',
+        'Xuất PDF và PPTX (PowerPoint)',
     ],
-    notIncluded: ['Xuất tệp PPTX (PowerPoint)', 'AI ảnh chất lượng HD', 'Ưu tiên xử lý nhanh'],
+    notIncluded: ['Không giới hạn số bài mỗi ngày', 'Nhiều lượt chỉnh sửa bằng AI hơn'],
   },
   {
     id: 'pro',
@@ -37,14 +39,14 @@ const PLANS = [
       features: [
         'Tối đa 20 bài trình chiếu / ngày',
         'Tối đa 30 slides / presentation',
-      'Tối đa 15 hình ảnh / presentation',
-      'Giới hạn 50.000 ký tự nội dung',
-      '10 lượt chỉnh sửa bằng AI mỗi ngày',
-      'Xuất tệp PPTX (PowerPoint) & PDF',
-      'Mở khóa toàn bộ template + template mới',
-      'Ưu tiên xử lý nhanh từ hệ thống',
+        'Tối đa 15 hình ảnh / presentation',
+        'Giới hạn 50.000 ký tự nội dung',
+        '10 lượt chỉnh sửa bằng AI mỗi ngày',
+        'Toàn bộ 12 template thiết kế',
+        'Chỉnh sửa slide tự do: văn bản, bố cục, biểu đồ, bảng',
+        'Xuất PDF và PPTX (PowerPoint)',
     ],
-    notIncluded: ['API Access', 'Hỗ trợ VIP 24/7'],
+    notIncluded: ['Không giới hạn số bài mỗi ngày'],
   },
   {
     id: 'ultra',
@@ -57,14 +59,12 @@ const PLANS = [
       features: [
         'Không giới hạn bài trình chiếu / ngày',
         'Tối đa 50 slides / presentation',
-      'Tối đa 35 hình ảnh / presentation',
-      'Giới hạn 100.000 ký tự nội dung',
-      '30 lượt chỉnh sửa bằng AI mỗi ngày',
-      'Xuất tệp PPTX, PDF & hình ảnh PNG',
-      'Mở khóa toàn bộ template nâng cao',
-      'Ưu tiên xử lý siêu nhanh (High Priority)',
-      'Hỗ trợ VIP 24/7',
-      'Quyền truy cập API Access',
+        'Tối đa 35 hình ảnh / presentation',
+        'Giới hạn 100.000 ký tự nội dung',
+        '30 lượt chỉnh sửa bằng AI mỗi ngày',
+        'Toàn bộ 12 template thiết kế',
+        'Chỉnh sửa slide tự do: văn bản, bố cục, biểu đồ, bảng',
+        'Xuất PDF và PPTX (PowerPoint)',
     ],
     notIncluded: [],
   },
@@ -181,7 +181,7 @@ export default function PricingPage() {
   };
 
   const handleCancel = async () => {
-    if (!window.confirm('Bạn có chắc muốn hủy tự động gia hạn gói cước này? Gói vẫn sẽ hoạt động đến ngày hết hạn.')) return;
+    if (!(await confirmDialog({ title: 'Hủy gia hạn', message: 'Bạn có chắc muốn hủy tự động gia hạn gói cước này? Gói vẫn sẽ hoạt động đến ngày hết hạn.', confirmLabel: 'Hủy gia hạn', cancelLabel: 'Giữ nguyên', danger: true }))) return;
     setActionLoading(true);
     try {
       await subscriptionService.cancel();
@@ -236,7 +236,7 @@ export default function PricingPage() {
               <div className="csc-body">
                 <div className="csc-info-item">
                   <span className="csc-label">Gói:</span>
-                  <strong className="csc-val" style={{ color: PLANS.find(p=>p.id === subDetail.packageCode.toLowerCase())?.color || '#a855f7' }}>
+                  <strong className="csc-val" style={{ color: PLANS.find(p=>p.id === String(subDetail.packageCode || '').toLowerCase())?.color || '#a855f7' }}>
                     {subDetail.packageName || subDetail.packageCode}
                   </strong>
                 </div>
@@ -498,8 +498,8 @@ export default function PricingPage() {
             {[
               { q: 'Tôi có thể hủy bất cứ lúc nào không?', a: 'Có, bạn có thể hủy gói bất cứ lúc nào. Gói sẽ vẫn hoạt động đến hết chu kỳ thanh toán.' },
               { q: 'Xuất PDF có giữ nguyên định dạng không?', a: 'Có, slide được xuất PDF với đúng màu sắc, font chữ và bố cục như trên web.' },
-              { q: 'AI tạo slide có chính xác không?', a: 'AI được fine-tune để tạo nội dung chuyên nghiệp. Bạn vẫn có thể chỉnh sửa trực tiếp sau khi tạo.' },
-              { q: 'Có giới hạn nào trong gói Free không?', a: 'Gói Free cho phép tạo 3 bài trình chiếu mỗi ngày, tối đa 10 slide và 5 ảnh cho mỗi bài.' },
+              { q: 'AI tạo slide có chính xác không?', a: 'AI tạo bản nháp có cấu trúc từ chủ đề hoặc tài liệu của bạn. Bạn vẫn có thể chỉnh sửa trực tiếp sau khi tạo.' },
+              { q: 'Có giới hạn nào trong gói Free không?', a: 'Gói Free cho phép tạo 3 bài trình chiếu mỗi ngày, tối đa 10 slide và 5 ảnh cho mỗi bài, và 2 lượt chỉnh sửa bằng AI mỗi ngày. Các tính năng chỉnh sửa, template và xuất tệp đều dùng được ở mọi gói.' },
             ].map((faq, i) => (
               <div key={i} className="faq-card">
                 <h4 className="faq-q">{faq.q}</h4>

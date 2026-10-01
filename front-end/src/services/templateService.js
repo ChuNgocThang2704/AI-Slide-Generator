@@ -27,8 +27,25 @@ export const templateService = {
     return unwrap(response);
   },
 
+  // Saves a prompt-generated template (its whole design is the short code) to the user's library.
+  async saveGenerated(name, code) {
+    const response = await apiClient.post('/template/custom/generated', { name, code });
+    return unwrap(response);
+  },
+
   async deleteCustom(templateId) {
     const response = await apiClient.delete(`/template/custom/${templateId}`);
+    return unwrap(response);
+  },
+
+  // Parses a real .pptx into slides ready to open for editing (not just a reusable style):
+  // each returned layout is a faithful 1-to-1 copy of that file's own slide, real text kept.
+  async importSlides(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await apiClient.post('/template/import', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
     return unwrap(response);
   },
 

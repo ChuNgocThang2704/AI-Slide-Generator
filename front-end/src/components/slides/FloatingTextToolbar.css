@@ -65,6 +65,12 @@
 
 .tiptap-editor-wrapper .ProseMirror p {
   margin: 0;
+  /* index.css sets a global `p { color: var(--text-secondary) }` for the
+     app's own dark UI text. Slide content had no <p> tags before Tiptap
+     (list items were plain <li>text</li>), so it never hit that rule; now
+     every paragraph/list item is wrapped in <p>, which silently overrode
+     the slide's own theme color with a washed-out white. */
+  color: inherit;
 }
 
 /* ── Floating Bubble Toolbar ───────────────────────────────────────────── */

@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, Zap, FileText, Download, Palette, CheckCircle, ArrowRight, BarChart3, ChevronRight } from 'lucide-react';
 import { useAuthStore } from '../../store';
+import ElementCanvas from '../../components/slides/ElementCanvas';
 import './LandingPage.css';
 
 const FEATURES = [
@@ -13,14 +14,44 @@ const FEATURES = [
   { icon: <BarChart3 size={24} />, title: 'Quản Lý Dễ Dàng', desc: 'Lưu trữ toàn bộ presentation, chỉnh sửa lại bất cứ lúc nào, không bao giờ mất dữ liệu.' },
 ];
 
-const TEMPLATES_PREVIEW = [
-  { id: 'modern-dark', name: 'Modern Dark', tag: 'Phổ biến', grad: 'linear-gradient(135deg,#0d0d1a,#1c1c3a)', accent: '#6c63ff' },
-  { id: 'vibrant-gradient', name: 'Vibrant Gradient', tag: 'Nổi bật', grad: 'linear-gradient(135deg,#f72585,#7209b7,#3a0ca3)', accent: '#f72585' },
-  { id: 'corporate-blue', name: 'Corporate Blue', tag: 'Doanh nghiệp', grad: 'linear-gradient(135deg,#001f4d,#003080)', accent: '#0077e6' },
-  { id: 'tech-purple', name: 'Tech Purple', tag: 'Công nghệ', grad: 'linear-gradient(135deg,#0a0015,#160026)', accent: '#e056fd' },
-  { id: 'nature-green', name: 'Nature Green', tag: 'Tươi mát', grad: 'linear-gradient(135deg,#0a2318,#0f3426)', accent: '#27ae60' },
-  { id: 'creative-minimal', name: 'Creative Minimal', tag: 'Sáng tạo', grad: 'linear-gradient(135deg,#f8f8f8,#fff)', accent: '#ff4757' },
+// Real templates from the editor, rendered with the real slide renderer.
+const SHOWCASE_TEMPLATES = [
+  { id: 'soft-blue', name: 'Soft Blue', tag: 'Phổ biến' },
+  { id: 'royal-purple', name: 'Royal Purple', tag: 'Sang trọng' },
+  { id: 'clean-white', name: 'Clean White', tag: 'Tối giản' },
+  { id: 'modern-dark', name: 'Modern Dark', tag: 'Hiện đại' },
+  { id: 'playful-yellow', name: 'Playful Yellow', tag: 'Vui tươi' },
+  { id: 'gradient-border', name: 'Gradient Border', tag: 'Nổi bật' },
+  { id: 'blue-planet', name: 'Blue Planet', tag: 'Vũ trụ' },
+  { id: 'nature-green', name: 'Nature Green', tag: 'Tươi mát' },
+  { id: 'tech-purple', name: 'Tech Purple', tag: 'Công nghệ' },
+  { id: 'ocean-teal', name: 'Ocean Teal', tag: 'Dịu mát' },
+  { id: 'editorial-paper', name: 'Editorial Paper', tag: 'Biên tập' },
+  { id: 'midnight-gold', name: 'Midnight Gold', tag: 'Cao cấp' },
 ];
+const SHOWCASE_SLIDE = {
+  id: 'showcase', type: 'title', title: 'Trí tuệ nhân tạo',
+  bullets: ['Tương lai của công nghệ và giáo dục'], elements: [],
+};
+
+function TemplateThumb({ theme }) {
+  const ref = React.useRef(null);
+  const [scale, setScale] = React.useState(0.3);
+  React.useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => setScale(node.clientWidth / 960));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div className="tpc-slide" ref={ref}>
+      <div style={{ width: 960, height: 540, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+        <ElementCanvas slide={SHOWCASE_SLIDE} theme={theme} scale={1} readonly onUpdate={() => {}} />
+      </div>
+    </div>
+  );
+}
 
 const CAPABILITIES = [
   { value: 'Prompt & tài liệu', label: 'Nguồn nội dung' },
@@ -66,7 +97,7 @@ export default function LandingPage() {
             </div>
             <div className="hero-trust">
               <CheckCircle size={15} color="#2ecc71" />
-              <span>Hỗ trợ prompt, PDF, DOCX và TXT</span>
+              <span>Hỗ trợ prompt, PDF và DOCX</span>
             </div>
           </div>
 
@@ -154,25 +185,16 @@ export default function LandingPage() {
         <div className="container">
           <div className="section-header">
             <div className="section-badge">Templates</div>
-            <h2>6 Template <span className="gradient-text">Đẹp Mắt</span></h2>
+            <h2>{SHOWCASE_TEMPLATES.length} Template <span className="gradient-text">Đẹp Mắt</span></h2>
             <p>Mỗi template được thiết kế tỉ mỉ cho từng phong cách thuyết trình khác nhau</p>
           </div>
           <div className="templates-showcase">
-            {TEMPLATES_PREVIEW.map((t) => (
+            {SHOWCASE_TEMPLATES.map((t) => (
               <div key={t.id} className="template-preview-card">
-                <div className="tpc-slide" style={{ background: t.grad }}>
-                  <div className="tpc-deco" style={{ background: t.accent + '25' }} />
-                  <div className="tpc-badge" style={{ color: t.accent, borderColor: t.accent + '55', background: t.accent + '15' }}>
-                    ✦ Slide
-                  </div>
-                  <div className="tpc-title" style={{ color: t.id === 'creative-minimal' ? '#1a1a1a' : 'white' }}>
-                    {t.name}
-                  </div>
-                  <div className="tpc-bar" style={{ background: t.accent }} />
-                </div>
+                <TemplateThumb theme={t.id} />
                 <div className="tpc-info">
                   <span className="tpc-name">{t.name}</span>
-                  <span className="tpc-tag" style={{ color: t.accent, background: t.accent + '18' }}>{t.tag}</span>
+                  <span className="tpc-tag">{t.tag}</span>
                 </div>
               </div>
             ))}
@@ -195,7 +217,7 @@ export default function LandingPage() {
           <div className="steps-grid">
             {[
               { num: '01', title: 'Nhập yêu cầu', desc: 'Mô tả chủ đề, số lượng slide và nội dung mong muốn hoặc chọn tài liệu đã tải lên' },
-              { num: '02', title: 'Chọn template', desc: 'Lựa chọn 1 trong 6 template thiết kế đẹp phù hợp với nội dung' },
+              { num: '02', title: 'Chọn template', desc: 'Lựa chọn 1 trong 12 template thiết kế đẹp phù hợp với nội dung' },
               { num: '03', title: 'Hoàn thiện', desc: 'Chỉnh sửa, trình chiếu trực tiếp hoặc xuất bài dưới dạng PPTX và PDF' },
             ].map((s, i) => (
               <div key={i} className="step-card">
@@ -239,7 +261,7 @@ export default function LandingPage() {
             <div className="footer-brand">
               <div className="navbar-logo" style={{display:'flex',alignItems:'center',gap:10}}>
                 <div className="logo-icon"><Sparkles size={16}/></div>
-                <span style={{fontFamily:'Outfit',fontWeight:800,fontSize:'1.1rem',color:'white'}}>
+                <span style={{fontFamily:'Be Vietnam Pro',fontWeight:800,fontSize:'1.1rem',color:'white'}}>
                   Lec<span className="gradient-text">Gen</span>
                 </span>
               </div>

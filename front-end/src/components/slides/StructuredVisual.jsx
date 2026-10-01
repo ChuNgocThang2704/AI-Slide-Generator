@@ -577,12 +577,18 @@ export function TableVisual({ table, theme, onChange, onInteract }) {
 
 function chartData(chart) {
   const labels = chart?.labels || chart?.categories || [];
+  // The AI backend emits Chart.js-style `datasets: [{ label, data }]`, not
+  // the `series: [{ name, values }]` shape this component edits in — without
+  // this, every freshly generated chart falls through to the single-series
+  // fallback with an empty values array and renders as "no data".
   const rawSeries = Array.isArray(chart?.series) && chart.series.length
     ? chart.series
-    : [{ name: chart?.title || 'Giá trị', values: chart?.values || [] }];
+    : Array.isArray(chart?.datasets) && chart.datasets.length
+      ? chart.datasets
+      : [{ name: chart?.title || 'Giá trị', values: chart?.values || [] }];
   const series = rawSeries.map((item, index) => ({
     ...(item && typeof item === 'object' ? item : {}),
-    name: item?.name || `Dữ liệu ${index + 1}`,
+    name: item?.name || item?.label || `Dữ liệu ${index + 1}`,
     values: (item?.values || item?.data || []).map((value) => Number(value) || 0),
   }));
   return { labels: labels.map(String), series };

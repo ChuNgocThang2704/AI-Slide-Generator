@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import './FloatingTextToolbar.css';
 
@@ -77,7 +77,7 @@ const IconVerticalAlign = ({ position }) => {
 const FONT_OPTIONS = [
   { label: 'Body font',   value: '' },
   { label: 'Inter',       value: 'Inter, sans-serif' },
-  { label: 'Outfit',      value: 'Outfit, sans-serif' },
+  { label: 'Be Vietnam Pro',      value: "'Be Vietnam Pro', sans-serif" },
   { label: 'Arial',       value: 'Arial, sans-serif' },
   { label: 'Verdana',     value: 'Verdana, sans-serif' },
   { label: 'Tahoma',      value: 'Tahoma, sans-serif' },
@@ -92,156 +92,64 @@ const FONT_OPTIONS = [
 ];
 const FONT_SIZE_OPTIONS = [4, 5, 6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 54, 60, 72, 80, 96, 120, 144, 180, 200];
 
-// ── Core: wrap selected text in a <span> with given styles ───────────────────
-function applySpanStyle(styles = {}) {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return;
-  const range = sel.getRangeAt(0);
-  if (range.collapsed) return; // no selection — nothing to do
-
-  // Check if the selection is entirely within a single existing span we can reuse
-  const container = range.commonAncestorContainer;
-  const parentSpan =
-    container.nodeType === Node.TEXT_NODE
-      ? container.parentElement
-      : container;
-
-  // Create new span
-  const span = document.createElement('span');
-  Object.entries(styles).forEach(([prop, val]) => {
-    if (val) span.style[prop] = val;
-  });
-
-  try {
-    // surroundContents works when selection doesn't cross element boundaries
-    const contents = range.extractContents();
-    span.appendChild(contents);
-    range.insertNode(span);
-
-    // Restore selection to the new span
-    const newRange = document.createRange();
-    newRange.selectNodeContents(span);
-    sel.removeAllRanges();
-    sel.addRange(newRange);
-  } catch (e) {
-    // Fallback to execCommand for complex selections
-    console.warn('applySpanStyle fallback:', e);
-  }
-}
-
-// ── Core: execCommand helpers ─────────────────────────────────────────────────
-function execCmd(cmd, value = null) {
-  document.execCommand(cmd, false, value);
-}
-function queryState(cmd) {
-  try { return document.queryCommandState(cmd); } catch { return false; }
-}
-
-function applyInlineStyle(editor, range, styles) {
-  if (!editor || !range || range.collapsed) return null;
-  const root = range.commonAncestorContainer;
-  const walker = document.createTreeWalker(
-    root.nodeType === Node.TEXT_NODE ? root.parentNode : root,
-    NodeFilter.SHOW_TEXT
-  );
-  const nodes = [];
-  let node = walker.nextNode();
-  while (node) {
-    if (editor.contains(node) && node.nodeValue && range.intersectsNode(node)) nodes.push(node);
-    node = walker.nextNode();
-  }
-
-  const styledNodes = [];
-  nodes.forEach((textNode) => {
-    const start = textNode === range.startContainer ? range.startOffset : 0;
-    const end = textNode === range.endContainer ? range.endOffset : textNode.nodeValue.length;
-    if (start >= end) return;
-
-    if (end < textNode.nodeValue.length) textNode.splitText(end);
-    const selectedNode = start > 0 ? textNode.splitText(start) : textNode;
-    const span = document.createElement('span');
-    Object.assign(span.style, styles);
-    selectedNode.parentNode.insertBefore(span, selectedNode);
-    span.appendChild(selectedNode);
-    styledNodes.push(selectedNode);
-  });
-
-  if (!styledNodes.length) return null;
-  const nextRange = document.createRange();
-  nextRange.setStart(styledNodes[0], 0);
-  nextRange.setEnd(styledNodes.at(-1), styledNodes.at(-1).nodeValue.length);
-  const selection = window.getSelection();
-  selection.removeAllRanges();
-  selection.addRange(nextRange);
-  return nextRange;
-}
-
 // ── FloatingTextToolbar Component ─────────────────────────────────────────────
+// All formatting goes through the Tiptap `editor` instance's own command
+// chain (`editor.chain().focus()....run()`), never `document.execCommand` —
+// that deprecated API is what made list-toggling and other formatting
+// unreliable before. `editor.isActive(...)` replaces `queryCommandState`.
 export default function FloatingTextToolbar({
-  editorRef,
-  selectionRangeRef,
+  editor,
   visible,
   position,
-  onFormatChange,
   boxStyle = {},
   onBoxStyleChange,
   batchMode = false,
 }) {
   const colorRef = useRef(null);
-  const temporaryEditableRef = useRef(false);
-  const [isBold, setIsBold]           = useState(false);
-  const [isItalic, setIsItalic]       = useState(false);
-  const [isUnderline, setIsUnderline] = useState(false);
-  const [align, setAlign]             = useState('left');
-  const [fontSize, setFontSize]       = useState('14');
   const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
-  const [fontFamily, setFontFamily]   = useState('');
-  const [color, setColor]             = useState('#ffffff');
-  const [listMode, setListMode]       = useState('none');
-  const [lineHeight, setLineHeight]   = useState(String(boxStyle?.lineHeight || 1.35));
-  const [verticalAlign, setVerticalAlign] = useState(boxStyle?.verticalAlign || 'top');
+  // Only the font-size text input needs a local buffer, for the keystrokes
+  // between focus and commit — everything else below is derived fresh from
+  // the editor/box on every render (like isBold/isItalic already were),
+  // so it never goes stale when the selection moves or a different box
+  // gets focused.
+  const [fontSizeDraft, setFontSizeDraft] = useState(null);
+  const [, forceUpdate] = useState(0);
 
-  // Sync state with current selection format
+  // Re-render on every selection/transaction so isActive()- and
+  // getAttributes()-driven state (bold/italic/list/align/font/size/color)
+  // stays in sync with the cursor, including while highlighting a range
+  // whose formatting differs from whatever was selected before.
   useEffect(() => {
-    if (!visible) return;
-    setIsBold(queryState('bold'));
-    setIsItalic(queryState('italic'));
-    setIsUnderline(queryState('underline'));
-    const editor = editorRef.current;
-    if (editor) {
-      const range = selectionRangeRef?.current;
-      const startNode = range?.startContainer;
-      const startElement = startNode?.nodeType === Node.ELEMENT_NODE
-        ? startNode
-        : startNode?.parentElement;
-      const formatElement = startElement && editor.contains(startElement)
-        ? startElement
-        : editor;
-      const effectiveSize = Number.parseFloat(window.getComputedStyle(formatElement).fontSize);
-      if (Number.isFinite(effectiveSize)) setFontSize(String(Math.round(effectiveSize)));
-    }
-    if (batchMode) {
-      setIsBold(Number(boxStyle?.fontWeight) >= 600);
-      setIsItalic(boxStyle?.fontStyle === 'italic');
-      setIsUnderline(String(boxStyle?.textDecoration || '').includes('underline'));
-      setAlign(boxStyle?.textAlign || 'left');
-      if (boxStyle?.fontSize) setFontSize(String(boxStyle.fontSize));
-      if (boxStyle?.fontFamily) setFontFamily(boxStyle.fontFamily);
-      if (boxStyle?.color) setColor(boxStyle.color);
-    }
-    setLineHeight(String(boxStyle?.lineHeight || 1.35));
-    setVerticalAlign(boxStyle?.verticalAlign || 'top');
-    setListMode(
-      editor?.querySelector('ol') ? 'number' :
-      editor?.querySelector('ul') ? 'bullet' : 'none'
-    );
-    setAlign(
-      queryState('justifyCenter') ? 'center' :
-      queryState('justifyRight')  ? 'right'  : 'left'
-    );
-  }, [batchMode, boxStyle, editorRef, selectionRangeRef, visible]);
+    if (!editor) return undefined;
+    const rerender = () => forceUpdate((n) => n + 1);
+    editor.on('selectionUpdate', rerender);
+    editor.on('transaction', rerender);
+    return () => {
+      editor.off('selectionUpdate', rerender);
+      editor.off('transaction', rerender);
+    };
+  }, [editor]);
 
-  if (!visible) return null;
+  if (!visible || !editor || editor.isDestroyed) return null;
+
+  const attrs = editor.getAttributes('textStyle');
+  const derivedFontSize = String(
+    (batchMode && boxStyle?.fontSize) || Number.parseInt(attrs.fontSize, 10) || 14,
+  );
+  const fontSize = fontSizeDraft ?? derivedFontSize;
+  const fontFamily = (batchMode && boxStyle?.fontFamily) || attrs.fontFamily || '';
+  const color = (batchMode && boxStyle?.color) || attrs.color || '#ffffff';
+  const lineHeight = String(boxStyle?.lineHeight || 1.35);
+  const verticalAlign = boxStyle?.verticalAlign || 'top';
+
+  const isBold = editor.isActive('bold');
+  const isItalic = editor.isActive('italic');
+  const isUnderline = editor.isActive('underline');
+  const listMode = editor.isActive('bulletList') ? 'bullet' : editor.isActive('orderedList') ? 'number' : 'none';
+  // Paragraphs inside list items report their alignment through their own
+  // attributes; isActive({ textAlign }) alone misses them.
+  const paragraphAlign = editor.getAttributes('paragraph').textAlign;
+  const align = ['center', 'right', 'justify'].includes(paragraphAlign) ? paragraphAlign : 'left';
 
   // ── Position: fixed, above the selection/editor ───────────────────────────
   const toolbarStyle = {
@@ -256,71 +164,32 @@ export default function FloatingTextToolbar({
   };
   const dockHost = document.getElementById('editor-format-toolbar-host');
 
-  // Keep selection alive when clicking toolbar
+  // Keep selection alive when clicking toolbar.
   const handleMouseDown = (e) => {
     if (e.target.closest('select, input')) return;
     e.preventDefault();
   };
 
-  const restoreSelection = () => {
-    if (!editorRef.current) return false;
-    if (!editorRef.current.isContentEditable) {
-      editorRef.current.setAttribute('contenteditable', 'true');
-      temporaryEditableRef.current = true;
-    }
-    editorRef.current.focus({ preventScroll: true });
-    let range = selectionRangeRef?.current;
-    if (!range || range.collapsed) {
-      range = document.createRange();
-      range.selectNodeContents(editorRef.current);
-      selectionRangeRef.current = range;
-    }
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    return true;
-  };
-
-  const commitFormat = () => {
-    selectionRangeRef.current = window.getSelection()?.rangeCount
-      ? window.getSelection().getRangeAt(0).cloneRange()
-      : selectionRangeRef.current;
-    onFormatChange?.();
-    if (temporaryEditableRef.current && editorRef.current) {
-      editorRef.current.setAttribute('contenteditable', 'false');
-      temporaryEditableRef.current = false;
-    }
-  };
-
-  // ── Apply font family to selected text ────────────────────────────────────
+  // ── Font family ────────────────────────────────────────────────────────
   const handleFontFamily = (family) => {
-    setFontFamily(family);
     if (!family) return;
     if (batchMode && onBoxStyleChange) {
       onBoxStyleChange({ fontFamily: family });
       return;
     }
-    restoreSelection();
-    applyInlineStyle(editorRef.current, selectionRangeRef.current, { fontFamily: family });
-    commitFormat();
+    editor.chain().focus().setFontFamily(family).run();
   };
 
-  // ── Apply font size to selected text ─────────────────────────────────────
+  // ── Font size ──────────────────────────────────────────────────────────
   const handleFontSize = (sz) => {
     const num = parseInt(sz, 10);
-    if (!Number.isFinite(num)) {
-      setFontSize('14');
-      return;
-    }
+    if (!Number.isFinite(num)) return;
     const normalized = Math.min(200, Math.max(4, num));
-    setFontSize(String(normalized));
     if (batchMode && onBoxStyleChange) {
       onBoxStyleChange({ fontSize: normalized });
       return;
     }
-    restoreSelection();
-    applyInlineStyle(editorRef.current, selectionRangeRef.current, { fontSize: `${normalized}px` });
-    commitFormat();
+    editor.chain().focus().setFontSize(`${normalized}px`).run();
   };
 
   const stepFontSize = (delta) => {
@@ -328,90 +197,56 @@ export default function FloatingTextToolbar({
     handleFontSize((Number.isFinite(current) ? current : 14) + delta);
   };
 
-  // ── Apply color to selected text ──────────────────────────────────────────
+  // ── Text color ─────────────────────────────────────────────────────────
   const handleColor = (c) => {
-    setColor(c);
     if (batchMode && onBoxStyleChange) {
       onBoxStyleChange({ color: c });
       return;
     }
-    restoreSelection();
-    applyInlineStyle(editorRef.current, selectionRangeRef.current, { color: c });
-    commitFormat();
+    editor.chain().focus().setColor(c).run();
   };
 
-  // ── Toggle bold/italic/underline via execCommand (these work reliably) ────
+  // ── Bold / italic / underline ─────────────────────────────────────────
   const toggleBold = () => {
     if (batchMode && onBoxStyleChange) {
-      const next = !isBold;
-      setIsBold(next);
-      onBoxStyleChange({ fontWeight: next ? 700 : 400 });
+      onBoxStyleChange({ fontWeight: isBold ? 400 : 700 });
       return;
     }
-    restoreSelection();
-    execCmd('bold');
-    setIsBold(!isBold);
-    commitFormat();
+    editor.chain().focus().toggleBold().run();
   };
   const toggleItalic = () => {
     if (batchMode && onBoxStyleChange) {
-      const next = !isItalic;
-      setIsItalic(next);
-      onBoxStyleChange({ fontStyle: next ? 'italic' : 'normal' });
+      onBoxStyleChange({ fontStyle: isItalic ? 'normal' : 'italic' });
       return;
     }
-    restoreSelection();
-    execCmd('italic');
-    setIsItalic(!isItalic);
-    commitFormat();
+    editor.chain().focus().toggleItalic().run();
   };
   const toggleUnderline = () => {
     if (batchMode && onBoxStyleChange) {
-      const next = !isUnderline;
-      setIsUnderline(next);
-      onBoxStyleChange({ textDecoration: next ? 'underline' : 'none' });
+      onBoxStyleChange({ textDecoration: isUnderline ? 'none' : 'underline' });
       return;
     }
-    restoreSelection();
-    execCmd('underline');
-    setIsUnderline(!isUnderline);
-    commitFormat();
+    editor.chain().focus().toggleUnderline().run();
   };
 
-  // ── Align (works on block level via execCommand) ──────────────────────────
+  // ── Align ──────────────────────────────────────────────────────────────
   const applyAlign = (dir) => {
     if (batchMode && onBoxStyleChange) {
-      setAlign(dir);
       onBoxStyleChange({ textAlign: dir });
       return;
     }
-    restoreSelection();
-    execCmd(`justify${dir.charAt(0).toUpperCase() + dir.slice(1)}`);
-    setAlign(dir);
-    commitFormat();
+    editor.chain().focus().setTextAlign(dir).run();
   };
 
+  // Tiptap's toggleBulletList/toggleOrderedList are real ProseMirror
+  // commands, not the deprecated execCommand — they reliably turn a list
+  // off again when it's already active, switch cleanly between bullet and
+  // numbered, and never split one list into disconnected fragments.
   const applyListMode = (mode) => {
-    restoreSelection();
-    const bulletActive = queryState('insertUnorderedList');
-    const numberActive = queryState('insertOrderedList');
-
-    if (mode === 'bullet') {
-      if (numberActive) execCmd('insertOrderedList');
-      if (!bulletActive) execCmd('insertUnorderedList');
-      else execCmd('insertUnorderedList');
-    } else if (mode === 'number') {
-      if (bulletActive) execCmd('insertUnorderedList');
-      if (!numberActive) execCmd('insertOrderedList');
-      else execCmd('insertOrderedList');
-    } else {
-      if (bulletActive) execCmd('insertUnorderedList');
-      if (numberActive) execCmd('insertOrderedList');
-    }
-    setListMode(mode === listMode ? 'none' : mode);
-    commitFormat();
+    const chain = editor.chain().focus();
+    if (mode === 'bullet') chain.toggleBulletList().run();
+    else if (mode === 'number') chain.toggleOrderedList().run();
   };
-
 
   const toolbar = (
     <div
@@ -442,22 +277,25 @@ export default function FloatingTextToolbar({
           onFocus={(e) => {
             e.target.select();
             setSizeMenuOpen(true);
+            setFontSizeDraft(fontSize);
           }}
           onChange={(e) => {
-            if (/^\d{0,3}$/.test(e.target.value)) setFontSize(e.target.value);
+            if (/^\d{0,3}$/.test(e.target.value)) setFontSizeDraft(e.target.value);
           }}
           onBlur={(e) => {
             handleFontSize(e.target.value);
+            setFontSizeDraft(null);
             window.setTimeout(() => setSizeMenuOpen(false), 120);
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
               handleFontSize(e.currentTarget.value);
-              editorRef?.current?.focus();
+              setFontSizeDraft(null);
+              editor.chain().focus();
             } else if (e.key === 'Escape') {
-              setFontSize('14');
-              editorRef?.current?.focus();
+              setFontSizeDraft(null);
+              editor.chain().focus();
             }
           }}
         />
@@ -472,6 +310,7 @@ export default function FloatingTextToolbar({
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   handleFontSize(size);
+                  setFontSizeDraft(null);
                   setSizeMenuOpen(false);
                 }}
               >
@@ -510,12 +349,12 @@ export default function FloatingTextToolbar({
       {/* ── Bullet list ── */}
       <button
         className={`ft-btn ${listMode === 'bullet' ? 'active' : ''}`}
-        onClick={() => applyListMode(listMode === 'bullet' ? 'none' : 'bullet')}
+        onClick={() => applyListMode('bullet')}
         title="Danh sách dấu đầu dòng"
       ><IconList /></button>
       <button
         className={`ft-btn ${listMode === 'number' ? 'active' : ''}`}
-        onClick={() => applyListMode(listMode === 'number' ? 'none' : 'number')}
+        onClick={() => applyListMode('number')}
         title="Danh sách đánh số"
       ><IconNumberedList /></button>
 
@@ -527,9 +366,7 @@ export default function FloatingTextToolbar({
             className="ft-select ft-line-height"
             value={lineHeight}
             onChange={(event) => {
-              const value = Number(event.target.value);
-              setLineHeight(String(value));
-              onBoxStyleChange({ lineHeight: value });
+              onBoxStyleChange({ lineHeight: Number(event.target.value) });
             }}
             title="Khoảng cách dòng"
             aria-label="Khoảng cách dòng"
@@ -547,10 +384,7 @@ export default function FloatingTextToolbar({
             <button
               key={value}
               className={`ft-btn ${verticalAlign === value ? 'active' : ''}`}
-              onClick={() => {
-                setVerticalAlign(value);
-                onBoxStyleChange({ verticalAlign: value });
-              }}
+              onClick={() => onBoxStyleChange({ verticalAlign: value })}
               title={{ top: 'Căn trên', middle: 'Căn giữa theo chiều dọc', bottom: 'Căn dưới' }[value]}
               aria-label={{ top: 'Căn trên', middle: 'Căn giữa theo chiều dọc', bottom: 'Căn dưới' }[value]}
             >
