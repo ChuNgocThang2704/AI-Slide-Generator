@@ -450,7 +450,7 @@ public class PowerPointTemplateParser {
                 elementType = "image";
                 role = "image";
             } else if ("graphicFrame".equals(kind)) {
-                tableData = keepText ? readTable(shape) : null;
+                tableData = keepText ? readTable(shape, theme, pageSize) : null;
                 if (tableData != null) role = "table";
                 elementType = tableData != null ? "table" : switch (role) {
                     case "chart" -> "chart";
@@ -511,16 +511,23 @@ public class PowerPointTemplateParser {
      * The cells of a PowerPoint table, in the shape the editor's tables use: the first row as the
      * headers, the rest as rows, and the columns' relative widths. Null when the frame holds no table.
      */
-    private Map<String, Object> readTable(Element frame) {
+    private Map<String, Object> readTable(Element frame, TemplateManifest.Theme theme, long[] pageSize) {
         Element table = firstDescendant(frame, "tbl");
         if (table == null) return null;
         List<List<String>> grid = new ArrayList<>();
+        List<List<Map<String, Object>>> looks = new ArrayList<>();
         for (Element row : descendants(table, "tr")) {
             List<String> cells = new ArrayList<>();
+            List<Map<String, Object>> rowLooks = new ArrayList<>();
             for (Element cell : childElements(row)) {
-                if ("tc".equals(cell.getLocalName())) cells.add(cellText(cell));
+                if (!"tc".equals(cell.getLocalName())) continue;
+                cells.add(cellText(cell));
+                rowLooks.add(cellLook(cell, theme, pageSize));
             }
-            if (!cells.isEmpty()) grid.add(cells);
+            if (!cells.isEmpty()) {
+                grid.add(cells);
+                looks.add(rowLooks);
+            }
         }
         if (grid.isEmpty()) return null;
 
@@ -534,6 +541,23 @@ public class PowerPointTemplateParser {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("headers", normalized.get(0));
         data.put("rows", new ArrayList<>(normalized.subList(1, normalized.size())));
+        List<Map<String, Object>> headerLooks = new ArrayList<>();
+        List<List<Map<String, Object>>> cellLooks = new ArrayList<>();
+        boolean styled = false;
+        for (int rowIndex = 0; rowIndex < looks.size(); rowIndex++) {
+            List<Map<String, Object>> padded = new ArrayList<>();
+            for (int column = 0; column < columns; column++) {
+                Map<String, Object> look = column < looks.get(rowIndex).size() ? looks.get(rowIndex).get(column) : new LinkedHashMap<>();
+                if (!look.isEmpty()) styled = true;
+                padded.add(look);
+            }
+            if (rowIndex == 0) headerLooks = padded;
+            else cellLooks.add(padded);
+        }
+        if (styled) {
+            data.put("headerStyles", headerLooks);
+            data.put("cellStyles", cellLooks);
+        }
 
         Element columnGrid = firstChild(table, "tblGrid");
         if (columnGrid != null) {
@@ -546,6 +570,57 @@ public class PowerPointTemplateParser {
             }
         }
         return data;
+    }
+
+    /**
+     * What a table cell looks like: its fill, the font its first run was set in (size, weight,
+     * slant, colour, family) and the alignment of its text; the editor keeps these per cell.
+     */
+    private Map<String, Object> cellLook(Element cell, TemplateManifest.Theme theme, long[] pageSize) {
+        Map<String, Object> look = new LinkedHashMap<>();
+        Element properties = firstChild(cell, "tcPr");
+        if (properties != null) {
+            Fill fill = fillOf(properties, theme);
+            if (fill != null && fill.css() != null) look.put("background", fill.css());
+            String anchor = properties.getAttribute("anchor");
+            if ("ctr".equals(anchor)) look.put("verticalAlign", "middle");
+            else if ("t".equals(anchor)) look.put("verticalAlign", "top");
+            else if ("b".equals(anchor)) look.put("verticalAlign", "bottom");
+        }
+        Element run = null;
+        for (Element candidate : descendants(cell, "r")) {
+            Element text = firstChild(candidate, "t");
+            if (text != null && !text.getTextContent().isBlank()) {
+                run = candidate;
+                break;
+            }
+        }
+        if (run != null) {
+            Element style = firstChild(run, "rPr");
+            if (style != null) {
+                if (!style.getAttribute("sz").isBlank()) {
+                    double size = longAttr(style, "sz", 1800) / 100d * 960d / (pageSize[0] / 12_700d);
+                    look.put("fontSize", Math.round(size * 10) / 10d);
+                }
+                if ("1".equals(style.getAttribute("b"))) look.put("fontWeight", 700);
+                if ("1".equals(style.getAttribute("i"))) look.put("fontStyle", "italic");
+                Element solid = firstChild(style, "solidFill");
+                String color = solid == null ? null : colorFromNode(solid, theme.getColors());
+                if (color != null) look.put("color", color);
+                Element latin = firstChild(style, "latin");
+                if (latin != null && !latin.getAttribute("typeface").isBlank() && !latin.getAttribute("typeface").startsWith("+")) {
+                    look.put("fontFamily", latin.getAttribute("typeface"));
+                }
+            }
+        }
+        for (Element paragraph : descendants(cell, "p")) {
+            Element paragraphProperties = firstChild(paragraph, "pPr");
+            if (paragraphProperties != null && !paragraphProperties.getAttribute("algn").isBlank()) {
+                look.put("textAlign", cssAlign(paragraphProperties.getAttribute("algn")));
+                break;
+            }
+        }
+        return look;
     }
 
     /** A table cell's text, its paragraphs on one line. */

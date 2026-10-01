@@ -315,7 +315,7 @@ class PowerPointTemplateParserTest {
                           <a:tblPr firstRow="1"/>
                           <a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="6144000"/></a:tblGrid>
                           <a:tr h="370840">
-                            <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Muc</a:t></a:r></a:p></a:txBody></a:tc>
+                            <a:tc><a:txBody><a:bodyPr/><a:p><a:pPr algn="ctr"/><a:r><a:rPr sz="1800" b="1" i="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="Times New Roman"/></a:rPr><a:t>Muc</a:t></a:r></a:p></a:txBody><a:tcPr anchor="ctr"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:tcPr></a:tc>
                             <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Gia tri</a:t></a:r></a:p></a:txBody></a:tc>
                           </a:tr>
                           <a:tr h="370840">
@@ -337,6 +337,13 @@ class PowerPointTemplateParserTest {
         assertThat(table.getData().get("headers")).isEqualTo(List.of("Muc", "Gia tri"));
         // A cell's paragraphs share one line.
         assertThat(table.getData().get("rows")).isEqualTo(List.of(List.of("Mot dong hai", "10")));
+        // The look of each cell: the header's fill, white bold italic serif text, centred.
+        @SuppressWarnings("unchecked")
+        List<java.util.Map<String, Object>> headerStyles = (List<java.util.Map<String, Object>>) table.getData().get("headerStyles");
+        assertThat(headerStyles.get(0)).containsEntry("background", "#0000FF").containsEntry("color", "#FFFFFF")
+                .containsEntry("fontWeight", 700).containsEntry("fontStyle", "italic")
+                .containsEntry("fontFamily", "Times New Roman").containsEntry("textAlign", "center")
+                .containsEntry("verticalAlign", "middle");
         assertThat(table.getData().get("columnWidths")).isEqualTo(List.of(3000000d, 6144000d));
         assertThat(table.getX()).isBetween(47d, 49d);
         // The cells are not also read as a text box of their own.
