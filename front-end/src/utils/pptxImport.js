@@ -44,6 +44,8 @@ function mapTableElement(element) {
   };
 }
 
+const DECOR_BUDGET = 40000;
+
 export function slidesFromImportedManifest(manifest) {
   const layouts = Array.isArray(manifest?.layouts) ? manifest.layouts : [];
   return layouts.map((layout) => {
@@ -56,7 +58,10 @@ export function slidesFromImportedManifest(manifest) {
     // (that re-flows every slide and saves the result over the copy).
     const richText = { _imported: true };
     if (art.decor.length) {
-      richText._decor = art.decor;
+      // A slide's rich text is stored in a 64 KB column; a drawing of hundreds of shapes is cut
+      // at that budget (the rest is the least important: they come last) rather than refused.
+      let budget = DECOR_BUDGET;
+      richText._decor = art.decor.filter((item) => (budget -= JSON.stringify(item).length) >= 0);
       if (art.pageColor) richText._tplBg = art.pageColor;
       if (art.safe) richText._safe = art.safe;
     }

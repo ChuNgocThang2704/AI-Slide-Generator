@@ -347,17 +347,335 @@ class PowerPointTemplateParserTest {
                 .noneMatch(item -> "table".equals(item.getType()));
     }
 
+    @Test
+    void openedDeckShowsWhatItsLayoutAndMasterDraw() throws Exception {
+        String master = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Top bar"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="300000"/></a:xfrm>
+                        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                        <a:solidFill><a:srgbClr val="112233"/></a:solidFill></p:spPr>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sldMaster>
+                """;
+        String layout = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld name="With a rule"><p:spTree>
+                    <p:cxnSp>
+                      <p:nvCxnSpPr><p:cNvPr id="3" name="Rule"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="1600000"/><a:ext cx="9000000" cy="0"/></a:xfrm>
+                        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+                        <a:ln w="12700"><a:solidFill><a:srgbClr val="AABBCC"/></a:solidFill></a:ln></p:spPr>
+                    </p:cxnSp>
+                    <p:cxnSp>
+                      <p:nvCxnSpPr><p:cNvPr id="4" name="Diagonal"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="2600000"/><a:ext cx="2000000" cy="2000000"/></a:xfrm>
+                        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+                        <a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></p:spPr>
+                    </p:cxnSp>
+                  </p:spTree></p:cSld>
+                </p:sldLayout>
+                """;
+        String layoutRels = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+                </Relationships>
+                """;
+        byte[] deck = withPart(withPart(withPart(placeholderDeckPptx(),
+                "ppt/slideMasters/slideMaster1.xml", master),
+                "ppt/slideLayouts/slideLayout1.xml", layout),
+                "ppt/slideLayouts/_rels/slideLayout1.xml.rels", layoutRels);
+
+        List<TemplateManifest.Element> decor = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest()
+                .getLayouts().get(0).getDecor();
+        // The master's bar is drawn below the layout's rule.
+        assertThat(decor).extracting(TemplateManifest.Element::getFill).containsSubsequence("#112233", "#AABBCC");
+        TemplateManifest.Element rule = decor.stream().filter(item -> "#AABBCC".equals(item.getFill())).findFirst().orElseThrow();
+        assertThat(rule.getType()).isEqualTo("shape");
+        assertThat(rule.getHeight()).isBetween(0.9d, 1.6d);          // a thin rectangle, as thick as the line
+        assertThat(rule.getWidth()).isBetween(707d, 710d);
+        // A diagonal line has no equivalent and is left out.
+        assertThat(decor).noneMatch(item -> "#FF0000".equals(item.getFill()));
+
+        // A slide that hides background graphics shows neither.
+        String hidden = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" showMasterSp="0">
+                  <p:cSld><p:spTree/></p:cSld>
+                </p:sld>
+                """;
+        byte[] hiddenDeck = withSlide(deck, hidden);
+        assertThat(new PowerPointTemplateParser().parseWithAssets(hiddenDeck, true).manifest().getLayouts().get(0).getDecor())
+                .extracting(TemplateManifest.Element::getFill).doesNotContain("#112233", "#AABBCC");
+
+        // A template upload keeps the layouts' own placeholders only, as before.
+        assertThat(new PowerPointTemplateParser().parseWithAssets(deck, false).manifest().getLayouts().get(0).getDecor())
+                .extracting(TemplateManifest.Element::getFill).doesNotContain("#112233", "#AABBCC");
+    }
+
+    @Test
+    void openedDeckKeepsCustomShapesAndGoogleStyleRules() throws Exception {
+        // Google Slides writes every box, bar and rule as custom geometry, a rule with no height at all.
+        String layout = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld name="Custom"><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Bar"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="1200000" y="3600000"/><a:ext cx="300000" cy="1200000"/></a:xfrm>
+                        <a:custGeom><a:pathLst><a:path w="100" h="100">
+                          <a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="0"/></a:lnTo>
+                          <a:lnTo><a:pt x="100" y="100"/></a:lnTo><a:lnTo><a:pt x="0" y="100"/></a:lnTo><a:close/>
+                        </a:path></a:pathLst></a:custGeom>
+                        <a:solidFill><a:srgbClr val="717BA2"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Dashed rule"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="1300000"/><a:ext cx="10000000" cy="0"/></a:xfrm>
+                        <a:custGeom><a:pathLst><a:path w="100" h="0">
+                          <a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="0"/></a:lnTo>
+                        </a:path></a:pathLst></a:custGeom>
+                        <a:ln w="9525"><a:solidFill><a:srgbClr val="999999"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="4" name="Style filled"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="6000000" y="3600000"/><a:ext cx="1200000" cy="600000"/></a:xfrm>
+                        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+                      <p:style><a:lnRef idx="0"><a:srgbClr val="000000"/></a:lnRef>
+                        <a:fillRef idx="1"><a:srgbClr val="2E8B57"/></a:fillRef></p:style>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sldLayout>
+                """;
+        String layoutRels = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+                </Relationships>
+                """;
+        byte[] deck = withPart(withPart(placeholderDeckPptx(), "ppt/slideLayouts/slideLayout1.xml", layout),
+                "ppt/slideLayouts/_rels/slideLayout1.xml.rels", layoutRels);
+
+        List<TemplateManifest.Element> decor = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest()
+                .getLayouts().get(0).getDecor();
+
+        TemplateManifest.Element bar = decor.stream().filter(item -> "#717BA2".equals(item.getFill())).findFirst().orElseThrow();
+        assertThat(bar.getStyle().get("shape")).isEqualTo("path");
+        assertThat(bar.getStyle().get("path")).isEqualTo("M 0.00 0.00 L 100.00 0.00 L 100.00 100.00 L 0.00 100.00 Z");
+        // A dashed rule with no height is kept as a dashed line in its own colour.
+        TemplateManifest.Element rule = decor.stream().filter(item -> "#999999".equals(item.getBorderColor())).findFirst().orElseThrow();
+        assertThat(rule.getStyle()).containsEntry("shape", "line").containsEntry("dash", "dash");
+        assertThat(rule.getWidth()).isBetween(787d, 790d);
+        // A shape that takes its colour from its style is filled with it.
+        assertThat(decor).anyMatch(item -> "#2E8B57".equals(item.getFill()));
+    }
+
+    @Test
+    void openedDeckResolvesTextStylesThroughTheMaster() throws Exception {
+        String master = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree/></p:cSld>
+                  <p:txStyles>
+                    <p:titleStyle>
+                      <a:lvl1pPr algn="ctr"><a:buNone/>
+                        <a:defRPr sz="2800" b="0"><a:solidFill><a:srgbClr val="4D4D4D"/></a:solidFill><a:latin typeface="Times New Roman"/></a:defRPr>
+                      </a:lvl1pPr>
+                    </p:titleStyle>
+                    <p:bodyStyle>
+                      <a:lvl1pPr marL="342900" indent="-342900" algn="l"><a:buFont typeface="Wingdings"/><a:buChar char="&#216;"/>
+                        <a:defRPr sz="2000"><a:latin typeface="Arial"/></a:defRPr></a:lvl1pPr>
+                      <a:lvl2pPr marL="742950" indent="-285750"><a:buFont typeface="Courier New"/><a:buChar char="o"/>
+                        <a:defRPr sz="1600"/></a:lvl2pPr>
+                    </p:bodyStyle>
+                    <p:otherStyle><a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr></p:otherStyle>
+                  </p:txStyles>
+                </p:sldMaster>
+                """;
+        String slide = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Tieu de</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Content 2"/><p:cNvSpPr/><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/>
+                        <a:p><a:r><a:rPr b="1"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:rPr><a:t>Nhan manh</a:t></a:r><a:r><a:t> thuong</a:t></a:r></a:p>
+                        <a:p><a:pPr lvl="1"/><a:r><a:t>Muc hai</a:t></a:r></a:p>
+                        <a:p><a:r><a:t>Muc mot nua</a:t></a:r></a:p>
+                      </p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="4" name="Plain box"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="5000000"/><a:ext cx="3000000" cy="400000"/></a:xfrm></p:spPr>
+                      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="r"/><a:r><a:t>Ghi chu</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sld>
+                """;
+        byte[] deck = withSlide(withPart(placeholderDeckPptx(), "ppt/slideMasters/slideMaster1.xml", master), slide);
+
+        List<TemplateManifest.Element> texts = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest()
+                .getLayouts().get(0).getElements().stream().filter(item -> "text".equals(item.getType())).toList();
+        TemplateManifest.Element title = texts.stream().filter(item -> "title".equals(item.getRole())).findFirst().orElseThrow();
+        // The title is a serif, grey, centred, regular-weight 28 point: all of it from the master.
+        assertThat(title.getStyle()).containsEntry("fontFamily", "Times New Roman").containsEntry("color", "#4D4D4D")
+                .containsEntry("textAlign", "center").containsEntry("fontWeight", 400).containsEntry("fontSize", 28d);
+        assertThat(title.getContent()).isEqualTo("<p>Tieu de</p>");
+
+        TemplateManifest.Element body = texts.stream().filter(item -> item.getContent().contains("Nhan manh")).findFirst().orElseThrow();
+        assertThat(body.getStyle()).containsEntry("fontFamily", "Arial").containsEntry("fontSize", 20d);
+        // Levels become nested lists, each with the bullet its level has; formatting is only on the odd run.
+        assertThat(body.getContent()).isEqualTo(
+                "<ul class=\"bu-arrow\"><li><span style=\"color:#FF0000;\"><strong>Nhan manh</strong></span> thuong"
+                        + "<ul class=\"bu-circle\"><li><span style=\"font-size:16px;\">Muc hai</span></li></ul></li>"
+                        + "<li>Muc mot nua</li></ul>");
+
+        // A plain text box takes the master's "other" style, and its own alignment.
+        TemplateManifest.Element note = texts.stream().filter(item -> item.getContent().contains("Ghi chu")).findFirst().orElseThrow();
+        assertThat(note.getStyle()).containsEntry("fontSize", 18d).containsEntry("textAlign", "right");
+        assertThat(note.getContent()).isEqualTo("<p>Ghi chu</p>");
+    }
+
+    @Test
+    void openedDeckKeepsTheLookOfTextBoxesAndTheShrinkPowerPointApplied() throws Exception {
+        String slide = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Yellow label"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="609600"/><a:ext cx="2400000" cy="500000"/></a:xfrm>
+                        <a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>
+                        <a:solidFill><a:srgbClr val="FFF2CC"/></a:solidFill>
+                        <a:ln w="12700"><a:solidFill><a:srgbClr val="7F6000"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr>
+                      <p:txBody><a:bodyPr lIns="0" tIns="0" rIns="0" bIns="0"/><a:lstStyle/>
+                        <a:p><a:r><a:rPr sz="2000"/><a:t>minsup = 3</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Shrunk"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="2000000"/><a:ext cx="6000000" cy="2000000"/></a:xfrm></p:spPr>
+                      <p:txBody><a:bodyPr><a:normAutofit fontScale="62500" lnSpcReduction="20000"/></a:bodyPr><a:lstStyle/>
+                        <a:p><a:r><a:rPr sz="2000"/><a:t>Chu nho lai</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sld>
+                """;
+        byte[] deck = withSlide(placeholderDeckPptx(), slide);
+
+        List<TemplateManifest.Element> texts = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest()
+                .getLayouts().get(0).getElements().stream().filter(item -> "text".equals(item.getType())).toList();
+        TemplateManifest.Element label = texts.stream().filter(item -> item.getContent().contains("minsup")).findFirst().orElseThrow();
+        assertThat(label.getStyle()).containsEntry("background", "#FFF2CC").containsEntry("borderRadius", "50%")
+                .containsEntry("padding", "0px 0px 0px 0px");
+        assertThat((String) label.getStyle().get("border")).startsWith("1px dashed #7F6000");
+
+        // 62.5% of 20 points.
+        TemplateManifest.Element shrunk = texts.stream().filter(item -> item.getContent().contains("Chu nho")).findFirst().orElseThrow();
+        assertThat(shrunk.getStyle()).containsEntry("fontSize", 12.5d);
+        // PowerPoint's default inset, as the editor's padding (7.2 pt sides, 3.6 pt top and bottom).
+        assertThat(shrunk.getStyle()).containsEntry("padding", "3.6px 7.2px 3.6px 7.2px");
+        assertThat(shrunk.getStyle()).doesNotContainKey("background");
+    }
+
+    @Test
+    void openedDeckKeepsDiagonalAndDashedLines() throws Exception {
+        String layout = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sldLayout xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld name="Lines"><p:spTree>
+                    <p:cxnSp>
+                      <p:nvCxnSpPr><p:cNvPr id="2" name="Diagonal"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+                      <p:spPr><a:xfrm><a:off x="1219200" y="1371600"/><a:ext cx="3048000" cy="1714500"/></a:xfrm>
+                        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+                        <a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></p:spPr>
+                    </p:cxnSp>
+                    <p:cxnSp>
+                      <p:nvCxnSpPr><p:cNvPr id="3" name="Rising"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+                      <p:spPr><a:xfrm flipV="1"><a:off x="1219200" y="3600000"/><a:ext cx="3048000" cy="1714500"/></a:xfrm>
+                        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+                        <a:ln w="12700"><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></a:ln></p:spPr>
+                    </p:cxnSp>
+                    <p:cxnSp>
+                      <p:nvCxnSpPr><p:cNvPr id="4" name="Dashed"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+                      <p:spPr><a:xfrm><a:off x="609600" y="5800000"/><a:ext cx="9000000" cy="0"/></a:xfrm>
+                        <a:prstGeom prst="line"><a:avLst/></a:prstGeom>
+                        <a:ln w="9525"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr>
+                    </p:cxnSp>
+                    <p:cxnSp>
+                      <p:nvCxnSpPr><p:cNvPr id="5" name="Elbow"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+                      <p:spPr><a:xfrm><a:off x="6000000" y="1371600"/><a:ext cx="1000000" cy="1000000"/></a:xfrm>
+                        <a:prstGeom prst="bentConnector3"><a:avLst/></a:prstGeom>
+                        <a:ln w="12700"><a:solidFill><a:srgbClr val="123456"/></a:solidFill></a:ln></p:spPr>
+                    </p:cxnSp>
+                  </p:spTree></p:cSld>
+                </p:sldLayout>
+                """;
+        String layoutRels = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+                </Relationships>
+                """;
+        byte[] deck = withPart(withPart(placeholderDeckPptx(), "ppt/slideLayouts/slideLayout1.xml", layout),
+                "ppt/slideLayouts/_rels/slideLayout1.xml.rels", layoutRels);
+
+        List<TemplateManifest.Element> decor = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest()
+                .getLayouts().get(0).getDecor();
+
+        // "\" down to the right: the line shape turned to its angle, about its centre.
+        TemplateManifest.Element falling = decor.stream().filter(item -> "#FF0000".equals(item.getBorderColor())).findFirst().orElseThrow();
+        assertThat(falling.getStyle()).containsEntry("shape", "line");
+        assertThat(falling.getRotation()).isBetween(29d, 32d);       // atan(135/240) = 29.4 degrees
+        assertThat(falling.getWidth()).isBetween(274d, 277d);        // the line's length
+        // "/" is the same line turned the other way.
+        TemplateManifest.Element rising = decor.stream().filter(item -> "#00AA00".equals(item.getBorderColor())).findFirst().orElseThrow();
+        assertThat(rising.getRotation()).isBetween(-32d, -29d);
+        // A dashed rule stays a dashed line instead of becoming a solid bar.
+        TemplateManifest.Element dashed = decor.stream().filter(item -> "#0000FF".equals(item.getBorderColor())).findFirst().orElseThrow();
+        assertThat(dashed.getStyle()).containsEntry("shape", "line").containsEntry("dash", "dash");
+        // An elbow connector drawn as a straight line would be wrong, so it is left out.
+        assertThat(decor).noneMatch(item -> "#123456".equals(item.getBorderColor()));
+    }
+
     /** The same package with another slide in place of its first one. */
     private byte[] withSlide(byte[] pptx, String slideXml) throws Exception {
+        return withPart(pptx, "ppt/slides/slide1.xml", slideXml);
+    }
+
+    /** The same package with one part replaced, or added when the package has none by that name. */
+    private byte[] withPart(byte[] pptx, String partName, String xml) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
+        boolean replaced = false;
         try (java.util.zip.ZipInputStream input = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(pptx));
              ZipOutputStream zip = new ZipOutputStream(output)) {
             ZipEntry entry;
             while ((entry = input.getNextEntry()) != null) {
                 byte[] content = input.readAllBytes();
-                add(zip, entry.getName(), "ppt/slides/slide1.xml".equals(entry.getName())
-                        ? slideXml.getBytes(StandardCharsets.UTF_8) : content);
+                boolean target = partName.equals(entry.getName());
+                replaced |= target;
+                add(zip, entry.getName(), target ? xml.getBytes(StandardCharsets.UTF_8) : content);
             }
+            if (!replaced) add(zip, partName, xml.getBytes(StandardCharsets.UTF_8));
         }
         return output.toByteArray();
     }

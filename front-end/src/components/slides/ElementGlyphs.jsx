@@ -27,11 +27,11 @@ export function ArtGlyph({ item }) {
     borderRadius: style.borderRadius,
     overflow: 'hidden',
   };
-  if (item.type !== 'image' && style.shape) {
-    // A preset the editor knows (triangle, star, arrow…) drawn as that shape, outline included.
+  if (item.type !== 'image' && (style.shape || style.path)) {
+    // A preset the editor knows (triangle, star, arrow…) or an outline from the file, drawn as that shape.
     return (
       <div style={{ ...box, borderRadius: undefined, overflow: 'visible' }}>
-        <ShapeGlyph element={{ shape: style.shape, fill: item.fill, borderColor: item.borderColor, borderWidth: style.borderWidth, opacity: 1 }} />
+        <ShapeGlyph element={{ shape: style.path ? 'path' : style.shape, path: style.path, dash: style.dash, fill: item.fill, borderColor: item.borderColor, borderWidth: style.borderWidth, opacity: 1 }} />
       </div>
     );
   }
@@ -66,8 +66,26 @@ const pointList = (points) => points.map(([x, y]) => `${x},${y}`).join(' ');
 
 /** A shape as HTML/SVG; also draws shapes saved before the catalogue existed (plain rectangles). */
 export function ShapeGlyph({ element }) {
-  const { info, fill, borderColor, borderWidth, opacity, radius } = resolveShape(element);
+  const { info, path, dash, fill, borderColor, borderWidth, opacity, radius } = resolveShape(element);
   const stroke = borderColor === 'transparent' || !borderWidth ? 'none' : borderColor;
+
+  if (info.kind === 'path') {
+    return (
+      <svg className="canvas-shape-svg" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ opacity }}>
+        {path ? (
+          <path
+            d={path}
+            fill={fill}
+            fillRule="evenodd"
+            stroke={stroke}
+            strokeWidth={borderWidth}
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : null}
+      </svg>
+    );
+  }
 
   if (info.kind === 'box') {
     return (
@@ -104,7 +122,8 @@ export function ShapeGlyph({ element }) {
           x1="0" y1="50" x2="100" y2="50"
           stroke={stroke === 'none' ? fill : stroke}
           strokeWidth={borderWidth || 4}
-          strokeLinecap="round"
+          strokeLinecap={dash ? 'butt' : 'round'}
+          strokeDasharray={dash === 'dot' ? '2 3' : dash === 'dash' ? '7 5' : undefined}
           vectorEffect="non-scaling-stroke"
         />
       </svg>

@@ -352,3 +352,13 @@
 .canvas-master-overlay .cmo-page-number {
   position:absolute; right:24px; bottom:14px; font:600 11px/1 Inter, sans-serif; opacity:.75;
 }
+
+/* Bullet characters from an opened PPTX (see PptxTextStyles.bulletStyle). A list without one of these
+   classes keeps the plain disc. */
+.canvas-element .canvas-text ul.bu-box { list-style-type:"\2751\00a0\00a0"; }
+.canvas-element .canvas-text ul.bu-arrow { list-style-type:"\27A2\00a0\00a0"; }
+.canvas-element .canvas-text ul.bu-circle { list-style-type:"\25CB\00a0\00a0"; }
+.canvas-element .canvas-text ul.bu-square { list-style-type:"\25AA\00a0\00a0"; }
+.canvas-element .canvas-text ul.bu-diamond { list-style-type:"\2756\00a0\00a0"; }
+.canvas-element .canvas-text ul.bu-check { list-style-type:"\2713\00a0\00a0"; }
+.canvas-element .canvas-text ul.bu-dash { list-style-type:"\2013\00a0\00a0"; }

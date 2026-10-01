@@ -114,7 +114,7 @@ export const isBackdrop = (item) => item.role === 'background' || (item.width >=
 
 /** The ornaments of an uploaded template as slide elements the user can select, move and delete. */
 export function artToElements(decor) {
-  return decor.filter((item) => !isBackdrop(item)).map((item) => (item.type === 'shape' && item.style?.shape ? shapeOrnament(item) : ({
+  return decor.filter((item) => !isBackdrop(item)).map((item) => (item.type === 'shape' && (item.style?.shape || item.style?.path) ? shapeOrnament(item) : ({
     id: `orn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     type: 'art',
     role: 'ornament',
@@ -141,6 +141,8 @@ function shapeOrnament(item) {
     role: 'ornament',
     ornament: true,
     shape: item.style.shape,
+    ...(typeof item.style.path === 'string' ? { path: item.style.path } : {}),
+    ...(item.style.dash ? { dash: item.style.dash } : {}),
     fill: item.fill || 'transparent',
     borderColor: item.borderColor || 'transparent',
     borderWidth: Number(item.style.borderWidth) || 0,

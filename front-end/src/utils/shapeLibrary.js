@@ -39,6 +39,8 @@ export const SHAPE_CATALOG = [
   { id: 'arrowRight', label: 'Mũi tên', kind: 'polygon', points: [[0, 30], [58, 30], [58, 8], [100, 50], [58, 92], [58, 70], [0, 70]], size: [220, 100], pptx: 'rightArrow' },
   { id: 'chevron', label: 'Chevron', kind: 'polygon', points: [[0, 0], [70, 0], [100, 50], [70, 100], [0, 100], [30, 50]], size: [180, 100], pptx: 'chevron' },
   { id: 'line', label: 'Đường kẻ', kind: 'line', size: [260, 12], pptx: 'line' },
+  // Any outline from an opened deck: the element carries its own `path` (SVG, in a 0..100 box).
+  { id: 'path', label: 'Hình tự do', kind: 'path', size: [200, 120], pptx: null, hidden: true },
   { id: 'wave', label: 'Sóng', kind: 'polygon', points: wavePoints(0), size: [960, 150], pptx: null },
   { id: 'wave2', label: 'Sóng 2', kind: 'polygon', points: wavePoints(2.2, 14, 1), size: [960, 150], pptx: null, hidden: true },
   { id: 'glow', label: 'Quầng sáng', kind: 'glow', size: [300, 300], pptx: 'ellipse' },
@@ -106,6 +108,8 @@ export function resolveShape(element) {
   const borderWidth = Number(element?.borderWidth ?? (element?.borderColor && element.borderColor !== 'transparent' ? 1 : 0)) || 0;
   return {
     info,
+    path: info.kind === 'path' && typeof element?.path === 'string' ? element.path : null,
+    dash: ['dash', 'dot'].includes(element?.dash) ? element.dash : null,
     fill: element?.fill || 'transparent',
     borderColor: element?.borderColor || 'transparent',
     borderWidth: Math.max(0, Math.min(24, borderWidth)),

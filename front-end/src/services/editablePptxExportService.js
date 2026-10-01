@@ -49,6 +49,33 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
   reader.readAsDataURL(blob);
 });
 
+// An SVG path in the 0..100 box (M, L, C, Q, Z) as pptxgenjs custom-geometry points, in inches.
+function pathToPoints(d, w, h) {
+  const tokens = String(d).match(/[MLCQZ]|-?\d*\.?\d+/gi) || [];
+  const sx = w / 100;
+  const sy = h / 100;
+  const points = [];
+  let i = 0;
+  const num = () => Number(tokens[i++]);
+  let command = '';
+  while (i < tokens.length) {
+    if (/[MLCQZ]/i.test(tokens[i])) command = tokens[i++].toUpperCase();
+    if (command === 'Z') { points.push({ close: true }); continue; }
+    if (command === 'M' || command === 'L') {
+      points.push({ x: num() * sx, y: num() * sy, ...(command === 'M' ? { moveTo: true } : {}) });
+    } else if (command === 'C') {
+      const [x1, y1, x2, y2, x, y] = [num(), num(), num(), num(), num(), num()];
+      points.push({ x: x * sx, y: y * sy, curve: { type: 'cubic', x1: x1 * sx, y1: y1 * sy, x2: x2 * sx, y2: y2 * sy } });
+    } else if (command === 'Q') {
+      const [x1, y1, x, y] = [num(), num(), num(), num()];
+      points.push({ x: x * sx, y: y * sy, curve: { type: 'quadratic', x1: x1 * sx, y1: y1 * sy } });
+    } else {
+      i += 1;
+    }
+  }
+  return points.filter((point) => point.close || Number.isFinite(point.x));
+}
+
 function htmlText(value) {
   const holder = document.createElement('div');
   holder.innerHTML = String(value || '');
@@ -102,7 +129,7 @@ async function imageData(projectId, element, cache) {
 // Shapes placed by the user (and template ornaments) become native PowerPoint shapes, so they
 // stay editable there; icons have no native equivalent and go in as pictures.
 async function addShapeElement(pptx, pptxSlide, element, activeTheme) {
-  const { info, fill, borderColor, borderWidth, opacity } = resolveShape(element);
+  const { info, path: shapePath, dash, fill, borderColor, borderWidth, opacity } = resolveShape(element);
   const x = toInches(element.x);
   const y = toInches(element.y);
   const w = Math.max(0.01, toInches(element.width));
@@ -124,6 +151,15 @@ async function addShapeElement(pptx, pptxSlide, element, activeTheme) {
     });
     return;
   }
+  if (info.kind === 'path' && shapePath) {
+    pptxSlide.addShape(pptx.ShapeType.custGeom, {
+      x, y, w, h, rotate,
+      points: pathToPoints(shapePath, w, h),
+      line: hasBorder ? { color: cleanColor(borderColor), width: borderWidth, transparency } : { color: 'FFFFFF', transparency: 100 },
+      fill: fill === 'transparent' ? { color: 'FFFFFF', transparency: 100 } : { color: cleanColor(fill, activeTheme.bg), transparency },
+    });
+    return;
+  }
   if (info.kind === 'polygon' && !info.pptx) {
     pptxSlide.addShape(pptx.ShapeType.custGeom, {
       x, y, w, h, rotate,
@@ -140,7 +176,12 @@ async function addShapeElement(pptx, pptxSlide, element, activeTheme) {
   if (info.kind === 'line') {
     pptxSlide.addShape(pptx.ShapeType.line, {
       x, y: y + h / 2, w, h: 0, rotate,
-      line: { color: cleanColor(hasBorder ? borderColor : fill, activeTheme.accent), width: Math.max(0.5, borderWidth || 4), transparency },
+      line: {
+        color: cleanColor(hasBorder ? borderColor : fill, activeTheme.accent),
+        width: Math.max(0.5, borderWidth || 4),
+        transparency,
+        ...(dash ? { dashType: dash === 'dot' ? 'sysDot' : 'dash' } : {}),
+      },
     });
     return;
   }
@@ -171,10 +212,10 @@ async function addArtItem(pptx, pptxSlide, item, activeTheme) {
     if (data) pptxSlide.addImage({ data, x, y, w, h, rotate, transparency });
     return;
   }
-  if (item.style?.shape) {
+  if (item.style?.shape || item.style?.path) {
     // A template shape the editor knows (triangle, star, arrow, outline…) exports as that native shape.
     await addShapeElement(pptx, pptxSlide, {
-      shape: item.style.shape, fill: item.fill, borderColor: item.borderColor, borderWidth: item.style.borderWidth,
+      shape: item.style.path ? 'path' : item.style.shape, path: item.style.path, dash: item.style.dash, fill: item.fill, borderColor: item.borderColor, borderWidth: item.style.borderWidth,
       opacity: item.opacity ?? 1, x: item.x, y: item.y, width: item.width, height: item.height, rotation: item.rotation,
     }, activeTheme);
     return;

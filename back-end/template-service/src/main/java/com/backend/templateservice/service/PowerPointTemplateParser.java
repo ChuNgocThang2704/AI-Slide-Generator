@@ -66,7 +66,9 @@ public class PowerPointTemplateParser {
             long[] pageSize = readPageSize(entries.get("ppt/presentation.xml"));
             TemplateManifest.Theme theme = readTheme(entries);
             MasterData master = readMaster(entries, pageSize, theme);
-            List<TemplateManifest.Layout> sampleLayouts = readSampleLayouts(entries, pageSize, theme, assetsOut, keepContent, master);
+            PptxTextStyles textStyles = keepContent ? buildTextStyles(entries, theme) : null;
+            List<TemplateManifest.Layout> sampleLayouts = readSampleLayouts(
+                    entries, pageSize, theme, assetsOut, keepContent, master, textStyles);
             List<TemplateManifest.Layout> layouts = sampleLayouts.isEmpty()
                     ? readLayouts(entries, pageSize, theme, master)
                     : sampleLayouts;
@@ -254,8 +256,10 @@ public class PowerPointTemplateParser {
             TemplateManifest.Theme theme,
             Map<String, byte[]> assetsOut,
             boolean keepContent,
-            MasterData master
+            MasterData master,
+            PptxTextStyles textStyles
     ) throws Exception {
+        Map<String, Element> trees = new HashMap<>();
         List<String> paths = entries.keySet().stream()
                 .filter(name -> name.startsWith("ppt/slides/slide") && name.endsWith(".xml"))
                 .sorted(Comparator.comparingInt(this::partNumber))
@@ -269,14 +273,15 @@ public class PowerPointTemplateParser {
             Map<String, TemplateManifest.Element> layoutPlaceholders = keepContent
                     ? readLayoutPlaceholders(entries, path, pageSize, theme, master)
                     : Map.of();
+            TextContext textContext = keepContent ? textContextFor(entries, path, pageSize, textStyles, trees) : null;
             List<TemplateManifest.Element> elements = normalizeSampleElements(parseShapeTree(
-                    document, pageSize, theme, layoutPlaceholders, keepContent, null
+                    document, pageSize, theme, layoutPlaceholders, keepContent, null, textContext
             ), keepContent);
 
             if (elements.isEmpty() && !keepContent) continue;
 
             String layoutType = layouts.isEmpty() ? "title" : classifyLayout("Sample slide", elements);
-            SlideVisuals visuals = extractVisuals(path, document, entries, pageSize, theme, assetsOut);
+            SlideVisuals visuals = extractVisuals(path, document, entries, pageSize, theme, assetsOut, keepContent);
             layouts.add(TemplateManifest.Layout.builder()
                     .id("sample-layout-" + (++index))
                     .name("Sample slide " + index)
@@ -394,7 +399,7 @@ public class PowerPointTemplateParser {
             TemplateManifest.Theme theme,
             Map<String, TemplateManifest.Element> inheritedPlaceholders
     ) {
-        return parseShapeTree(document, pageSize, theme, inheritedPlaceholders, false, null);
+        return parseShapeTree(document, pageSize, theme, inheritedPlaceholders, false, null, null);
     }
 
     /**
@@ -410,7 +415,8 @@ public class PowerPointTemplateParser {
             TemplateManifest.Theme theme,
             Map<String, TemplateManifest.Element> inheritedPlaceholders,
             boolean keepText,
-            Map<String, TemplateManifest.Element> placeholdersOut
+            Map<String, TemplateManifest.Element> placeholdersOut,
+            TextContext textContext
     ) {
         Element shapeTree = firstDescendant(document.getDocumentElement(), "spTree");
         if (shapeTree == null) return List.of();
@@ -465,7 +471,14 @@ public class PowerPointTemplateParser {
             String fill = readShapeFill(shape, theme);
             String border = readLineColor(shape, theme);
             // A table's words live in its cells (tableData), not in a text box of their own.
-            String content = tableData != null || (placeholder.present && !keepText) ? "" : readTextHtml(shape, role);
+            RichText rich = keepText && textContext != null && tableData == null && elementType.equals("text")
+                    ? readRichText(shape, role, placeholder, textContext) : null;
+            String content = tableData != null || (placeholder.present && !keepText) ? ""
+                    : rich != null ? rich.html() : readTextHtml(shape, role);
+            if (rich != null) style.putAll(rich.style());
+            if (keepText && textContext != null && tableData == null && elementType.equals("text")) {
+                style.putAll(boxLook(shape, placeholder.present, theme, pageSize));
+            }
 
             TemplateManifest.Element built = TemplateManifest.Element.builder()
                     .id("tpl-" + sequence++ + "-" + UUID.randomUUID().toString().substring(0, 8))
@@ -547,6 +560,369 @@ public class PowerPointTemplateParser {
                 .collect(java.util.stream.Collectors.joining(" "));
     }
 
+    /** Everything a slide's text inherits from: the deck's styles and the slide's layout and master. */
+    private record TextContext(PptxTextStyles styles, Element layoutTree, Element masterTree, double pointToPixel) {}
+
+    private record RichText(String html, Map<String, Object> style) {}
+
+    private record Run(PptxTextStyles.Props props, String text) {}
+
+    private record Paragraph(int level, PptxTextStyles.Props props, List<Run> runs) {}
+
+    /** The deck's default text style and its master's text styles, as a cascade to resolve a paragraph against. */
+    private PptxTextStyles buildTextStyles(Map<String, byte[]> entries, TemplateManifest.Theme theme) {
+        PptxTextStyles styles = new PptxTextStyles(
+                fill -> colorFromNode(fill, theme.getColors()),
+                face -> switch (face) {
+                    case "+mj-lt", "+mj-ea", "+mj-cs" -> theme.getHeadingFont();
+                    case "+mn-lt", "+mn-ea", "+mn-cs" -> theme.getBodyFont();
+                    default -> face;
+                });
+        try {
+            Document presentation = parseXml(entries.get("ppt/presentation.xml"));
+            styles.loadDefaults(firstDescendant(presentation.getDocumentElement(), "defaultTextStyle"));
+            String master = entries.keySet().stream()
+                    .filter(name -> name.startsWith("ppt/slideMasters/slideMaster") && name.endsWith(".xml"))
+                    .sorted().findFirst().orElse(null);
+            if (master != null) {
+                styles.loadMaster(firstDescendant(parseXml(entries.get(master)).getDocumentElement(), "txStyles"));
+            }
+        } catch (Exception exception) {
+            log.debug("Cannot read the deck's text styles: {}", exception.getMessage());
+        }
+        return styles;
+    }
+
+    private TextContext textContextFor(
+            Map<String, byte[]> entries, String slidePath, long[] pageSize, PptxTextStyles styles, Map<String, Element> trees
+    ) {
+        Element layoutTree = null;
+        Element masterTree = null;
+        try {
+            String layoutPath = readRelationships(entries, slidePath).values().stream()
+                    .filter(target -> target.startsWith("ppt/slideLayouts/")).findFirst().orElse(null);
+            layoutTree = shapeTreeOf(layoutPath, entries, trees);
+            if (layoutPath != null) {
+                String masterPath = readRelationships(entries, layoutPath).values().stream()
+                        .filter(target -> target.startsWith("ppt/slideMasters/")).findFirst().orElse(null);
+                masterTree = shapeTreeOf(masterPath, entries, trees);
+            }
+        } catch (Exception exception) {
+            log.debug("Cannot read the layout of {}: {}", slidePath, exception.getMessage());
+        }
+        return new TextContext(styles, layoutTree, masterTree, 960d / (pageSize[0] / 12_700d));
+    }
+
+    private Element shapeTreeOf(String part, Map<String, byte[]> entries, Map<String, Element> cache) throws Exception {
+        if (part == null || !entries.containsKey(part)) return null;
+        if (!cache.containsKey(part)) {
+            cache.put(part, firstDescendant(parseXml(entries.get(part)).getDocumentElement(), "spTree"));
+        }
+        return cache.get(part);
+    }
+
+    /** The placeholder of a layout or master that a slide's placeholder takes its text style from. */
+    private Element findPlaceholderShape(Element tree, String type, String index) {
+        if (tree == null) return null;
+        Element byType = null;
+        for (Element shape : childElements(tree)) {
+            if (!"sp".equals(shape.getLocalName())) continue;
+            Element ph = firstDescendant(shape, "ph");
+            if (ph == null) continue;
+            String shapeType = ph.getAttribute("type").isBlank() ? "obj" : ph.getAttribute("type");
+            if (!index.isBlank() && index.equals(ph.getAttribute("idx"))) return shape;
+            if (byType == null && type.equals(shapeType)) byType = shape;
+        }
+        return byType;
+    }
+
+    private static String masterPlaceholderType(String type) {
+        return switch (type) {
+            case "title", "ctrTitle" -> "title";
+            case "sldNum", "dt", "ftr", "hdr" -> type;
+            default -> "body";
+        };
+    }
+
+    /**
+     * The text of a shape as editor HTML, with the style it really has.
+     *
+     * <p>Paragraphs keep their indent level (nested lists), bullet character, alignment and run
+     * formatting (bold, italic, underline, colour, size, font). The box's own style is that of its
+     * first run, so only runs that differ from it need an inline style.
+     */
+    private RichText readRichText(Element shape, String role, PlaceholderInfo placeholder, TextContext context) {
+        PptxTextStyles styles = context.styles();
+        String type = placeholder.type();
+        String kind;
+        if ("title".equals(role) || "ctrTitle".equals(type)) {
+            kind = "title";
+        } else if (placeholder.present && !"pageNumber".equals(role) && !List.of("sldNum", "dt", "ftr", "hdr").contains(type)) {
+            kind = "body";
+        } else {
+            kind = "other";
+        }
+        Element masterShape = placeholder.present
+                ? findPlaceholderShape(context.masterTree(), masterPlaceholderType(type), "") : null;
+        Element layoutShape = placeholder.present
+                ? findPlaceholderShape(context.layoutTree(), type, placeholder.index()) : null;
+        Element masterList = masterShape == null ? null : firstDescendant(masterShape, "lstStyle");
+        Element layoutList = layoutShape == null ? null : firstDescendant(layoutShape, "lstStyle");
+        Element ownList = firstDescendant(shape, "lstStyle");
+
+        List<Paragraph> paragraphs = new ArrayList<>();
+        for (Element paragraph : descendants(shape, "p")) {
+            Element pPr = firstChild(paragraph, "pPr");
+            int level = pPr == null ? 0 : (int) longAttr(pPr, "lvl", 0);
+            PptxTextStyles.Props base = new PptxTextStyles.Props();
+            base.over(styles.defaultLevel(level))
+                    .over(styles.masterLevel(kind, level))
+                    .over(styles.listLevel(masterList, level))
+                    .over(styles.listLevel(layoutList, level))
+                    .over(styles.listLevel(ownList, level));
+            if (pPr != null) base.over(styles.paragraph(pPr));
+            // A deck whose master says nothing about body text still shows a body placeholder as a list.
+            if ("body".equals(kind) && base.bulletMode == null && styles.masterLevel("body", 0) == null) {
+                base.bulletMode = "char";
+            }
+            List<Run> runs = new ArrayList<>();
+            for (Element part : childElements(paragraph)) {
+                String name = part.getLocalName();
+                if ("br".equals(name)) {
+                    runs.add(new Run(base, null));
+                    continue;
+                }
+                if (!"r".equals(name) && !"fld".equals(name)) continue;
+                Element textNode = firstChild(part, "t");
+                String text = textNode == null ? "" : textNode.getTextContent();
+                if (text == null || text.isEmpty()) continue;
+                runs.add(new Run(base.copy().over(styles.run(firstChild(part, "rPr"))), text));
+            }
+            if (runs.stream().anyMatch(run -> run.text() != null && !run.text().isBlank())) {
+                paragraphs.add(new Paragraph(level, base, runs));
+            }
+        }
+        if (paragraphs.isEmpty()) return null;
+
+        // The box's own style is the one most of its text has, so a bold or coloured word stands out
+        // as a run, not the other way round; its alignment is that of its first paragraph.
+        PptxTextStyles.Props box = dominantProps(paragraphs).copy();
+        box.align = paragraphs.get(0).props().align;
+        Element bodyProperties = firstDescendant(shape, "bodyPr");
+        Element autofit = bodyProperties == null ? null : firstChild(bodyProperties, "normAutofit");
+        double shrink = 1;
+        if (autofit != null && !autofit.getAttribute("fontScale").isBlank()) {
+            shrink = Math.max(0.2, longAttr(autofit, "fontScale", 100_000) / 100_000d);
+        }
+        double toPixel = context.pointToPixel() * shrink;
+        Map<String, Object> boxStyle = new LinkedHashMap<>();
+        if (box.size != null) boxStyle.put("fontSize", Math.round(box.size * toPixel * 10) / 10d);
+        if (box.font != null) boxStyle.put("fontFamily", box.font);
+        if (box.color != null) boxStyle.put("color", box.color);
+        boxStyle.put("fontWeight", Boolean.TRUE.equals(box.bold) ? 700 : 400);
+        if (Boolean.TRUE.equals(box.italic)) boxStyle.put("fontStyle", "italic");
+        boxStyle.put("textAlign", cssAlign(box.align));
+        if (box.lineSpacing != null) boxStyle.put("lineHeight", Math.round(1.2 * box.lineSpacing * 100) / 100d);
+        return new RichText(richHtml(paragraphs, box, toPixel), boxStyle);
+    }
+
+    /** The run style that covers the most characters of the shape (the first one wins a tie). */
+    private PptxTextStyles.Props dominantProps(List<Paragraph> paragraphs) {
+        Map<String, Integer> weight = new LinkedHashMap<>();
+        Map<String, PptxTextStyles.Props> sample = new HashMap<>();
+        for (Paragraph paragraph : paragraphs) {
+            for (Run run : paragraph.runs()) {
+                if (run.text() == null || run.text().isBlank()) continue;
+                PptxTextStyles.Props props = run.props();
+                String key = props.size + "|" + props.font + "|" + props.color + "|"
+                        + props.bold + "|" + props.italic + "|" + props.underline;
+                weight.merge(key, run.text().length(), Integer::sum);
+                sample.putIfAbsent(key, props);
+            }
+        }
+        String best = null;
+        for (Map.Entry<String, Integer> entry : weight.entrySet()) {
+            if (best == null || entry.getValue() > weight.get(best)) best = entry.getKey();
+        }
+        return sample.get(best);
+    }
+
+    /** A pixel length without a needless ".0". */
+    private static String px(double value) {
+        double rounded = Math.round(value * 10) / 10d;
+        return rounded == Math.rint(rounded) ? String.valueOf((long) rounded) : String.valueOf(rounded);
+    }
+
+    private static String cssAlign(String align) {
+        return switch (align == null ? "l" : align) {
+            case "ctr" -> "center";
+            case "r" -> "right";
+            case "just", "dist" -> "justify";
+            default -> "left";
+        };
+    }
+
+    /** Paragraphs as editor HTML: plain paragraphs, and bulleted ones as nested lists by indent level. */
+    private String richHtml(List<Paragraph> paragraphs, PptxTextStyles.Props box, double toPixel) {
+        StringBuilder html = new StringBuilder();
+        List<String> openLists = new ArrayList<>();
+        List<Boolean> openItems = new ArrayList<>();
+        String boxAlign = cssAlign(box.align);
+        for (Paragraph paragraph : paragraphs) {
+            PptxTextStyles.Props props = paragraph.props();
+            String align = cssAlign(props.align);
+            // Only a paragraph aligned differently from its box needs a <p> of its own inside a list item.
+            String open = align.equals(boxAlign) ? null : "<p style=\"text-align:" + align + "\">";
+            String inner = runsHtml(paragraph.runs(), box, toPixel);
+            boolean bulleted = "char".equals(props.bulletMode) || "auto".equals(props.bulletMode);
+            if (!bulleted) {
+                closeLists(html, openLists, openItems, 0);
+                html.append(open == null ? "<p>" : open).append(inner).append("</p>");
+                continue;
+            }
+            int target = Math.min(paragraph.level() + 1, openLists.size() + 1);
+            closeLists(html, openLists, openItems, target);
+            if (openLists.size() == target) {
+                if (openItems.get(target - 1)) html.append("</li>");
+                openItems.set(target - 1, false);
+            } else {
+                String tag = "auto".equals(props.bulletMode) ? "ol" : "ul";
+                String style = "ol".equals(tag) ? null : PptxTextStyles.bulletStyle(props.bulletChar, props.bulletFont);
+                html.append('<').append(tag).append(style == null ? "" : " class=\"" + style + "\"").append('>');
+                openLists.add(tag);
+                openItems.add(false);
+            }
+            html.append("<li>").append(open == null ? inner : open + inner + "</p>");
+            openItems.set(openLists.size() - 1, true);
+        }
+        closeLists(html, openLists, openItems, 0);
+        return html.toString();
+    }
+
+    /** Closes lists (and their open items) until only {@code depth} remain. */
+    private void closeLists(StringBuilder html, List<String> openLists, List<Boolean> openItems, int depth) {
+        while (openLists.size() > depth) {
+            int last = openLists.size() - 1;
+            if (openItems.get(last)) html.append("</li>");
+            html.append("</").append(openLists.get(last)).append('>');
+            openLists.remove(last);
+            openItems.remove(last);
+        }
+    }
+
+    /** The runs of one paragraph, each styled only where it differs from the box's own style. */
+    private String runsHtml(List<Run> runs, PptxTextStyles.Props box, double toPixel) {
+        StringBuilder html = new StringBuilder();
+        String pending = null;
+        StringBuilder text = new StringBuilder();
+        PptxTextStyles.Props pendingProps = null;
+        for (Run run : runs) {
+            if (run.text() == null) {
+                flushRun(html, pendingProps, text, box, toPixel);
+                text.setLength(0);
+                pending = null;
+                pendingProps = null;
+                html.append("<br>");
+                continue;
+            }
+            String key = runKey(run.props(), box);
+            if (pending != null && !pending.equals(key)) {
+                flushRun(html, pendingProps, text, box, toPixel);
+                text.setLength(0);
+            }
+            pending = key;
+            pendingProps = run.props();
+            text.append(escapeHtml(run.text()));
+        }
+        flushRun(html, pendingProps, text, box, toPixel);
+        return html.toString();
+    }
+
+    private String runKey(PptxTextStyles.Props run, PptxTextStyles.Props box) {
+        return String.join("|",
+                String.valueOf(Boolean.TRUE.equals(run.bold) != Boolean.TRUE.equals(box.bold)),
+                String.valueOf(Boolean.TRUE.equals(run.italic) != Boolean.TRUE.equals(box.italic)),
+                String.valueOf(Boolean.TRUE.equals(run.underline) != Boolean.TRUE.equals(box.underline)),
+                String.valueOf(run.color != null && !run.color.equals(box.color) ? run.color : ""),
+                String.valueOf(run.size != null && !run.size.equals(box.size) ? run.size : ""),
+                String.valueOf(run.font != null && !run.font.equals(box.font) ? run.font : ""));
+    }
+
+    private void flushRun(StringBuilder html, PptxTextStyles.Props run, StringBuilder text,
+                          PptxTextStyles.Props box, double toPixel) {
+        if (run == null || text.length() == 0) return;
+        StringBuilder style = new StringBuilder();
+        if (run.color != null && !run.color.equals(box.color)) style.append("color:").append(run.color).append(';');
+        if (run.size != null && !run.size.equals(box.size)) {
+            style.append("font-size:").append(px(run.size * toPixel)).append("px;");
+        }
+        if (run.font != null && !run.font.equals(box.font)) style.append("font-family:").append(run.font).append(';');
+        boolean bold = Boolean.TRUE.equals(run.bold) != Boolean.TRUE.equals(box.bold);
+        boolean italic = Boolean.TRUE.equals(run.italic) != Boolean.TRUE.equals(box.italic);
+        boolean underline = Boolean.TRUE.equals(run.underline) != Boolean.TRUE.equals(box.underline);
+        // A run that turns off what the box has on needs a style; one that adds it uses the mark.
+        if (bold && Boolean.TRUE.equals(box.bold)) style.append("font-weight:400;");
+        if (italic && Boolean.TRUE.equals(box.italic)) style.append("font-style:normal;");
+        String open = "";
+        String close = "";
+        if (style.length() > 0) {
+            open += "<span style=\"" + style + "\">";
+            close = "</span>" + close;
+        }
+        if (bold && !Boolean.TRUE.equals(box.bold)) { open += "<strong>"; close = "</strong>" + close; }
+        if (italic && !Boolean.TRUE.equals(box.italic)) { open += "<em>"; close = "</em>" + close; }
+        if (underline && !Boolean.TRUE.equals(box.underline)) { open += "<u>"; close = "</u>" + close; }
+        html.append(open).append(text).append(close);
+    }
+
+    /**
+     * What a text box looks like around its text: the fill and outline of the shape it is (a yellow
+     * label, a framed note, an ellipse with a name in it), its rounded corners, and the inset
+     * PowerPoint keeps between the edge and the text. The editor applies these as CSS.
+     */
+    private Map<String, Object> boxLook(Element shape, boolean placeholder, TemplateManifest.Theme theme, long[] pageSize) {
+        Map<String, Object> look = new LinkedHashMap<>();
+        double toPixel = 960d / pageSize[0];
+        Element body = firstDescendant(shape, "bodyPr");
+        double left = body == null || body.getAttribute("lIns").isBlank() ? 91_440 : longAttr(body, "lIns", 91_440);
+        double top = body == null || body.getAttribute("tIns").isBlank() ? 45_720 : longAttr(body, "tIns", 45_720);
+        double right = body == null || body.getAttribute("rIns").isBlank() ? 91_440 : longAttr(body, "rIns", 91_440);
+        double bottom = body == null || body.getAttribute("bIns").isBlank() ? 45_720 : longAttr(body, "bIns", 45_720);
+        look.put("padding", px(top * toPixel) + "px " + px(right * toPixel) + "px "
+                + px(bottom * toPixel) + "px " + px(left * toPixel) + "px");
+
+        Element properties = firstChild(shape, "spPr");
+        if (placeholder || properties == null) return look;
+        boolean statesFill = List.of("solidFill", "gradFill", "noFill", "blipFill", "pattFill").stream()
+                .anyMatch(name -> firstChild(properties, name) != null);
+        Fill fill = fillOf(properties, theme);
+        String background = fill != null ? fill.css() : (statesFill ? null : styleColor(shape, "fillRef", theme));
+        if (background != null) look.put("background", background);
+
+        Element line = firstChild(properties, "ln");
+        String lineColor;
+        double lineWidth;
+        boolean dashed = false;
+        if (line != null) {
+            Element solid = firstChild(line, "solidFill");
+            lineColor = firstChild(line, "noFill") != null || solid == null ? null : colorFromNode(solid, theme.getColors());
+            lineWidth = longAttr(line, "w", 12_700) * toPixel;
+            Element dash = firstChild(line, "prstDash");
+            dashed = dash != null && !"solid".equals(dash.getAttribute("val"));
+        } else {
+            lineColor = styleColor(shape, "lnRef", theme);
+            lineWidth = 12_700 * toPixel;
+        }
+        if (lineColor != null) {
+            look.put("border", px(Math.max(1, lineWidth)) + "px " + (dashed ? "dashed" : "solid") + " " + lineColor);
+        }
+        Element geometry = firstChild(properties, "prstGeom");
+        String preset = geometry == null ? "" : geometry.getAttribute("prst");
+        if ("ellipse".equals(preset)) look.put("borderRadius", "50%");
+        else if ("roundRect".equals(preset)) look.put("borderRadius", "12px");
+        return look;
+    }
+
     /** The placeholders of the layout a slide uses, by key, for the slide to inherit position and style from. */
     private Map<String, TemplateManifest.Element> readLayoutPlaceholders(
             Map<String, byte[]> entries,
@@ -561,7 +937,7 @@ public class PowerPointTemplateParser {
                 .findFirst().orElse(null);
         if (layoutPath == null || !entries.containsKey(layoutPath)) return placeholders;
         try {
-            parseShapeTree(parseXml(entries.get(layoutPath)), pageSize, theme, master.placeholders, false, placeholders);
+            parseShapeTree(parseXml(entries.get(layoutPath)), pageSize, theme, master.placeholders, false, placeholders, null);
         } catch (Exception exception) {
             log.debug("Cannot read layout placeholders of {}: {}", slidePath, exception.getMessage());
         }
@@ -737,6 +1113,7 @@ public class PowerPointTemplateParser {
 
     private static final long MAX_ASSET_BYTES = 6L * 1024 * 1024;
     private static final int MAX_DECOR = 40;
+    private static final int MAX_DECOR_OPENED = 400;
     private static final String REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
     private record SlideVisuals(String background, String averageColor, List<TemplateManifest.Element> decor) {}
@@ -764,20 +1141,30 @@ public class PowerPointTemplateParser {
             Map<String, byte[]> entries,
             long[] pageSize,
             TemplateManifest.Theme theme,
-            Map<String, byte[]> assetsOut
+            Map<String, byte[]> assetsOut,
+            boolean keepText
     ) {
         List<TemplateManifest.Element> decor = new ArrayList<>();
         try {
             Fill background = backgroundChain(slidePath, entries, theme, decor, assetsOut, 0);
+            // What the slide's layout and master draw (logo, rules, the slide-number mark) sits behind
+            // the slide's own shapes, just above its background picture.
+            if (keepText) {
+                int above = !decor.isEmpty() && String.valueOf(decor.get(0).getId()).startsWith("decor-bg") ? 1 : 0;
+                decor.addAll(above, inheritedDecor(slidePath, slide, entries, pageSize, theme, assetsOut));
+            }
             Element tree = firstDescendant(slide.getDocumentElement(), "spTree");
             if (tree != null) {
                 List<double[]> textRects = new ArrayList<>();
                 collectVisuals(tree, new double[]{1, 0, 1, 0}, readRelationships(entries, slidePath),
-                        pageSize, theme, entries, assetsOut, decor, textRects);
+                        pageSize, theme, entries, assetsOut, decor, textRects, keepText);
                 // A pill, label or button behind the sample's own text is meaningless once that text is gone.
-                decor.removeIf(art -> !"background".equals(art.getRole())
-                        && art.getWidth() * art.getHeight() < 0.12 * 960 * 540
-                        && textRects.stream().anyMatch(rect -> mostlyInside(rect, art)));
+                // An opened deck keeps its own text, so a panel behind it is part of the slide.
+                if (!keepText) {
+                    decor.removeIf(art -> !"background".equals(art.getRole())
+                            && art.getWidth() * art.getHeight() < 0.12 * 960 * 540
+                            && textRects.stream().anyMatch(rect -> mostlyInside(rect, art)));
+                }
             }
             return new SlideVisuals(
                     background == null ? null : background.css(),
@@ -787,6 +1174,45 @@ public class PowerPointTemplateParser {
             log.warn("Cannot read visuals of {}: {}", slidePath, exception.getMessage());
             return new SlideVisuals(null, null, List.of());
         }
+    }
+
+    /**
+     * The pictures, shapes and rules a slide shows from its layout and its master, bottom first.
+     * A slide that hides background graphics ({@code showMasterSp="0"}) shows none of them.
+     */
+    private List<TemplateManifest.Element> inheritedDecor(
+            String slidePath,
+            Document slide,
+            Map<String, byte[]> entries,
+            long[] pageSize,
+            TemplateManifest.Theme theme,
+            Map<String, byte[]> assetsOut
+    ) {
+        List<TemplateManifest.Element> out = new ArrayList<>();
+        try {
+            if ("0".equals(slide.getDocumentElement().getAttribute("showMasterSp"))) return out;
+            String layoutPath = readRelationships(entries, slidePath).values().stream()
+                    .filter(target -> target.startsWith("ppt/slideLayouts/")).findFirst().orElse(null);
+            if (layoutPath == null || !entries.containsKey(layoutPath)) return out;
+            Document layout = parseXml(entries.get(layoutPath));
+            List<String> parts = new ArrayList<>();
+            if (!"0".equals(layout.getDocumentElement().getAttribute("showMasterSp"))) {
+                readRelationships(entries, layoutPath).values().stream()
+                        .filter(target -> target.startsWith("ppt/slideMasters/")).findFirst().ifPresent(parts::add);
+            }
+            parts.add(layoutPath);
+            for (String part : parts) {
+                if (!entries.containsKey(part)) continue;
+                Element tree = firstDescendant(parseXml(entries.get(part)).getDocumentElement(), "spTree");
+                if (tree != null) {
+                    collectVisuals(tree, new double[]{1, 0, 1, 0}, readRelationships(entries, part),
+                            pageSize, theme, entries, assetsOut, out, new ArrayList<>(), true);
+                }
+            }
+        } catch (Exception exception) {
+            log.debug("Cannot read the layout and master decoration of {}: {}", slidePath, exception.getMessage());
+        }
+        return out;
     }
 
     /** Relationship id -> package path of the target, for one part. */
@@ -980,13 +1406,19 @@ public class PowerPointTemplateParser {
             Map<String, byte[]> entries,
             Map<String, byte[]> assetsOut,
             List<TemplateManifest.Element> out,
-            List<double[]> textRects
+            List<double[]> textRects,
+            boolean keepSmallMarks
     ) {
         for (Element node : childElements(container)) {
-            if (out.size() >= MAX_DECOR) return;
+            if (out.size() >= (keepSmallMarks ? MAX_DECOR_OPENED : MAX_DECOR)) return;
             String kind = node.getLocalName();
             if ("grpSp".equals(kind)) {
-                collectVisuals(node, groupTransform(node, tf), rels, pageSize, theme, entries, assetsOut, out, textRects);
+                collectVisuals(node, groupTransform(node, tf), rels, pageSize, theme, entries, assetsOut, out, textRects,
+                        keepSmallMarks);
+                continue;
+            }
+            if ("cxnSp".equals(kind)) {
+                addRule(node, tf, pageSize, theme, out);
                 continue;
             }
             if (!"sp".equals(kind) && !"pic".equals(kind)) continue;
@@ -1002,6 +1434,11 @@ public class PowerPointTemplateParser {
             double y = (tf[2] * longAttr(offset, "y", 0) + tf[3]) / pageSize[1] * 540;
             double width = tf[0] * longAttr(extent, "cx", 0) / pageSize[0] * 960;
             double height = tf[2] * longAttr(extent, "cy", 0) / pageSize[1] * 540;
+            if ("sp".equals(kind) && (height < 1.5 || width < 1.5) && (height >= 3 || width >= 3)
+                    && firstDescendant(node, "ph") == null && !hasText(node)) {
+                addRule(node, tf, pageSize, theme, out);
+                continue;
+            }
             if (width < 3 || height < 3 || x > 960 || y > 540 || x + width < 0 || y + height < 0) continue;
 
             boolean textBox = "sp".equals(kind) && firstChild(properties, "blipFill") == null
@@ -1012,9 +1449,10 @@ public class PowerPointTemplateParser {
             }
             if (firstDescendant(node, "ph") != null) continue; // picture placeholders are filled by the app
             // Small marks away from the slide edge (logos, brand stamps) would land on top of the text.
+            // (A template's own slides only; in an opened deck a small bar or mark is part of the slide.)
             boolean smallMark = width * height < 4_500;
             boolean nearEdge = x < 48 || y < 48 || x + width > 960 - 48 || y + height > 540 - 48;
-            if (smallMark && !nearEdge) continue;
+            if (!keepSmallMarks && smallMark && !nearEdge) continue;
 
             Element geometry = firstChild(properties, "prstGeom");
             String preset = geometry == null ? "rect" : geometry.getAttribute("prst");
@@ -1042,15 +1480,46 @@ public class PowerPointTemplateParser {
                 continue;
             }
 
+            Element custom = firstChild(properties, "custGeom");
+            if (custom != null && !hasText(node)) {
+                String path = readCustomPath(custom);
+                if (path == null) continue;
+                Fill customFill = fillOf(properties, theme);
+                String customCss = customFill == null ? styleColor(node, "fillRef", theme) : customFill.css();
+                Element stroke = firstDescendant(properties, "ln");
+                String strokeColor = readLineColor(node, theme);
+                if (strokeColor == null && stroke == null) strokeColor = styleColor(node, "lnRef", theme);
+                double strokeWidth = stroke == null ? 1 : longAttr(stroke, "w", 0) / (double) pageSize[0] * 960;
+                boolean stroked = strokeColor != null && strokeWidth > 0;
+                if (customCss == null && !stroked) continue;
+                style.put("shape", "path");
+                style.put("path", path);
+                if (stroked) style.put("borderWidth", Math.max(1, Math.round(strokeWidth * 10) / 10d));
+                out.add(TemplateManifest.Element.builder()
+                        .id("decor-" + id)
+                        .type("shape")
+                        .role("decoration")
+                        .x(x).y(y).width(width).height(height)
+                        .rotation(rotation)
+                        .locked(true)
+                        .fill(customCss == null ? "transparent" : customCss)
+                        .borderColor(stroked ? strokeColor : null)
+                        .style(style)
+                        .build());
+                continue;
+            }
+
             // Shapes: PowerPoint presets the editor has a matching shape for, filled and/or outlined.
             // Custom outlines (freeform paths) have no equivalent here and would render as wrong rectangles.
             String shapeId = SHAPE_PRESETS.get(preset);
             if (hasText(node) || shapeId == null) continue;
             Fill fill = fillOf(properties, theme);
-            String fillCss = fill == null ? null : fill.css();
+            String fillCss = fill == null ? styleColor(node, "fillRef", theme) : fill.css();
             String lineColor = readLineColor(node, theme);
             Element line = firstDescendant(properties, "ln");
-            double lineWidth = line == null ? 0 : longAttr(line, "w", 0) / 12_700d * (960d / (pageSize[0] / 12_700d));
+            if (lineColor == null && line == null) lineColor = styleColor(node, "lnRef", theme);
+            double lineWidth = line == null ? (lineColor == null ? 0 : 1)
+                    : longAttr(line, "w", 0) / 12_700d * (960d / (pageSize[0] / 12_700d));
             boolean outlined = lineColor != null && lineWidth > 0;
             if (fillCss == null && !outlined) continue;
             style.put("shape", shapeId);
@@ -1067,6 +1536,171 @@ public class PowerPointTemplateParser {
                     .style(style)
                     .build());
         }
+    }
+
+    /** A colour a shape takes from its style reference (fillRef / lnRef) when it states none itself. */
+    private String styleColor(Element shape, String reference, TemplateManifest.Theme theme) {
+        Element style = firstChild(shape, "style");
+        Element ref = style == null ? null : firstChild(style, reference);
+        if (ref == null || "0".equals(ref.getAttribute("idx"))) return null;
+        return colorFromNode(ref, theme.getColors());
+    }
+
+    /**
+     * The outline of a custom-geometry shape as an SVG path in a 0..100 box (M, L, C, Q, Z), so it
+     * stretches with the element. Arcs are drawn as short straight segments.
+     */
+    private String readCustomPath(Element custom) {
+        Element list = firstChild(custom, "pathLst");
+        if (list == null) return null;
+        StringBuilder d = new StringBuilder();
+        for (Element path : childElements(list)) {
+            if (!"path".equals(path.getLocalName())) continue;
+            double w = longAttr(path, "w", 0);
+            double h = longAttr(path, "h", 0);
+            if (w <= 0 || h <= 0) continue;
+            double[] current = {0, 0};
+            for (Element command : childElements(path)) {
+                List<Element> points = childElements(command).stream()
+                        .filter(item -> "pt".equals(item.getLocalName())).toList();
+                switch (command.getLocalName()) {
+                    case "moveTo", "lnTo" -> {
+                        if (points.isEmpty()) break;
+                        current = new double[]{longAttr(points.get(0), "x", 0), longAttr(points.get(0), "y", 0)};
+                        d.append("moveTo".equals(command.getLocalName()) ? "M " : "L ")
+                                .append(unit(current[0], w)).append(' ').append(unit(current[1], h)).append(' ');
+                    }
+                    case "cubicBezTo" -> {
+                        if (points.size() < 3) break;
+                        d.append("C ");
+                        for (int index = 0; index < 3; index++) {
+                            d.append(unit(longAttr(points.get(index), "x", 0), w)).append(' ')
+                                    .append(unit(longAttr(points.get(index), "y", 0), h)).append(' ');
+                        }
+                        current = new double[]{longAttr(points.get(2), "x", 0), longAttr(points.get(2), "y", 0)};
+                    }
+                    case "quadBezTo" -> {
+                        if (points.size() < 2) break;
+                        d.append("Q ");
+                        for (int index = 0; index < 2; index++) {
+                            d.append(unit(longAttr(points.get(index), "x", 0), w)).append(' ')
+                                    .append(unit(longAttr(points.get(index), "y", 0), h)).append(' ');
+                        }
+                        current = new double[]{longAttr(points.get(1), "x", 0), longAttr(points.get(1), "y", 0)};
+                    }
+                    case "arcTo" -> current = appendArc(d, command, current, w, h);
+                    case "close" -> d.append("Z ");
+                    default -> { }
+                }
+            }
+        }
+        String result = d.toString().trim();
+        return result.isEmpty() ? null : result;
+    }
+
+    private String unit(double value, double extent) {
+        return String.format(Locale.ROOT, "%.2f", value / extent * 100);
+    }
+
+    /** An elliptical arc from the current point, as straight segments; returns the point it ends at. */
+    private double[] appendArc(StringBuilder d, Element arc, double[] from, double w, double h) {
+        double radiusX = longAttr(arc, "wR", 0);
+        double radiusY = longAttr(arc, "hR", 0);
+        if (radiusX <= 0 || radiusY <= 0) return from;
+        double start = Math.toRadians(longAttr(arc, "stAng", 0) / 60_000d);
+        double sweep = Math.toRadians(longAttr(arc, "swAng", 0) / 60_000d);
+        // PowerPoint's angles are visual; the ellipse's own parameter is tan(t) = (rx / ry) * tan(angle).
+        double t0 = Math.atan2(Math.sin(start) * radiusX, Math.cos(start) * radiusY);
+        double t1 = Math.atan2(Math.sin(start + sweep) * radiusX, Math.cos(start + sweep) * radiusY);
+        double delta = t1 - t0;
+        if (sweep > 0 && delta < 0) delta += 2 * Math.PI;
+        if (sweep < 0 && delta > 0) delta -= 2 * Math.PI;
+        if (Math.abs(Math.abs(sweep) - 2 * Math.PI) < 1e-6) delta = sweep;
+        double centreX = from[0] - radiusX * Math.cos(t0);
+        double centreY = from[1] - radiusY * Math.sin(t0);
+        int steps = Math.max(6, (int) Math.ceil(Math.abs(delta) / (Math.PI / 12)));
+        double[] last = from;
+        for (int step = 1; step <= steps; step++) {
+            double t = t0 + delta * step / steps;
+            last = new double[]{centreX + radiusX * Math.cos(t), centreY + radiusY * Math.sin(t)};
+            d.append("L ").append(unit(last[0], w)).append(' ').append(unit(last[1], h)).append(' ');
+        }
+        return last;
+    }
+
+    /**
+     * A straight horizontal or vertical line (a rule under a title, a divider) as a thin rectangle,
+     * which the editor draws exactly. Diagonal lines have no equivalent here and are left out.
+     */
+    private void addRule(Element line, double[] tf, long[] pageSize, TemplateManifest.Theme theme,
+                         List<TemplateManifest.Element> out) {
+        Element properties = firstChild(line, "spPr");
+        Element transform = properties == null ? null : firstChild(properties, "xfrm");
+        Element offset = transform == null ? null : firstChild(transform, "off");
+        Element extent = transform == null ? null : firstChild(transform, "ext");
+        if (offset == null || extent == null) return;
+        // Only straight lines: an elbow or curved connector drawn straight would be wrong.
+        Element geometry = firstChild(properties, "prstGeom");
+        String preset = geometry == null ? "" : geometry.getAttribute("prst");
+        if (!preset.isEmpty() && !"line".equals(preset) && !"straightConnector1".equals(preset)) return;
+        Element nonVisual = firstDescendant(line, "cNvPr");
+        if (nonVisual != null && "1".equals(nonVisual.getAttribute("hidden"))) return;
+
+        double x = (tf[0] * longAttr(offset, "x", 0) + tf[1]) / pageSize[0] * 960;
+        double y = (tf[2] * longAttr(offset, "y", 0) + tf[3]) / pageSize[1] * 540;
+        double width = tf[0] * longAttr(extent, "cx", 0) / pageSize[0] * 960;
+        double height = tf[2] * longAttr(extent, "cy", 0) / pageSize[1] * 540;
+        if (width < 1.5 && height < 1.5) return;
+        if (x > 960 || y > 540 || x + width < 0 || y + height < 0) return;
+
+        String color = readLineColor(line, theme);
+        if (color == null) {
+            Element style = firstChild(line, "style");
+            Element reference = style == null ? null : firstChild(style, "lnRef");
+            color = reference == null ? null : colorFromNode(reference, theme.getColors());
+        }
+        if (color == null) return;
+        Element stroke = firstDescendant(properties, "ln");
+        double thickness = Math.max(1, stroke == null ? 1 : longAttr(stroke, "w", 12_700) / (double) pageSize[0] * 960);
+        Element dash = stroke == null ? null : firstDescendant(stroke, "prstDash");
+        String dashName = dash == null ? "" : dash.getAttribute("val");
+        boolean dashed = !dashName.isBlank() && !"solid".equals(dashName);
+
+        boolean horizontal = height < 1.5;
+        boolean vertical = width < 1.5;
+        String id = "decor-rule" + out.size() + "-" + UUID.randomUUID().toString().substring(0, 6);
+        if ((horizontal || vertical) && !dashed) {
+            // An exact thin rectangle.
+            out.add(TemplateManifest.Element.builder()
+                    .id(id).type("shape").role("decoration")
+                    .x(horizontal ? x : x - thickness / 2)
+                    .y(horizontal ? y - thickness / 2 : y)
+                    .width(horizontal ? width : thickness)
+                    .height(horizontal ? thickness : height)
+                    .locked(true).fill(color)
+                    .style(new LinkedHashMap<>(Map.of("shape", "rect")))
+                    .build());
+            return;
+        }
+        // Any other line (diagonal, or dashed): the editor's line shape, turned to the line's angle.
+        boolean flipH = "1".equals(transform.getAttribute("flipH"));
+        boolean flipV = "1".equals(transform.getAttribute("flipV"));
+        double length = Math.hypot(width, height);
+        double angle = horizontal ? 0 : vertical ? 90 : Math.toDegrees(Math.atan2(height, width)) * (flipH ^ flipV ? -1 : 1);
+        angle += longAttr(transform, "rot", 0) / 60_000d;
+        double centreX = x + width / 2;
+        double centreY = y + height / 2;
+        Map<String, Object> lineStyle = new LinkedHashMap<>();
+        lineStyle.put("shape", "line");
+        lineStyle.put("borderWidth", Math.round(thickness * 10) / 10d);
+        if (dashed) lineStyle.put("dash", dashName.contains("dot") || dashName.contains("Dot") ? "dot" : "dash");
+        out.add(TemplateManifest.Element.builder()
+                .id(id).type("shape").role("decoration")
+                .x(centreX - length / 2).y(centreY - 1).width(length).height(2)
+                .rotation(angle)
+                .locked(true).fill("transparent").borderColor(color)
+                .style(lineStyle)
+                .build());
     }
 
     /** PowerPoint preset geometry -> the editor's own shape id (see front-end utils/shapeLibrary). */
