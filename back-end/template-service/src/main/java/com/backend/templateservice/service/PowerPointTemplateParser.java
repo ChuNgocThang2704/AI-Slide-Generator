@@ -1260,26 +1260,23 @@ public class PowerPointTemplateParser {
     }
 
     /**
-     * A template's sample photos are not part of its look: the app fills picture slots itself. Drop
-     * the pictures of the same size as the one on a picture slot (the rest of a sample gallery), so they do not sit under the text the template is applied to.
+     * A template's sample photos are not part of its look: the app fills picture slots itself. A row
+     * of three or more pictures of one size (each a real photo, not an icon) is a sample gallery and
+     * is dropped, or it would sit under the text the template is applied to.
      */
     private List<TemplateManifest.Element> withoutSamplePhotos(
             List<TemplateManifest.Element> decor, List<TemplateManifest.Element> elements) {
-        List<TemplateManifest.Element> slots = elements.stream()
-                .filter(item -> "image".equals(item.getType())).toList();
-        if (slots.isEmpty()) return decor;
-        List<TemplateManifest.Element> onSlots = decor.stream()
-                .filter(item -> "image".equals(item.getType()) && !fullBleed(item))
-                .filter(item -> slots.stream().anyMatch(slot -> {
-                    double w = Math.min(item.getX() + item.getWidth(), slot.getX() + slot.getWidth()) - Math.max(item.getX(), slot.getX());
-                    double h = Math.min(item.getY() + item.getHeight(), slot.getY() + slot.getHeight()) - Math.max(item.getY(), slot.getY());
-                    return w > 0 && h > 0 && w * h >= 0.5 * item.getWidth() * item.getHeight();
-                })).toList();
-        if (onSlots.isEmpty()) return decor;
+        double minArea = 0.03 * 960 * 540;
+        Map<String, Long> bySize = decor.stream()
+                .filter(item -> "image".equals(item.getType()) && !fullBleed(item)
+                        && item.getWidth() * item.getHeight() >= minArea)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        item -> Math.round(item.getWidth() / 2) + "x" + Math.round(item.getHeight() / 2),
+                        java.util.stream.Collectors.counting()));
         return decor.stream().filter(item -> !(
-                "image".equals(item.getType()) && !fullBleed(item) && !onSlots.contains(item)
-                        && onSlots.stream().anyMatch(kept -> Math.abs(kept.getWidth() - item.getWidth()) < 2
-                        && Math.abs(kept.getHeight() - item.getHeight()) < 2))).toList();
+                "image".equals(item.getType()) && !fullBleed(item) && item.getWidth() * item.getHeight() >= minArea
+                        && bySize.getOrDefault(Math.round(item.getWidth() / 2) + "x" + Math.round(item.getHeight() / 2), 0L) >= 3))
+                .toList();
     }
 
     private record SlideVisuals(String background, String averageColor, List<TemplateManifest.Element> decor) {}
