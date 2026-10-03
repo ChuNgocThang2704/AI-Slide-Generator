@@ -673,6 +673,35 @@ class PowerPointTemplateParserTest {
         assertThat(decor).noneMatch(item -> "#123456".equals(item.getBorderColor()));
     }
 
+    @Test
+    void slideDrawnUnderADarkTranslucentSheetCountsAsDark() throws Exception {
+        String slide = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <p:cSld><p:spTree>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="2" name="Sheet"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm>
+                        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                        <a:solidFill><a:srgbClr val="000000"><a:alpha val="79000"/></a:srgbClr></a:solidFill></p:spPr>
+                    </p:sp>
+                    <p:sp>
+                      <p:nvSpPr><p:cNvPr id="3" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+                      <p:spPr/>
+                      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Tieu de</a:t></a:r></a:p></p:txBody>
+                    </p:sp>
+                  </p:spTree></p:cSld>
+                </p:sld>
+                """;
+        byte[] deck = withSlide(placeholderDeckPptx(), slide);
+        List<TemplateManifest.Layout> all = new PowerPointTemplateParser().parseWithAssets(deck, true).manifest().getLayouts();
+        String page = all.get(all.size() - 1).getBackgroundColor();
+        // 79% black over mid-grey is nearly black, not the white the page used to count as.
+        assertThat(page).isNotEqualToIgnoringCase("#FFFFFF");
+        assertThat(Integer.parseInt(page.substring(1, 3), 16)).isLessThan(60);
+    }
+
     /** The same package with another slide in place of its first one. */
     private byte[] withSlide(byte[] pptx, String slideXml) throws Exception {
         return withPart(pptx, "ppt/slides/slide1.xml", slideXml);

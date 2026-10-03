@@ -282,14 +282,18 @@ public class PowerPointTemplateParser {
 
             String layoutType = layouts.isEmpty() ? "title" : classifyLayout("Sample slide", elements);
             SlideVisuals visuals = extractVisuals(path, document, entries, pageSize, theme, assetsOut, keepContent);
+            List<TemplateManifest.Element> decorOut = keepContent ? visuals.decor()
+                    : withoutSamplePhotos(visuals.decor(), elements);
+            String pageColor = visuals.averageColor() != null ? visuals.averageColor()
+                    : coveredPageColor(visuals.decor());
             layouts.add(TemplateManifest.Layout.builder()
                     .id("sample-layout-" + (++index))
                     .name("Sample slide " + index)
                     .type(layoutType)
-                    .backgroundColor(visuals.averageColor() == null ? DISPLAY_BACKGROUND : visuals.averageColor())
+                    .backgroundColor(pageColor == null ? DISPLAY_BACKGROUND : pageColor)
                     .background(visuals.background())
                     .elements(elements)
-                    .decor(visuals.decor())
+                    .decor(decorOut)
                     .build());
         }
         return layouts;
@@ -1223,6 +1227,60 @@ public class PowerPointTemplateParser {
     private static final int MAX_DECOR = 40;
     private static final int MAX_DECOR_OPENED = 400;
     private static final String REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    private static boolean fullBleed(TemplateManifest.Element item) {
+        return item.getWidth() >= 0.95 * 960 && item.getHeight() >= 0.95 * 540;
+    }
+
+    /**
+     * The colour a slide really shows when its background is drawn as shapes (a full-slide picture
+     * under a translucent black sheet): without it the page counted as white and dark text landed on
+     * a dark photo. A translucent sheet is blended over mid-grey, an opaque one is taken as it is.
+     */
+    private String coveredPageColor(List<TemplateManifest.Element> decor) {
+        for (int i = decor.size() - 1; i >= 0; i--) {
+            TemplateManifest.Element item = decor.get(i);
+            if (!fullBleed(item) || !"shape".equals(item.getType()) || item.getFill() == null) continue;
+            String fill = item.getFill().trim();
+            java.util.regex.Matcher rgba = java.util.regex.Pattern
+                    .compile("rgba\\((\\d+), (\\d+), (\\d+), ([0-9.]+)\\)").matcher(fill);
+            if (rgba.matches()) {
+                double alpha = Double.parseDouble(rgba.group(4));
+                if (alpha < 0.5) return null;
+                int[] mixed = new int[3];
+                for (int c = 0; c < 3; c++) {
+                    mixed[c] = (int) Math.round(Integer.parseInt(rgba.group(c + 1)) * alpha + 128 * (1 - alpha));
+                }
+                return String.format("#%02X%02X%02X", mixed[0], mixed[1], mixed[2]);
+            }
+            if (fill.matches("#[0-9A-Fa-f]{6}")) return fill.toUpperCase();
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * A template's sample photos are not part of its look: the app fills picture slots itself. Drop
+     * the pictures of the same size as the one on a picture slot (the rest of a sample gallery), so they do not sit under the text the template is applied to.
+     */
+    private List<TemplateManifest.Element> withoutSamplePhotos(
+            List<TemplateManifest.Element> decor, List<TemplateManifest.Element> elements) {
+        List<TemplateManifest.Element> slots = elements.stream()
+                .filter(item -> "image".equals(item.getType())).toList();
+        if (slots.isEmpty()) return decor;
+        List<TemplateManifest.Element> onSlots = decor.stream()
+                .filter(item -> "image".equals(item.getType()) && !fullBleed(item))
+                .filter(item -> slots.stream().anyMatch(slot -> {
+                    double w = Math.min(item.getX() + item.getWidth(), slot.getX() + slot.getWidth()) - Math.max(item.getX(), slot.getX());
+                    double h = Math.min(item.getY() + item.getHeight(), slot.getY() + slot.getHeight()) - Math.max(item.getY(), slot.getY());
+                    return w > 0 && h > 0 && w * h >= 0.5 * item.getWidth() * item.getHeight();
+                })).toList();
+        if (onSlots.isEmpty()) return decor;
+        return decor.stream().filter(item -> !(
+                "image".equals(item.getType()) && !fullBleed(item) && !onSlots.contains(item)
+                        && onSlots.stream().anyMatch(kept -> Math.abs(kept.getWidth() - item.getWidth()) < 2
+                        && Math.abs(kept.getHeight() - item.getHeight()) < 2))).toList();
+    }
 
     private record SlideVisuals(String background, String averageColor, List<TemplateManifest.Element> decor) {}
 
