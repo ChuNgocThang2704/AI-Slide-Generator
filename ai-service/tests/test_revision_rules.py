@@ -164,3 +164,12 @@ class SplitColumnsHeadingsTests(unittest.TestCase):
         _apply_planned_composition(slide, item, "none")
         self.assertEqual(slide["bullets"], bullets)
         self.assertEqual(slide["layout"], "text_only")
+
+
+class ChartTypeBeforeSlideMarkerTests(unittest.TestCase):
+    def test_chart_type_named_before_the_slide_number_is_read(self):
+        from services.revision_rules import explicit_chart_type_targets_from_prompt
+        targets = explicit_chart_type_targets_from_prompt("Thêm biểu đồ cột vào slide 4 thể hiện số sách đọc mỗi năm", 6)
+        self.assertEqual(targets, {3: "bar"})
+        two = explicit_chart_type_targets_from_prompt("Slide 2 dùng biểu đồ tròn, slide 5 dùng biểu đồ đường", 6)
+        self.assertEqual(two, {1: "pie", 4: "line"})

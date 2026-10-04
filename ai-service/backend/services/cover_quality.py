@@ -42,14 +42,24 @@ def normalize_cover(deck: dict[str, Any]) -> dict[str, Any]:
     for slide in slides[1:-1]:
         if not isinstance(slide, dict):
             continue
-        title = _short_title(str(slide.get("title") or ""))
+        title = _short_title(str(slide.get("title") or ""), 400)
+        if len(title) > 60:
+            continue  # too long to preview whole, and never cut mid-phrase
         if title and title.casefold() != cover_title and not _SKIP_TITLES.match(title):
             topics.append(title)
     if not topics:
         return deck  # No dependable scope to summarize without inventing content.
     vietnamese = bool(re.search(r"[À-ỹ]", str(cover.get("title") or "") + " ".join(topics)))
+    # A plain preview of the deck's scope: its first few topics, not a "From X to Y" sentence built
+    # from two slide titles (which reads as machine-made).
     if len(topics) > 1:
-        subtitle = f"Từ {topics[0]} đến {topics[-1]}" if vietnamese else f"From {topics[0]} to {topics[-1]}"
+        # Whole titles only (a title cut mid-phrase reads worse than one topic fewer).
+        picked = []
+        for topic in topics:
+            if len(picked) >= 3 or len(" · ".join([*picked, topic])) > 120:
+                break
+            picked.append(topic)
+        subtitle = " · ".join(picked) if picked else topics[0]
     else:
         subtitle = f"Khám phá {topics[0]}" if vietnamese else f"Exploring {topics[0]}"
     subtitle = _short_title(subtitle, 120)

@@ -262,12 +262,17 @@ async def generate_outline_first_deck(
             "Keep visual density presentation-ready: cover 1-3 bullets, ordinary slides 3-6 bullets, closing 2-5 "
             "bullets, example/check slides 3-6 visible prompts, and code slides at most 10 concise lines. Never dump a long document "
             "or full program into one slide. Keep ordinary visible content near 500 characters and never exceed "
-            "about 760 characters when an image is useful. Move supporting detail into speaker notes rather than "
+            "about 760 characters when an image is useful. Every bullet is ONE line of at most 18 words (a "
+            "'Label: explanation' bullet counts its label); the reasoning, examples and second clauses belong "
+            "in speaker notes. Move supporting detail into speaker notes rather than "
             "shrinking the slide text. When a slide naturally contains categories, stages, criteria, or techniques, "
             "use 2-4 concise 'Short label: explanation' bullets to expose hierarchy. Do not force labels onto a "
             "simple narrative, and never emit a long flat list of equally weighted facts. "
             "The final authored slide must remain a summary/closing slide and must not become a new concept, example, "
-            "or exercise. Speaker notes should add teaching or presentation value without repeating bullets. Return strict JSON: "
+            "or exercise. Speaker notes are the presenter's ready-to-speak script for that slide: 90-130 words in "
+            "output_language, short sentences, explaining the meaning and links between the points instead of "
+            "repeating bullets verbatim; only slide 1 may greet the audience, and never describe the slide as an "
+            "object ('this slide shows'). Return strict JSON: "
             "{\"title\":string,\"presentation_mode\":\"lecture|presentation\",\"learning_objectives\":[string],"
             "\"slides\":[{\"title\":string,\"bullets\":[string],\"notes\":string,"
             "\"layout\":string,\"pedagogical_role\":string,\"source_pages\":[number],"
@@ -346,6 +351,8 @@ async def generate_outline_first_deck(
                 "[outline_first] authored deck is structurally valid but dense; "
                 "semantic rubric will refine it without discarding the outline"
             )
+    from services.slide_density import condense_long_bullets
+    deck = await condense_long_bullets(content_extractor, deck)
     slides = deck.get("slides") or []
     slides[0]["layout"] = "intro"
     slides[-1]["layout"] = "thankyou"

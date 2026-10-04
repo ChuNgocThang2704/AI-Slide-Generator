@@ -693,7 +693,9 @@ class SlidePipelineMixin:
             "does not identify another target and is naturally a single-slide edit.\n"
             "- Requests such as adding more visuals throughout the presentation may target several "
             "appropriate slides even when a selected slide is provided.\n"
-            "- Prefer scope slides when one or more target slides are intended; otherwise use deck.\n\n"
+            "- Prefer scope slides when one or more target slides are intended; otherwise use deck.\n"
+            "- If the request is not an understandable editing instruction at all (random characters, no "
+            "meaning), return operations as an empty list and add \"unclear\": true.\n\n"
             + "Return ONLY JSON with this shape:\n"
             "{\"scope\":\"slides|deck\",\"target_slide_numbers\":[1],\"operations\":[{\"type\":\"rewrite_text|regenerate_image|change_layout|restructure_deck\",\"instruction\":\"...\"}],\"preserve_unmentioned\":true}\n"
         )
@@ -782,10 +784,12 @@ class SlidePipelineMixin:
             instruction = str(op.get("instruction") or prompt).strip()
             operations.append({"type": op_type, "instruction": instruction or prompt})
 
-        if not operations:
+        unclear = planner_succeeded and not operations and not target_numbers and bool(plan.get("unclear"))
+        if not operations and not unclear:
             operations = [{"type": "rewrite_text", "instruction": prompt}]
 
         return {
+            "unclear": unclear,
             "scope": scope,
             "target_slide_numbers": sorted(set(target_numbers)),
             "operations": operations,
@@ -934,62 +938,6 @@ class SlidePipelineMixin:
             + self._user_lang_reminder()
         )
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
-
-    async def _expand_slide_bullets_for_no_image(
-        self,
-        structured: Dict[str, Any],
-        missing_indices: List[int],
-    ) -> Dict[str, Any]:
-        """Bước tối ưu hóa visual: viết thêm/dài chữ cho các slide ban đầu có ý định sinh ảnh nhưng thất bại."""
-        if not isinstance(structured, dict) or not missing_indices:
-            return structured
-        slides = structured.get("slides") or []
-        if not isinstance(slides, list) or not slides:
-            return structured
-
-        deck_title = str(structured.get("title") or "Bài thuyết trình")
-        
-        tasks = []
-        indices_map = []
-        
-        for idx in missing_indices:
-            if idx < 0 or idx >= len(slides):
-                continue
-            slide = slides[idx]
-            if not isinstance(slide, dict):
-                continue
-            slide_title = str(slide.get("title") or "Nội dung")
-            bullets = slide.get("bullets") or []
-            in_bullets = [str(b or "").strip() for b in bullets if str(b or "").strip()]
-            if not in_bullets:
-                continue
-                
-            msgs = self._build_expand_no_image_messages(deck_title, slide_title, in_bullets)
-            tasks.append(self._request_json_dict(
-                msgs,
-                target_slides=1,
-                fast_mode=False,
-                compose_mode=False,
-                structured_output="bullets",
-            ))
-            indices_map.append(idx)
-            
-        if not tasks:
-            return structured
-            
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, res in enumerate(results):
-            if isinstance(res, Exception):
-                print(f"[slide_pipeline] Expand bullets failed for slide {indices_map[i]}: {res}")
-                continue
-            out = res.get("bullets") if isinstance(res, dict) else None
-            if isinstance(out, list) and out:
-                cleaned = [str(x or "").strip() for x in out if str(x or "").strip()]
-                if cleaned:
-                    slides[indices_map[i]]["bullets"] = cleaned[:5]
-                    print(f"[slide_images_postprocess] Expanded bullets for slide {indices_map[i]} due to missing image")
-                    
-        return structured
 
     async def _polish_slide_bullets_quality(
         self,
@@ -1583,19 +1531,6 @@ class SlidePipelineMixin:
                 end = art_indices[-1]
                 bullets = bullets[:start] + bullets[end + 1:]
             slide["bullets"] = bullets
-        return structured
-
-    async def _refine_deck_with_optional_second(self, structured: Dict[str, Any]) -> Dict[str, Any]:
-        """Tinh chỉnh (refine) lần 1, sau đó lặp thêm tối đa LLM_REFINE_MAX_EXTRA_PASSES lượt khi vẫn phát hiện gạch đầu dòng bị cụt."""
-        structured = await self._refine_slides_final(structured)
-        if not LLM_REFINE_EXTRA_IF_TRUNCATED:
-            return structured
-        extra = 0
-        max_extra = max(0, int(LLM_REFINE_MAX_EXTRA_PASSES))
-        while extra < max_extra and self._deck_has_truncated_bullets(structured):
-            extra += 1
-            print(f"Extra refine pass {extra}/{max_extra} (truncated bullets still detected)...")
-            structured = await self._refine_slides_final(structured)
         return structured
 
     # -----------------------------

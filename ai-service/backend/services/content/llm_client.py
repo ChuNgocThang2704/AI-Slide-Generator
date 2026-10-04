@@ -21,6 +21,7 @@ def llm_gateway_headers() -> Dict[str, str]:
 
 
 _PRIMARY_HOST_DOWN_UNTIL = [0.0]  # monotonic deadline: the self-hosted LLM host failed, go straight to the gateway
+_PRIMARY_HOST_FAILURES = [0]  # failures in a row, for the growing cooldown
 
 
 async def _primary_host_completion(payload: Dict[str, Any], basic_auth: Any) -> str | None:
@@ -47,11 +48,17 @@ async def _primary_host_completion(payload: Dict[str, Any], basic_auth: Any) -> 
             resp.raise_for_status()
             text = ((resp.json().get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         if text.strip():
+            _PRIMARY_HOST_FAILURES[0] = 0
             return text
     except Exception as error:
-        _PRIMARY_HOST_DOWN_UNTIL[0] = time.monotonic() + float(os.getenv("LLM_PRIMARY_COOLDOWN_SEC", "180"))
+        # The host is only rented for demos: each failure in a row doubles the wait (3 min up to 30),
+        # so an absent host costs one short connect attempt every half hour instead of every 3 minutes.
+        _PRIMARY_HOST_FAILURES[0] += 1
+        base = float(os.getenv("LLM_PRIMARY_COOLDOWN_SEC", "180"))
+        cooldown = min(1800.0, base * (2 ** (_PRIMARY_HOST_FAILURES[0] - 1)))
+        _PRIMARY_HOST_DOWN_UNTIL[0] = time.monotonic() + cooldown
         print(f"[LLMClient] primary LLM host failed ({type(error).__name__}); using the gateway for the next "
-              f"{os.getenv('LLM_PRIMARY_COOLDOWN_SEC', '180')}s")
+              f"{int(cooldown)}s")
     return None
 
 

@@ -168,30 +168,6 @@ _GENERIC_TITLE_PREFIX_RE = re.compile(
 )
 
 
-def _is_generic_title(title: str) -> bool:
-    """Trả về True nếu tiêu đề slide là placeholder vô nghĩa.
-
-    Chỉ bắt các trường hợp THỰC SỰ vô nghĩa:
-    - Trống / None
-    - Placeholder rõ ràng: "Nội dung", "Tiêu đề", "Slide", "Next"...
-    - Placeholder có số: "Nội dung 1", "Slide 3", "Phần 2"...
-
-    KHÔNG bắt các tiêu đề cấu trúc hợp lệ như:
-    "Kết luận", "Giới thiệu", "Tổng quan", "Overview", "Introduction"...
-    vì chúng có thể hoàn toàn phù hợp với nội dung slide.
-    """
-    t = str(title or "").strip()
-    if not t:
-        return True
-    tl = t.lower()
-    if tl in _GENERIC_TITLE_EXACT:
-        return True
-    if _GENERIC_TITLE_PREFIX_RE.match(tl):
-        return True
-    return False
-
-
-
 class SlideNormalizerMixin:
 
     def _sanitize_inline_markup(self, text: str) -> str:
@@ -348,35 +324,6 @@ class SlideNormalizerMixin:
         if len(re.findall(r"[A-Za-z]{3,}", text)) >= 5:
             return "en"
         return "vi"
-
-    def _build_default_speaker_notes(self, title: str, bullets: List[str]) -> str:
-        clean_title = str(title or "").strip()
-        clean_bullets = [str(b or "").strip().rstrip(".") for b in (bullets or []) if str(b or "").strip()]
-        if not clean_bullets:
-            return ""
-        if self._detect_slide_language(clean_title, clean_bullets) == "en":
-            transitions = ("To begin,", "A second point is", "This also means", "Taken together,")
-            body = [f"{transitions[idx]} {bullet}." for idx, bullet in enumerate(clean_bullets[:4])]
-            body.append("These points provide the context needed for the next part of the presentation.")
-            return " ".join(body).strip()
-        transitions = ("Trước hết,", "Điểm tiếp theo là", "Điều này cũng cho thấy", "Nhìn tổng thể,")
-        body = [f"{transitions[idx]} {bullet}." for idx, bullet in enumerate(clean_bullets[:4])]
-        body.append("Các ý trên là cơ sở để chuyển sang nội dung tiếp theo của bài trình bày.")
-        return " ".join(body).strip()
-
-    @staticmethod
-    def _speaker_notes_need_fallback(notes: str) -> bool:
-        text = re.sub(r"\s+", " ", str(notes or "")).strip()
-        if len(text.split()) < 35:
-            return True
-        return bool(
-            re.search(
-                r"\b(?:slide|trang)\s+(?:này|nay)\s+(?:giới\s+thiệu|gioi\s+thieu|trình\s+bày|trinh\s+bay|mô\s+tả|mo\s+ta|tóm\s+tắt|tom\s+tat|nhấn\s+mạnh|nhan\s+manh)\b"
-                r"|\bthis\s+slide\s+(?:introduces|presents|describes|summarizes|highlights)\b",
-                text,
-                flags=re.IGNORECASE,
-            )
-        )
 
     def _normalize_structured_content(self, structured_content: Dict[str, Any]) -> Dict[str, Any]:
         """Chuẩn hóa cấu trúc nội dung về định dạng JSON slide chuẩn.
@@ -625,7 +572,7 @@ class SlideNormalizerMixin:
 
             notes = slide.get("script") or slide.get("speaker_notes") or slide.get("notes")
             if not isinstance(notes, str):
-                notes = str(notes)
+                notes = "" if notes is None else str(notes)
             notes = self._sanitize_inline_markup(notes.strip())
 
             out_slide = {
@@ -639,13 +586,18 @@ class SlideNormalizerMixin:
             for metadata_key in ("pedagogical_role", "source_pages"):
                 if slide.get(metadata_key) is not None:
                     out_slide[metadata_key] = slide.get(metadata_key)
+            # A deck being revised keeps what each slide already is (cover, closing, columns, its id).
+            if self._is_revision():
+                for kept_key in ("layout", "slide_id"):
+                    if slide.get(kept_key):
+                        out_slide[kept_key] = slide.get(kept_key)
             slides_out.append(out_slide)
 
         slides_out = self._balance_deck(slides_out)
         # Loại bỏ trùng lặp bullet trên toàn bộ slide deck (giảm thiểu "lặp lại giữa các slide").
         try:
             global_seen: set[str] = set()
-            for s in slides_out:
+            for s in ([] if self._is_revision() else slides_out):
                 bs = s.get("bullets") or []
                 if not isinstance(bs, list):
                     continue
@@ -718,6 +670,11 @@ class SlideNormalizerMixin:
                 if isinstance(bullet, str):
                     words.extend(re.findall(r"\w+", bullet.lower()))
         return set(words)
+
+    def _is_revision(self) -> bool:
+        from services.generation_context import GenerationMode, extractor_context
+        context = extractor_context(self)
+        return context is not None and context.mode == GenerationMode.REVISION
 
     def _balance_deck(self, slides: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Hậu xử lý danh sách slide: loại trùng theo tiêu đề + độ tương đồng ngữ nghĩa, bỏ slide trống, cứu các slide thưa thớt."""

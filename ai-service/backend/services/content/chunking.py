@@ -305,80 +305,6 @@ class ChunkingMixin:
                 )
         return expanded
 
-    def _build_deck_from_chunk_summaries(
-        self,
-        summaries: List[Dict[str, Any]],
-        slide_plan: Dict[str, int],
-        outline: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """Tạo trực tiếp slide deck cuối cùng từ các bản tóm tắt phân mảnh mà không cần bước LLM tổng hợp (compose) cuối cùng."""
-        if not summaries:
-            return {"title": "Bài thuyết trình", "slides": []}
-
-        slides: List[Dict[str, Any]] = []
-        doc_title = "Bài thuyết trình"
-
-        for idx, summary in enumerate(summaries):
-            raw_title = str(summary.get("title") or f"Phần {idx + 1}").strip()
-            section_title = self._sanitize_title(raw_title)[:120] or f"Phần {idx + 1}"
-            if idx == 0 and section_title:
-                doc_title = section_title
-
-            bullets_raw = summary.get("bullets", [])
-            if isinstance(bullets_raw, str):
-                bullets_raw = [bullets_raw]
-
-            bullets: List[str] = []
-            seen: set[str] = set()
-            for bullet in bullets_raw:
-                clean = str(bullet).strip()
-                key = clean.lower()
-                if clean and key not in seen:
-                    bullets.append(clean)
-                    seen.add(key)
-
-            if not bullets:
-                continue
-
-            desired_slides = 1
-            if outline and idx < len(outline):
-                desired_slides = max(1, int(outline[idx].get("slides") or 1))
-            elif len(bullets) >= 5:
-                desired_slides = 2
-
-            # Outline thường phân bổ nhiều slide hơn số bullet thực tế → mỗi slide 1 dòng.
-            # Giới hạn: trung bình ~≥3 bullet/slide khi chia (ceil(n/3) slide tối đa).
-            max_slides_for_bullets = max(1, (len(bullets) + 2) // 3)
-            desired_slides = min(desired_slides, max_slides_for_bullets)
-
-            for part_idx, part in enumerate(self._partition_bullets(bullets, desired_slides), start=1):
-                base_title = self._strip_continued_suffix(section_title)
-                slide_title = base_title if part_idx == 1 else f"{base_title} - Phần {part_idx}"
-                slides.append({"title": slide_title, "bullets": part, "notes": ""})
-
-        min_slides = max(1, int(slide_plan.get("min") or 1))
-        title_counts: Dict[str, int] = {}
-        for slide in slides:
-            base_title = self._strip_continued_suffix(str(slide.get("title") or "Nội dung"))
-            title_counts[base_title] = title_counts.get(base_title, 0) + 1
-            count = title_counts[base_title]
-            derived_title = self._derive_slide_title_from_bullets(
-                slide.get("bullets") or [],
-                fallback=base_title,
-            )
-            slide["title"] = base_title if count == 1 else f"{base_title} - Phần {count}"
-        final_title_counts: Dict[str, int] = {}
-        for slide in slides:
-            base_title = self._strip_continued_suffix(str(slide.get("title") or "Nội dung"))
-            final_title_counts[base_title] = final_title_counts.get(base_title, 0) + 1
-            if final_title_counts[base_title] > 1 or " - Ph" in base_title:
-                slide["title"] = self._derive_slide_title_from_bullets(
-                    slide.get("bullets") or [],
-                    fallback=base_title,
-                )
-        expanded_slides = self._expand_compact_slides(slides, min_slides=min_slides)
-        return self._normalize_structured_content({"title": doc_title, "slides": expanded_slides})
-
     def _estimate_reduce_slide_plan(self, summaries: List[Dict[str, Any]], merged_content: str) -> Dict[str, int]:
         """Ước lượng số lượng slide mục tiêu/tối thiểu/tối đa cho bước tổng hợp cuối cùng từ các bản tóm tắt rút gọn."""
         section_count = max(1, len(summaries))
@@ -474,21 +400,6 @@ class ChunkingMixin:
             for i in range(n)
         ]
 
-    async def _plan_outline(
-        self,
-        summaries: List[Dict[str, Any]],
-        merged_content: str,
-        slide_plan: Dict[str, int],
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Lên kế hoạch dàn ý (outline planning): sử dụng quy tắc (chạy tức thời) không cần gọi LLM.
-
-        Trả về danh sách dạng [{"section": "X", "slides": 2}] hoặc None nếu có ít hơn 2 phần.
-        """
-        if len(summaries) < 2:
-            return None
-        plan = self._plan_outline_rule_based(summaries, slide_plan)
-        return plan if plan else None
-
     def _build_outline_sections_messages(
         self,
         merged_content: str,
@@ -524,44 +435,6 @@ class ChunkingMixin:
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ]
-
-    async def _plan_outline_sections(
-        self,
-        merged_content: str,
-        min_sections: int = 5,
-        max_sections: int = 8,
-    ) -> List[Dict[str, Any]]:
-        messages = self._build_outline_sections_messages(
-            merged_content,
-            min_sections=min_sections,
-            max_sections=max_sections,
-        )
-        data = await self._request_json_dict(
-            messages,
-            target_slides=max_sections,
-            fast_mode=True,
-            compose_mode=False,
-        )
-        sections = data.get("sections") if isinstance(data, dict) else None
-        if not isinstance(sections, list):
-            return []
-        cleaned: List[Dict[str, Any]] = []
-        for s in sections:
-            if not isinstance(s, dict):
-                continue
-            title = str(s.get("title") or "").strip()
-            desc = str(s.get("description") or "").strip()
-            if not title or not desc:
-                continue
-            cleaned.append({"title": title[:80], "description": desc})
-        # Clamp số section về [min,max] (nếu model trả lệch).
-        if len(cleaned) > max_sections:
-            cleaned = cleaned[:max_sections]
-        if len(cleaned) < min_sections and cleaned:
-            # Nếu ít hơn, duplicate description để đủ số section theo đúng schema.
-            while len(cleaned) < min_sections:
-                cleaned.append(dict(cleaned[-1]))
-        return cleaned
 
     def _build_expansion_messages(
         self,
@@ -604,30 +477,6 @@ class ChunkingMixin:
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ]
-
-    async def _expand_content(
-        self,
-        merged_content: str,
-        outline_sections: List[Dict[str, Any]],
-        target_slides: int,
-    ) -> str:
-        if not outline_sections:
-            # Nếu outline fail, vẫn fallback bằng nội dung đã có để không chết pipeline.
-            return merged_content
-        messages = self._build_expansion_messages(
-            merged_content,
-            outline_sections=outline_sections,
-            target_slides=target_slides,
-        )
-        data = await self._request_json_dict(
-            messages,
-            target_slides=max(8, min(target_slides, 16)),
-            fast_mode=True,
-            compose_mode=False,
-        )
-        expanded = data.get("expanded_content") if isinstance(data, dict) else None
-        expanded = str(expanded or "").strip()
-        return expanded if expanded else merged_content
 
     # ------------------------------------------------------------------
     # Paragraph-based split (fallback khi không có heading structure)

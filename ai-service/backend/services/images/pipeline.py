@@ -1144,16 +1144,6 @@ async def _validate_source_visual_candidate(
     return True, record
 
 
-def _score_slide_for_image(
-    slide: Dict[str, Any],
-    idx: int,
-    table_specs: Optional[Dict[int, Any]] = None,
-    chart_specs: Optional[Dict[int, Any]] = None
-) -> int:
-    # Deprecated sync version, will be bypassed
-    return 0
-
-
 async def _score_slide_for_image_async(
     content_extractor,
     slide: Dict[str, Any],

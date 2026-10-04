@@ -17,24 +17,6 @@ from config import (
 )
 
 
-def _has_explicit_slide_outline(text: str) -> bool:
-    """Detect orchestration intent without interpreting domain content."""
-    raw_text = str(text or "")
-    numbers = {
-        int(value)
-        for value in re.findall(r"\b(?:slide|trang)\s*(?:so|thu|số|thứ)?\s*(\d+)\b", raw_text, re.IGNORECASE)
-    }
-    if len(numbers) >= 2:
-        return True
-    if not re.search(r"(?:slide|trang|bài\s+trình\s+chiếu)", raw_text, re.IGNORECASE):
-        return False
-    numbered = sorted({
-        int(match.group(1))
-        for match in re.finditer(r"(?m)^\s*(\d{1,2})[.)]\s+\S.+$", raw_text)
-    })
-    return len(numbered) >= 4 and numbered == list(range(1, numbered[-1] + 1))
-
-
 def _resolve_plan_image_limit(
     plan: Optional[str],
     slide_count: Optional[int],

@@ -89,7 +89,12 @@ def explicit_chart_type_targets_from_prompt(
         next_slide = re.search(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded[match.end():window_end])
         if next_slide:
             window_end = match.end() + next_slide.start()
-        window = folded[match.start():window_end]
+        # The request may name the chart before the slide ("them bieu do cot vao slide 4"): read back
+        # to the start of the clause (or the previous slide marker) as well.
+        previous = [m.end() for m in re.finditer(r"\b(?:slide|trang)\s*(?:so|thu)?\s*\d+\b", folded[:match.start()])]
+        clause = max(folded.rfind(mark, 0, match.start()) for mark in (",", ";", ".")) + 1
+        window_start = max(previous[-1] if previous else 0, clause, match.start() - 120)
+        window = folded[window_start:window_end]
         if not re.search(r"\b(?:bieu\s*do|chart|graph)\b", window):
             continue
         if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", window):

@@ -555,6 +555,17 @@ async def build_visual_plan(
                         continue
                 run_start = run_end + 1
 
+        # A slide whose bullets are a labelled series of comparable values (four quarters, yearly
+        # totals) reads far better as a chart, and the planner often leaves it as plain text.
+        from services.slide_charts import labelled_value_series
+        for idx, slide in enumerate(slides):
+            if plan.get(idx) != "none" or not isinstance(slide, dict):
+                continue
+            if str(slide.get("layout") or "").strip().lower() in {"intro", "title", "thankyou", "thank_you"}:
+                continue
+            if labelled_value_series(slide.get("bullets") or []):
+                plan[idx] = "chart"
+                print(f"[slide_quality] visual plan: slide {idx} has a labelled value series -> chart")
         for idx, item in items_by_index.items():
             if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
                 _apply_planned_composition(slides[idx], item, plan.get(idx, "none"))

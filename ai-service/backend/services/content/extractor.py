@@ -623,6 +623,10 @@ class ContentExtractor(
             "- For a numbered slide outline, preserve the exact slide order and count. Never merge, split, reorder, or replace a requested slide.\n"
             "- Preserve every requested visual type and its data verbatim: table headers/rows, chart labels/values/units, and image subject. Put them only in their corresponding numbered section.\n"
             f"- Generate enough sections and detail to cover roughly {target_slides} slides.\n"
+            "- Use a precise number only when it is given in the prompt, computed from numbers in the prompt "
+            "(say so: a total, a growth rate), or established general knowledge (a historical date, a constant). "
+            "NEVER invent statistics, survey or study results, percentages, financial figures, targets, forecasts, "
+            "or the names of studies and organisations; describe such points qualitatively instead.\n"
             "- Write in a formal, informative, and engaging tone.\n"
             "- DO NOT output slide JSON or code blocks. Output ONLY raw text/markdown content."
             "\n\n"
@@ -979,103 +983,6 @@ class ContentExtractor(
             
         return "Bài thuyết trình"
 
-    async def _extract_compact_content(
-        self,
-        raw_content: str,
-        target_slides: int,
-        chunk_mode: bool,
-        fast_mode: bool = False,
-        compose_mode: bool = False,
-        min_slides: Optional[int] = None,
-        section_count: int = 0,
-        outline: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """Run one chat call that returns final slide JSON for already-compact content.
-
-        Safe retry policy:
-        - Attempt 0: normal call, result is saved as best_result.
-        - Attempt 1 (compose mode only): use fast_mode to reduce num_predict/VRAM pressure.
-          If attempt 1 crashes, return best_result from attempt 0 instead of fallback.
-        """
-        best_result: Optional[Dict[str, Any]] = None
-
-        try:
-            for attempt in range(2):
-                messages = self._build_compose_messages(
-                    raw_content,
-                    target_slides=target_slides,
-                    section_count=section_count,
-                    enforce_expansion=(compose_mode and attempt == 1),
-                    outline=outline,
-                ) if compose_mode else self._build_messages(
-                    raw_content,
-                    target_slides=target_slides,
-                    chunk_mode=chunk_mode,
-                    fast_mode=fast_mode,
-                )
-
-                # Retry uses fast_mode to cut num_predict and lower VRAM pressure.
-                _fast = fast_mode or (attempt == 1 and compose_mode)
-
-                try:
-                    structured_content = await self._request_json_dict(
-                        messages,
-                        target_slides=target_slides,
-                        fast_mode=_fast,
-                        compose_mode=compose_mode,
-                        structured_output=(
-                            "slide_deck" if compose_mode else None
-                        ),
-                    )
-                except TaskCancelledError:
-                    raise
-                except Exception as req_err:
-                    print(f"LLM call attempt {attempt + 1} failed: {req_err}")
-                    # Retry crashed → preserve attempt 0 result, don't fall to fallback
-                    if best_result is not None:
-                        print(
-                            f"Retry failed; returning saved result from attempt 1 "
-                            f"({len(best_result.get('slides', []))} slides)"
-                        )
-                        return best_result
-                    continue  # attempt 0 failed, still try attempt 1
-
-                # Soft-validate — skip invalid structure silently
-                if not isinstance(structured_content, dict):
-                    continue
-                if "title" not in structured_content or "slides" not in structured_content:
-                    continue
-                if not isinstance(structured_content["slides"], list):
-                    continue
-
-                slide_count = len(structured_content.get("slides", []))
-                normalized = self._normalize_structured_content(structured_content)
-
-                # Always keep the richest valid result seen so far
-                if best_result is None or slide_count > len(best_result.get("slides", [])):
-                    best_result = normalized
-
-                if compose_mode and min_slides and slide_count < min_slides and attempt == 0:
-                    print(
-                        f"Compose returned only {slide_count} slides (< {min_slides}), "
-                        f"retrying with stronger expansion prompt"
-                    )
-                    continue
-
-                print(f"Successfully parsed JSON: {slide_count} slides")
-                return normalized
-
-        except TaskCancelledError:
-            raise
-        except Exception as e:
-            print(f"Error extracting content with LLM: {e}")
-
-        if best_result is not None:
-            print(f"Returning best saved result: {len(best_result.get('slides', []))} slides")
-            return best_result
-        return self._normalize_structured_content(self._fallback_structure(raw_content))
-
-
     async def _request_json_dict(
         self,
         messages: List[Dict[str, str]],
@@ -1251,33 +1158,6 @@ class ContentExtractor(
             result_text,
             clean_result_text=self._clean_result_text,
         )
-
-    async def _extract_single_chunk(self, chunk_content: str, fast_mode: bool = False) -> Dict[str, Any]:
-        """Xử lý 1 chunk với LLM (vLLM)."""
-        target_slides = self._estimate_target_slides(chunk_content, chunk_mode=True)
-        if fast_mode:
-            target_slides = max(AUTO_MIN_SLIDES, target_slides - 1)
-        messages = self._build_messages(
-            chunk_content,
-            target_slides=target_slides,
-            chunk_mode=True,
-            fast_mode=fast_mode,
-        )
-
-        try:
-            structured_content = await self._request_json_dict(
-                messages,
-                target_slides=target_slides,
-                fast_mode=fast_mode,
-                compose_mode=False,
-                structured_output="slide_deck",
-            )
-            return self._normalize_structured_content(structured_content)
-        except TaskCancelledError:
-            raise
-        except Exception as e:
-            print(f"Error extracting chunk: {e}")
-            return self._normalize_structured_content(self._fallback_structure(chunk_content))
 
     def _estimate_target_slides(self, content: str, chunk_mode: bool) -> int:
         """Estimate target slide count to keep output within token budget."""
@@ -1521,9 +1401,3 @@ class ContentExtractor(
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ]
-
-    def _try_fix_json(self, json_str: str) -> Optional[str]:
-        """Thử fix JSON bị lỗi format"""
-        return _try_fix_json_util(json_str)
-    
-

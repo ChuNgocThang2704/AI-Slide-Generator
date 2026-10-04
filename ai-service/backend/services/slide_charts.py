@@ -304,6 +304,30 @@ def _pair_chart_from_lines(title: str, lines: List[str], chart_type: str) -> Opt
     )
 
 
+_SERIES_PAREN = re.compile(r"^\s*([^:(]{2,40}?)\s*\(\s*([-+]?\d+(?:[.,]\d+)?)\s*([^\d()]{0,14}?)\s*\)\s*:")
+_SERIES_COLON = re.compile(r"^\s*([^:(]{2,40}?)\s*:\s*([-+]?\d+(?:[.,]\d+)?)\s*([^\d\s.,;()]{0,8})(?=[\s.,;]|$)")
+
+
+def labelled_value_series(bullets: List[Any]) -> Optional[List[tuple]]:
+    """[(label, value, unit)] when at least three bullets each open with a label and one value in a
+    shared unit ("Quý 1 (12 tỷ VNĐ): ..." or "2023: 12 cuốn ..."); otherwise None."""
+    series: List[tuple] = []
+    for bullet in bullets or []:
+        text = str(bullet or "")
+        match = _SERIES_PAREN.match(text) or _SERIES_COLON.match(text)
+        if not match:
+            continue
+        try:
+            value = float(match.group(2).replace(",", "."))
+        except ValueError:
+            continue
+        series.append((match.group(1).strip(), value, _fold_text(match.group(3)).strip()))
+    if len(series) < 3:
+        return None
+    units = {unit for _, _, unit in series}
+    return series if len(units) == 1 else None
+
+
 def _raw_chart_candidates(raw_content: str) -> List[Dict[str, Any]]:
     lines = str(raw_content or "").splitlines()
     candidates: List[Dict[str, Any]] = []

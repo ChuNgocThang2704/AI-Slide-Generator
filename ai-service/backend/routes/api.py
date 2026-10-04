@@ -831,6 +831,11 @@ async def _build_revised_slide_spec_payload(
         context_slide_number=context_slide_number,
     )
     planner_succeeded = bool(revision_plan.get("planner_succeeded"))
+    if revision_plan.get("unclear") and not target_slide_indices:
+        # Rewriting the deck for a request nobody can read only damages it.
+        raise RuntimeError(
+            "Chưa hiểu yêu cầu chỉnh sửa. Hãy mô tả rõ hơn, ví dụ: \"Rút gọn slide 3\" hoặc \"Thêm 1 slide về ...\"."
+        )
     plan_targets = [
         int(n) - 1
         for n in (revision_plan.get("target_slide_numbers") or [])
@@ -991,6 +996,28 @@ async def _build_revised_slide_spec_payload(
                 len(old_slides),
             )
 
+    # A deck-wide rewrite (fix wording, translate, change tone) returns text only: each slide keeps
+    # the table, chart, picture and layout it had, and the cover stays a cover.
+    if (
+        wants_deck_restructure and old_slides and not explicit_add_count and not explicit_delete_targets
+        and len(revised.get("slides") or []) == len(old_slides)
+    ):
+        for idx, (new_slide, old_slide) in enumerate(zip(revised["slides"], old_slides)):
+            if not isinstance(new_slide, dict) or not isinstance(old_slide, dict) or idx in explicit_visual_targets:
+                continue
+            for key in ("table", "chart"):
+                if isinstance(old_slide.get(key), dict) and not isinstance(new_slide.get(key), dict):
+                    new_slide[key] = old_slide[key]
+            if old_slide.get("image_url") and not new_slide.get("image_url"):
+                new_slide["image_url"] = old_slide["image_url"]
+            if old_slide.get("layout"):
+                new_slide["layout"] = old_slide["layout"]
+            if old_slide.get("slide_id") and not new_slide.get("slide_id"):
+                new_slide["slide_id"] = old_slide["slide_id"]
+            old_bullets = [b for b in (old_slide.get("bullets") or []) if str(b).strip()]
+            if idx == 0 and str(old_slide.get("layout") or "").lower() in {"intro", "title"}:
+                new_slide["bullets"] = (new_slide.get("bullets") or [])[: max(1, len(old_bullets))]
+
     if plan_targets and old_slides and not wants_deck_restructure:
         revised_slides = [
             slide for slide in (revised.get("slides") or []) if isinstance(slide, dict)
@@ -1047,6 +1074,10 @@ async def _build_revised_slide_spec_payload(
                 else:
                     slide.pop("image_url", None)
                 slide["layout"] = old_slide.get("layout") or slide.get("layout")
+                # A cover stays a cover: a rewrite must not turn its one-line subtitle into body bullets.
+                if idx == 0 and str(old_slide.get("layout") or "").lower() in {"intro", "title"}:
+                    kept = max(1, len([b for b in (old_slide.get("bullets") or []) if str(b).strip()]))
+                    slide["bullets"] = (slide.get("bullets") or [])[:kept]
             if idx not in plan_targets:
                 if "table" not in slide and isinstance(old_slide.get("table"), dict):
                     slide["table"] = old_slide.get("table")

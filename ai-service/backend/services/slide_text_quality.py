@@ -356,36 +356,6 @@ def _derive_title_from_bullets(
     return fallback_clean[:120]
 
 
-def _repair_titles_after_review(structured: Dict[str, Any]) -> List[int]:
-    slides = structured.get("slides") or []
-    if not isinstance(slides, list):
-        return []
-    changed: List[int] = []
-    seen: set[str] = set()
-    for idx, slide in enumerate(slides):
-        if not isinstance(slide, dict):
-            continue
-        title = str(slide.get("title") or "").strip()
-        key = _norm_title_key(title)
-        bullets_list = slide.get("bullets") or slide.get("content") or []
-        needs_fix = not key or key in seen or _is_suspicious_title(title, bullets=bullets_list)
-        if needs_fix:
-            new_title = _derive_title_from_bullets(
-                slide.get("bullets") or slide.get("content") or [],
-                fallback=title or "Nội dung chính",
-                seen=seen,
-            )
-            new_key = _norm_title_key(new_title)
-            if new_key and new_key not in seen and new_title != title:
-                slide["title"] = new_title
-                title = new_title
-                key = new_key
-                changed.append(idx)
-        if key:
-            seen.add(key)
-    return changed
-
-
 def _key_terms(text: str, limit: int = 8) -> List[str]:
     out: List[str] = []
     for token in _words((text or "").lower()):

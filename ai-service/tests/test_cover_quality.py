@@ -16,7 +16,8 @@ def test_verbose_definition_cover_becomes_scope_preview_without_losing_detail():
 
     normalize_cover(deck)
 
-    assert deck["slides"][0]["bullets"] == ["Từ Lịch sử AI đến Đạo đức AI"]
+    assert deck["slides"][0]["bullets"][0].startswith("Lịch sử AI · ")
+    assert "Từ " not in deck["slides"][0]["bullets"][0]
     assert "Định nghĩa AI:" in deck["slides"][0]["notes"]
     assert "Tầm quan trọng:" in deck["slides"][0]["notes"]
 
