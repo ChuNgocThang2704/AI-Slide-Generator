@@ -7,6 +7,7 @@
 const CANVAS_W = 960;
 const CANVAS_H = 540;
 const GAP = 16;
+const CLUSTER_GAP = 22;                            // pieces this close belong to one drawing
 const MAX_SHIFT = 170;                               // a box is slid at most this far
 const MIN_ART_AREA = 0.015 * CANVAS_W * CANVAS_H;   // smaller marks are decoration, not obstacles
 const PAGE_SIZED = 0.25 * CANVAS_W * CANVAS_H;      // bigger pieces are the page the text sits on
@@ -127,6 +128,60 @@ export function estimatedTextHeight(el) {
   const perLine = Math.max(1, Math.floor((el.width || 1) / (size * (el.role === 'title' ? 0.7 : 0.6))));
   const lines = Math.max(1, Math.ceil(text.length / perLine));
   return lines * size * (Number(el.style?.lineHeight) || 1.2);
+}
+
+/**
+ * A diagram left over from a deck's own content is many small pieces sitting together (boxes,
+ * arrows, labels). Each is too small to count as an obstacle, yet together they cover the text.
+ * Drops every cluster of four or more small pieces whose bounding box lies on a text box; a
+ * cluster clear of the text (a template's own pattern of dots or icons) stays.
+ */
+export function withoutClustersOnText(decor, elements) {
+  const list = Array.isArray(decor) ? decor : [];
+  const boxes = elements.filter((el) => el.type === 'text' && ['title', 'body'].includes(el.role));
+  const boxOf = (item) => ({ x: Number(item.x) || 0, y: Number(item.y) || 0, width: Number(item.width) || 0, height: Number(item.height) || 0 });
+  const small = list.filter((item) => item.role !== 'background' && ['image', 'shape'].includes(item.type)
+    && area(boxOf(item)) < 0.04 * CANVAS_W * CANVAS_H);
+  const parent = small.map((_, index) => index);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const near = (a, b) => a.x - CLUSTER_GAP < b.x + b.width && b.x - CLUSTER_GAP < a.x + a.width
+    && a.y - CLUSTER_GAP < b.y + b.height && b.y - CLUSTER_GAP < a.y + a.height;
+  for (let i = 0; i < small.length; i += 1) {
+    for (let j = i + 1; j < small.length; j += 1) {
+      if (near(boxOf(small[i]), boxOf(small[j]))) parent[find(i)] = find(j);
+    }
+  }
+  const groups = new Map();
+  small.forEach((item, index) => {
+    const root = find(index);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(item);
+  });
+  const doomed = new Set();
+  groups.forEach((members) => {
+    if (members.length < 4) return;
+    const xs = members.map(boxOf);
+    const x0 = Math.min(...xs.map((b) => b.x));
+    const y0 = Math.min(...xs.map((b) => b.y));
+    const bound = { x: x0, y: y0, width: Math.max(...xs.map((b) => b.x + b.width)) - x0, height: Math.max(...xs.map((b) => b.y + b.height)) - y0 };
+    if (boxes.some((text) => overlap(bound, text) >= 0.25 * area(bound))) members.forEach((item) => doomed.add(item));
+  });
+  return doomed.size ? list.filter((item) => !doomed.has(item)) : list;
+}
+
+/**
+ * A picture the body text still lies on after `avoidArt` had no room to move it (a figure in the
+ * middle of the slide) is content of the file the template came from, not its look: drop it.
+ * Backdrops stay, and so does a picture only the title sits on (a header photo).
+ */
+export function withoutPicturesUnderBody(decor, elements) {
+  const bodies = elements.filter((el) => el.type === 'text' && el.role === 'body');
+  return (Array.isArray(decor) ? decor : []).filter((item) => {
+    if (!isPicture(item)) return true;
+    const box = { x: Number(item.x) || 0, y: Number(item.y) || 0, width: Number(item.width) || 0, height: Number(item.height) || 0 };
+    if (coversPage(box)) return true;
+    return !bodies.some((body) => overlap(box, body) >= 0.15 * area(body));
+  });
 }
 
 export function withoutTextBackings(decor, elements) {

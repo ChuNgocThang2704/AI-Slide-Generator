@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { avoidArt, artObstacles, withoutCrossingRules, withoutTextBackings } from '../src/utils/templateAvoid.js';
+import { avoidArt, artObstacles, withoutClustersOnText, withoutCrossingRules, withoutPicturesUnderBody, withoutTextBackings } from '../src/utils/templateAvoid.js';
 
 const text = (role, x, y, width, height) => ({ type: 'text', role, x, y, width, height });
 const photo = (x, y, width, height) => ({ type: 'image', role: 'decoration', x, y, width, height, src: 'asset:p.jpg' });
@@ -85,4 +85,23 @@ test('coloured cards lying under the text are dropped; a rule and a far-away mar
   const far = { type: 'shape', role: 'decoration', x: 40, y: 480, width: 120, height: 40, fill: '#123' };
   const kept = withoutTextBackings([card(50), card(345), card(641), rule, far], [text('body', 64, 130, 832, 300)]);
   assert.deepEqual(kept, [rule, far]);
+});
+
+test('a diagram of small pieces lying on the text is dropped; the same cluster clear of the text stays', () => {
+  const piece = (x, y) => ({ type: 'image', role: 'decoration', x, y, width: 30, height: 20, src: 'asset:p.png' });
+  const diagram = (dx, dy) => [0, 1, 2, 3, 4, 5].map((i) => piece(dx + (i % 3) * 40, dy + Math.floor(i / 3) * 30));
+  const body = text('body', 64, 150, 832, 300);
+  const onText = diagram(400, 250);
+  const clear = diagram(820, 480);
+  const lone = piece(500, 300);
+  assert.deepEqual(withoutClustersOnText([...onText, ...clear], [body]), clear);
+  assert.deepEqual(withoutClustersOnText([lone], [body]), [lone]);   // a single small mark is not a diagram
+});
+
+test('a figure the body cannot get clear of is dropped; a backdrop and a header photo stay', () => {
+  const figure = photo(192, 146, 509, 297);
+  const backdrop = photo(0, 0, 960, 540);
+  const header = photo(0, 0, 960, 120);
+  const kept = withoutPicturesUnderBody([backdrop, header, figure], [text('title', 64, 40, 832, 51), text('body', 64, 113, 832, 197)]);
+  assert.deepEqual(kept, [backdrop, header]);
 });

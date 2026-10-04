@@ -4,7 +4,7 @@ import { ADAPTIVE_TEMPLATES, isBoundaryLabel } from './templateLayouts.js';
 import { mapTemplateFont } from './templateFonts.js';
 import { isUserGraphic } from './shapeLibrary.js';
 import { buildTemplateArt, withoutTemplateArt } from './templateArt.js';
-import { avoidArt, withoutCrossingRules, withoutTextBackings } from './templateAvoid.js';
+import { avoidArt, withoutClustersOnText, withoutCrossingRules, withoutPicturesUnderBody, withoutTextBackings } from './templateAvoid.js';
 
 const escapeHtml = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // Alignment and size are deliberately not imported: the layout engine already
@@ -102,7 +102,7 @@ export function applyCustomTemplateResult(slide, match, preferredBaseTheme) {
       style: importedStyle ? { ...element.style, ...importedStyle } : element.style,
     };
   });
-  if (art.decor.length) richText._decor = withoutTextBackings(withoutCrossingRules(art.decor, elements), elements);
+  if (art.decor.length) richText._decor = withoutPicturesUnderBody(withoutClustersOnText(withoutTextBackings(withoutCrossingRules(art.decor, elements), elements), elements), elements);
   return {
     ...slide,
     richText,
