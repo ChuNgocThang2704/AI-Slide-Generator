@@ -146,25 +146,38 @@ function currentElements(page, bullets) {
   return elements;
 }
 
-function parseTwoColumns(bullets) {
+// A two-column slide carries its column headings in its bullets ("Heading — point"). The AI
+// service's text clean-up turns the long dash into a plain hyphen, so both are read; a hyphen only
+// counts when it yields exactly two headings shared by every bullet (a lone "A - b" is just text).
+function groupByHeading(bullets, separator) {
   const groups = [];
-  bullets.forEach((bullet) => {
-    const [heading, ...contentParts] = String(bullet).split(' — ');
-    if (!contentParts.length) return;
-    const content = contentParts.join(' — ').trim();
-    let group = groups.find((item) => item.heading === heading.trim());
+  for (const bullet of bullets) {
+    const text = String(bullet);
+    const at = text.indexOf(separator);
+    if (at <= 0) return null;
+    const heading = text.slice(0, at).trim();
+    const content = text.slice(at + separator.length).trim();
+    if (!heading || !content) return null;
+    let group = groups.find((item) => item.heading === heading);
     if (!group) {
-      group = { heading: heading.trim(), points: [] };
+      group = { heading, points: [] };
       groups.push(group);
     }
-    if (content) group.points.push(content);
-  });
+    group.points.push(content);
+  }
+  return groups;
+}
 
-  if (groups.length >= 2) return [groups[0], groups[1]];
+export function parseTwoColumns(bullets) {
+  for (const separator of [' — ', ' – ', ' - ']) {
+    const groups = groupByHeading(bullets, separator);
+    if (groups && groups.length === 2) return groups;
+  }
+  // No headings to read: two plain columns, without inventing names for them.
   const half = Math.ceil(bullets.length / 2);
   return [
-    { heading: 'Nội dung chính', points: bullets.slice(0, half) },
-    { heading: 'Góc nhìn bổ sung', points: bullets.slice(half) },
+    { heading: '', points: bullets.slice(0, half) },
+    { heading: '', points: bullets.slice(half) },
   ];
 }
 
@@ -172,7 +185,7 @@ function serializeBullets(slide) {
   if (slide.type === 'imageText') return splitText(slide.text);
   if (slide.type === 'twoColumn') {
     const columns = [slide.left, slide.right].filter(Boolean);
-    return columns.flatMap((column) => (column.points || []).map((point) => `${column.heading || 'Nội dung'} — ${point}`));
+    return columns.flatMap((column) => (column.points || []).map((point) => (column.heading ? `${column.heading} — ${point}` : point)));
   }
   if (slide.type === 'quote') {
     const attribution = [slide.author, slide.role].filter(Boolean).join(', ');
