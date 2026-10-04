@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { avoidArt, artObstacles } from '../src/utils/templateAvoid.js';
+import { avoidArt, artObstacles, withoutCrossingRules, withReadablePanels } from '../src/utils/templateAvoid.js';
 
 const text = (role, x, y, width, height) => ({ type: 'text', role, x, y, width, height });
 const photo = (x, y, width, height) => ({ type: 'image', role: 'decoration', x, y, width, height, src: 'asset:p.jpg' });
@@ -54,4 +54,36 @@ test('after the title is squeezed, the body is kept off it', () => {
   const [title, body] = out;
   assert.ok(!overlaps(title, body));
   assert.ok(!overlaps(body, art));
+});
+
+test('body text keeps off a header photo band, a title may sit on it', () => {
+  const band = { type: 'image', role: 'decoration', x: 0, y: 0, width: 960, height: 265, src: 'asset:band.jpg' };
+  const [title, body] = avoidArt([text('title', 96, 60, 520, 100), text('body', 96, 190, 800, 280)], [band]);
+  assert.equal(title.y, 60);
+  assert.ok(body.y >= 265, 'body.y=' + body.y);
+  assert.ok(body.y + body.height <= 540);
+});
+
+test('rules that cut through the new text are dropped, a rule under the title stays', () => {
+  const rule = (y) => ({ type: 'shape', role: 'decoration', x: 40, y, width: 880, height: 2, fill: '#456' });
+  const kept = withoutCrossingRules([rule(370), rule(460), rule(170)], [text('title', 96, 60, 520, 100), text('body', 96, 190, 800, 250)]);
+  assert.deepEqual(kept.map((r) => r.y), [460, 170]);
+});
+
+test('a picture placed over the title is moved below the title text', () => {
+  const title = { ...text('title', 630, 70, 300, 100), content: '<p>Chính Sách Kinh Tế và Đỉnh Cao Di Sản Văn Hóa</p>', style: { fontSize: 38 } };
+  const image = { type: 'image', x: 104, y: 178, width: 841, height: 330 };
+  const out = avoidArt([title, image], [{ type: 'image', role: 'decoration', x: 0, y: 0, width: 960, height: 200 }]);
+  const moved = out.find((el) => el.type === 'image');
+  assert.ok(moved.y > 178 && moved.height >= 120);
+});
+
+test('text over a bare photo gets a soft panel, over the template sheet it does not', () => {
+  const photo = { type: 'image', role: 'decoration', x: 0, y: 0, width: 960, height: 540 };
+  const sheet = { type: 'shape', role: 'decoration', x: 0, y: 0, width: 960, height: 540, fill: 'rgba(0, 0, 0, 0.79)' };
+  const dark = { ...text('body', 96, 190, 800, 250), style: { color: '#123456' } };
+  const [bare] = withReadablePanels([dark], [photo]);
+  assert.match(bare.style.background, /255, 255, 255/);
+  const [covered] = withReadablePanels([dark], [photo, sheet]);
+  assert.equal(covered.style.background, undefined);
 });

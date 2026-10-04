@@ -1,3 +1,5 @@
+import { calmRegionOf } from '../../utils/imageCalm';
+import { resolveTemplateAssetUrl } from '../../utils/assetUrl';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProjectStore, useUIStore, useVideoGenStore } from '../../store';
@@ -205,7 +207,15 @@ async function formatPagesWithTemplate(pages, templateId, force = false, sourceT
     if (!force && formatted.richText?._imported) return formatted;
     const current = prepareTemplateContent(formatted, sourceTheme);
     const match = await templateService.match(templateId, current);
-    return applyCustomTemplateResult(current, match, sourceTheme);
+    // A full-slide sample picture (photo over a plain area): find where on it text can be read.
+    const backdrop = (match?.elements || [])
+      .filter((el) => el.type === 'image' && el.role !== 'background' && el.src && el.width >= 0.8 * 960 && el.height >= 0.8 * 540)
+      .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+    // A dark or light sheet the template laid over the picture already makes text readable.
+    const sheeted = (match?.elements || []).some((el) => el.type === 'shape' && el.role !== 'background'
+      && el.width >= 0.8 * 960 && el.height >= 0.8 * 540 && Number(/rgba\(.*,\s*([0-9.]+)\)$/.exec(String(el.fill))?.[1]) >= 0.5);
+    const calm = backdrop && !sheeted ? await calmRegionOf(resolveTemplateAssetUrl(backdrop.src)) : null;
+    return applyCustomTemplateResult(current, match, sourceTheme, calm);
   }));
 }
 

@@ -1261,8 +1261,8 @@ public class PowerPointTemplateParser {
 
     /**
      * A template's sample photos are not part of its look: the app fills picture slots itself. A row
-     * of three or more pictures of one size (each a real photo, not an icon) is a sample gallery and
-     * is dropped, or it would sit under the text the template is applied to.
+     * of three or more pictures of one size (or two, when they float clear of the edges; each a real
+     * photo, not an icon) is a sample gallery and is dropped, or it would sit under the text the template is applied to.
      */
     private List<TemplateManifest.Element> withoutSamplePhotos(
             List<TemplateManifest.Element> decor, List<TemplateManifest.Element> elements) {
@@ -1275,8 +1275,16 @@ public class PowerPointTemplateParser {
                         java.util.stream.Collectors.counting()));
         return decor.stream().filter(item -> !(
                 "image".equals(item.getType()) && !fullBleed(item) && item.getWidth() * item.getHeight() >= minArea
-                        && bySize.getOrDefault(Math.round(item.getWidth() / 2) + "x" + Math.round(item.getHeight() / 2), 0L) >= 3))
+                        && (bySize.getOrDefault(Math.round(item.getWidth() / 2) + "x" + Math.round(item.getHeight() / 2), 0L) >= 3
+                        || (bySize.getOrDefault(Math.round(item.getWidth() / 2) + "x" + Math.round(item.getHeight() / 2), 0L) >= 2
+                        && !touchesEdge(item)))))
                 .toList();
+    }
+
+    /** A picture sitting on the slide's edge is part of the frame (a corner logo, a side strip). */
+    private static boolean touchesEdge(TemplateManifest.Element item) {
+        return item.getX() <= 8 || item.getY() <= 8
+                || item.getX() + item.getWidth() >= 960 - 8 || item.getY() + item.getHeight() >= 540 - 8;
     }
 
     private record SlideVisuals(String background, String averageColor, List<TemplateManifest.Element> decor) {}

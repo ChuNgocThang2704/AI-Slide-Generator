@@ -371,7 +371,10 @@ function boxMargin(padding) {
 function boxLook(style) {
   const look = {};
   const fill = cssHex(style.background);
-  if (fill) look.fill = { color: fill };
+  if (fill) {
+    const alpha = /rgba\(.*,\s*([0-9.]+)\)$/.exec(String(style.background));
+    look.fill = { color: fill, ...(alpha ? { transparency: Math.round((1 - Number(alpha[1])) * 100) } : {}) };
+  }
   const border = String(style.border || '').match(/^([\d.]+)px\s+(\w+)\s+(#[0-9a-f]{3,6})/i);
   if (border && cssHex(border[3])) {
     look.line = { color: cssHex(border[3]), width: Math.max(0.5, parseFloat(border[1])), ...(border[2] === 'dashed' ? { dashType: 'dash' } : {}) };

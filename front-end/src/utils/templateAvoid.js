@@ -20,14 +20,21 @@ function overlap(a, b) {
   return w > 0 && h > 0 ? w * h : 0;
 }
 
-/** The pieces of a template's art that text must keep clear of. */
-export function artObstacles(decor) {
+const isPicture = (item) => item.type === 'image' && item.role !== 'background';
+const coversPage = (box) => box.width >= 0.95 * CANVAS_W && box.height >= 0.95 * CANVAS_H;
+
+/**
+ * The pieces of a template's art that text must keep clear of. Body text also keeps off a large
+ * picture such as a header photo band (a title may sit on it, a paragraph cannot be read on it).
+ */
+export function artObstacles(decor, { forBody = false } = {}) {
   return (Array.isArray(decor) ? decor : []).filter((item) => {
     if (item.role === 'background') return false;
     if (!['image', 'shape'].includes(item.type)) return false;
     const box = { x: Number(item.x) || 0, y: Number(item.y) || 0, width: Number(item.width) || 0, height: Number(item.height) || 0 };
     if (Math.min(box.width, box.height) < 12) return false;               // a rule or a line
     const size = area(box);
+    if (forBody && isPicture(item) && !coversPage(box) && size >= MIN_ART_AREA) return true;
     if (size < MIN_ART_AREA || size >= PAGE_SIZED) return false;
     if (item.type === 'shape') {
       // A shape with no fill and no outline draws nothing; a translucent one is a tint the text may sit on.
@@ -83,12 +90,14 @@ function fitBox(box, obstacles, min) {
  * sit on the title. Returns new elements; the input is not changed.
  */
 export function avoidArt(elements, decor) {
-  const obstacles = artObstacles(decor);
-  if (!obstacles.length) return elements;
+  const titleObstacles = artObstacles(decor);
+  const bodyObstacles = artObstacles(decor, { forBody: true });
   const next = elements.map((element) => ({ ...element }));
   const text = next.filter((el) => el.type === 'text' && ['title', 'body'].includes(el.role));
   for (const el of text) {
     const min = MIN_BOX[el.role];
+    const obstacles = el.role === 'body' ? bodyObstacles : titleObstacles;
+    if (!obstacles.length) continue;
     const fitted = fitBox({ x: el.x, y: el.y, width: el.width, height: el.height }, obstacles, min);
     el.x = Math.round(fitted.x); el.y = Math.round(fitted.y);
     el.width = Math.round(fitted.width); el.height = Math.round(fitted.height);
@@ -101,6 +110,135 @@ export function avoidArt(elements, decor) {
     const height = body.y + body.height - top;
     if (top > body.y && height >= MIN_BOX.body.h) { body.y = Math.round(top); body.height = Math.round(height); }
   }
+  // The app's own picture, table or chart must not cover the title (whose text can run past its box).
+  if (title) {
+    const bottom = Math.max(title.y + title.height, title.y + estimatedTextHeight(title));
+    for (const visual of next.filter((el) => ['image', 'table', 'chart'].includes(el.type))) {
+      const side = { x: title.x, y: title.y, width: title.width, height: bottom - title.y };
+      if (!overlap(side, visual) || visual.y >= bottom) continue;
+      const top = Math.round(bottom + 10);
+      const height = visual.y + visual.height - top;
+      if (height >= 120) { visual.y = top; visual.height = Math.round(height); }
+    }
+  }
   return next;
+}
+
+/**
+ * Puts the title and body inside the calm part of the template's picture (see imageCalm.js) when
+ * they lie partly on its detailed part. The title takes the top of the calm area and the body the
+ * rest; a calm area too small to hold them leaves the boxes alone (readable panels cover that case).
+ */
+export function fitToCalm(elements, calm) {
+  if (!calm || area(calm) < 0.2 * CANVAS_W * CANVAS_H) return elements;
+  const pad = 14;
+  const room = { x: calm.x + pad, y: calm.y + pad, width: calm.width - 2 * pad, height: calm.height - 2 * pad };
+  const text = elements.filter((el) => el.type === 'text' && ['title', 'body'].includes(el.role));
+  const outside = (el) => area(el) - overlap(el, room) > 0.15 * area(el);
+  if (!text.some(outside) || room.width < MIN_BOX.body.w || room.height < MIN_BOX.title.h + MIN_BOX.body.h) return elements;
+  const title = text.find((el) => el.role === 'title');
+  const bodies = text.filter((el) => el.role === 'body');
+  const next = elements.map((el) => ({ ...el }));
+  const byRef = (source) => next[elements.indexOf(source)];
+  let top = room.y;
+  if (title) {
+    const t = byRef(title);
+    const limit = bodies.length ? room.height * 0.4 : room.height;
+    // The title keeps its size while it fits; a narrow calm area shrinks it rather than letting it run over the body.
+    let size = Number(title.style?.fontSize) || 32;
+    const probe = { ...t, width: room.width, style: { ...t.style, fontSize: size } };
+    while (size > 20 && estimatedTextHeight({ ...probe, style: { ...probe.style, fontSize: size } }) + 8 > limit) size -= 2;
+    t.style = { ...t.style, fontSize: size };
+    const height = Math.min(Math.max(MIN_BOX.title.h, estimatedTextHeight({ ...probe, style: { ...probe.style, fontSize: size } }) + 8), limit);
+    t.x = Math.round(room.x); t.width = Math.round(room.width);
+    t.y = Math.round(top); t.height = Math.round(height);
+    top += height + 10;
+  }
+  bodies.forEach((body, index) => {
+    const b = byRef(body);
+    const share = (room.y + room.height - top) / (bodies.length - index);
+    b.x = Math.round(room.x); b.width = Math.round(room.width);
+    b.y = Math.round(top); b.height = Math.round(Math.max(MIN_BOX.body.h, share - (index < bodies.length - 1 ? 10 : 0)));
+    top += b.height + 10;
+  });
+  return next;
+}
+
+const luminance = (color) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(color || '').trim());
+  if (!m) return null;
+  const v = parseInt(m[1], 16);
+  return (0.2126 * ((v >> 16) & 255) + 0.7152 * ((v >> 8) & 255) + 0.0722 * (v & 255)) / 255;
+};
+
+// A translucent piece the template drew over its own picture (a dark sheet) already makes text readable.
+function hasOverlay(decor, picture, box) {
+  const after = decor.slice(decor.indexOf(picture) + 1);
+  return after.some((item) => {
+    if (item.type !== 'shape' || !item.fill) return false;
+    const alpha = /rgba\(.*,\s*([0-9.]+)\)$/.exec(String(item.fill));
+    const solid = alpha ? Number(alpha[1]) : (/^#[0-9a-f]{6}$/i.test(item.fill) ? 1 : 0);
+    const cover = { x: Number(item.x) || 0, y: Number(item.y) || 0, width: Number(item.width) || 0, height: Number(item.height) || 0 };
+    return solid >= 0.4 && overlap(box, cover) >= 0.8 * area(box);
+  });
+}
+
+/**
+ * Text lying on a picture the template left bare (a photo behind the whole slide) cannot be read,
+ * and moving it is not possible when the photo is the page. Give such a text box a soft panel behind
+ * it, light for dark text and dark for light text.
+ */
+export function withReadablePanels(elements, decor) {
+  const pictures = (Array.isArray(decor) ? decor : []).filter((item) => item.type === 'image');
+  if (!pictures.length) return elements;
+  return elements.map((el) => {
+    if (el.type !== 'text' || !['title', 'body'].includes(el.role)) return el;
+    const box = { x: el.x, y: el.y, width: el.width, height: el.height };
+    const busy = pictures.some((picture) => {
+      const frame = { x: Number(picture.x) || 0, y: Number(picture.y) || 0, width: Number(picture.width) || 0, height: Number(picture.height) || 0 };
+      return overlap(box, frame) >= 0.25 * area(box) && !hasOverlay(decor, picture, box);
+    });
+    if (!busy || el.style?.background) return el;
+    const dark = (luminance(el.style?.color) ?? 0) < 0.5;
+    return {
+      ...el,
+      style: {
+        ...el.style,
+        background: dark ? 'rgba(255, 255, 255, 0.82)' : 'rgba(0, 0, 0, 0.55)',
+        padding: '8px 14px',
+        borderRadius: '10px',
+      },
+    };
+  });
+}
+
+/** Rough height of an element's text from its length, width and font size (HTML tags ignored). */
+export function estimatedTextHeight(el) {
+  const text = String(el.content || '').replace(/<[^>]*>/g, '').trim();
+  const size = Number(el.style?.fontSize) || (el.role === 'title' ? 32 : 18);
+  // Headings are set in wide display faces: count their letters wider than body text.
+  const perLine = Math.max(1, Math.floor((el.width || 1) / (size * (el.role === 'title' ? 0.7 : 0.6))));
+  const lines = Math.max(1, Math.ceil(text.length / perLine));
+  return lines * size * (Number(el.style?.lineHeight) || 1.2);
+}
+
+/**
+ * A rule the template drew between its own sample text rows would cut through the new text: drop
+ * thin lines that cross the inside of a title or body box.
+ */
+export function withoutCrossingRules(decor, elements) {
+  const boxes = elements.filter((el) => el.type === 'text' && ['title', 'body'].includes(el.role));
+  return (Array.isArray(decor) ? decor : []).filter((item) => {
+    const w = Number(item.width) || 0;
+    const h = Number(item.height) || 0;
+    const horizontal = h < 6 && w >= 120;
+    const vertical = w < 6 && h >= 120;
+    if (item.type !== 'shape' || (!horizontal && !vertical)) return true;
+    return !boxes.some((box) => (horizontal
+      ? item.y > box.y + 24 && item.y < box.y + box.height - 24
+        && Math.min(item.x + w, box.x + box.width) - Math.max(item.x, box.x) >= 0.5 * box.width
+      : item.x > box.x + 24 && item.x < box.x + box.width - 24
+        && Math.min(item.y + h, box.y + box.height) - Math.max(item.y, box.y) >= 0.5 * box.height));
+  });
 }
 
