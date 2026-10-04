@@ -28,11 +28,19 @@
   height:44px;
   background:linear-gradient(135deg,#9948ff,#ed7d31);
 }
-.element-canvas-actions { position:absolute; top:10px; right:10px; z-index:999; display:flex; gap:4px; opacity:0; transition:opacity .15s; }
+/* One dark bar, like the text toolbar above the slide, so it reads the same on a light or a dark slide. */
+.element-canvas-actions { position:absolute; top:10px; right:10px; z-index:999; display:flex; align-items:center; gap:2px; padding:4px; border:1px solid rgba(255,255,255,.1); border-radius:10px; background:rgba(22,22,32,.94); box-shadow:0 8px 24px rgba(0,0,0,.35); backdrop-filter:blur(8px); opacity:0; transition:opacity .15s; }
 .element-canvas:hover .element-canvas-actions { opacity:1; }
-.element-canvas-actions button { height:30px; display:flex; align-items:center; gap:5px; border:1px solid rgba(0,0,0,.15); border-radius:6px; background:#fff; color:#222; cursor:pointer; padding:0 9px; box-shadow:0 3px 12px rgba(0,0,0,.15); }
-.element-canvas-actions button:disabled { opacity:.4; cursor:default; }
-.element-canvas-actions button.active { color:#fff; border-color:#6c63ff; background:#6c63ff; }
+.element-canvas-actions > button,
+.element-canvas-actions > .ea-anchor > button { height:30px; min-width:30px; display:flex; align-items:center; justify-content:center; gap:5px; border:0; border-radius:7px; background:transparent; color:#d6d6e4; font:500 12.5px/1 Inter, sans-serif; cursor:pointer; padding:0 8px; transition:background .12s, color .12s; }
+.element-canvas-actions > button:hover:not(:disabled),
+.element-canvas-actions > .ea-anchor > button:hover:not(:disabled) { background:rgba(255,255,255,.1); color:#fff; }
+.element-canvas-actions > button:disabled,
+.element-canvas-actions > .ea-anchor > button:disabled { opacity:.32; cursor:default; }
+.element-canvas-actions > button.active,
+.element-canvas-actions > .ea-anchor > button.active { color:#fff; background:#6c63ff; }
+.element-canvas-actions > button.danger:hover:not(:disabled) { background:rgba(239,68,68,.18); color:#ff8a8a; }
+.element-canvas-actions .ea-sep { width:1px; height:18px; margin:0 3px; background:rgba(255,255,255,.14); flex:none; }
 .element-canvas.readonly .canvas-element { pointer-events:none; }
 .element-canvas.readonly .canvas-text { user-select:none; }
 .canvas-element { position:absolute; border:1px solid transparent; }

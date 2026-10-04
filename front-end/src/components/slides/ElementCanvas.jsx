@@ -774,7 +774,7 @@ export default function ElementCanvas({
           <button
             type="button"
             className={pickerOpen ? 'active' : ''}
-            onClick={() => { setPickerOpen((open) => !open); setFormatOpen(false); }}
+            onClick={() => { setPickerOpen((open) => !open); setFormatOpen(false); setAlignOpen(false); }}
             title="Thêm hình khối hoặc biểu tượng"
             aria-expanded={pickerOpen}
           >
@@ -787,7 +787,7 @@ export default function ElementCanvas({
             <button
               type="button"
               className={formatOpen ? 'active' : ''}
-              onClick={() => { setFormatOpen((open) => !open); setPickerOpen(false); }}
+              onClick={() => { setFormatOpen((open) => !open); setPickerOpen(false); setAlignOpen(false); }}
               disabled={selectedElement?.locked}
               title="Định dạng hình: màu, viền, độ mờ"
               aria-expanded={formatOpen}
@@ -859,6 +859,7 @@ export default function ElementCanvas({
           <RotateCcw size={15}/>
         </button>
         </>)}
+        <i className="ea-sep" aria-hidden="true"/>
         <button type="button" onClick={copySelected} disabled={!selectedId} title="Sao chép (Ctrl+C)"><Copy size={15}/></button>
         <button type="button" onClick={pasteElement} disabled={!hasClipboard} title="Dán (Ctrl+V)"><ClipboardPaste size={15}/></button>
         <button type="button" onClick={duplicateSelected} disabled={!selectedId} title="Nhân bản (Ctrl+D)"><Copy size={15}/><Plus size={10}/></button>
@@ -872,6 +873,7 @@ export default function ElementCanvas({
             <CopyPlus size={15}/>
           </button>
         )}
+        <i className="ea-sep" aria-hidden="true"/>
         <button type="button" onClick={() => moveLayer('back')} disabled={!selectedId} title="Đưa xuống dưới"><ArrowDownToLine size={15}/></button>
         <button type="button" onClick={() => moveLayer('front')} disabled={!selectedId} title="Đưa lên trên"><ArrowUpToLine size={15}/></button>
         <span className="ea-anchor">
@@ -897,10 +899,11 @@ export default function ElementCanvas({
             />
           )}
         </span>
+        <i className="ea-sep" aria-hidden="true"/>
         <button type="button" onClick={toggleLock} disabled={!selectedId} title={selectedElement?.locked ? 'Mở khóa phần tử' : 'Khóa phần tử'}>
           {selectedElement?.locked ? <Unlock size={15}/> : <Lock size={15}/>}
         </button>
-        <button type="button" onClick={removeSelected} disabled={!selectedId || selectedElement?.locked} title="Xóa (Delete)"><Trash2 size={15}/></button>
+        <button type="button" className="danger" onClick={removeSelected} disabled={!selectedId || selectedElement?.locked} title="Xóa (Delete)"><Trash2 size={15}/></button>
       </div>}
 
       {isMulti && selectionBounds && (
