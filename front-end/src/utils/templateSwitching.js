@@ -4,7 +4,7 @@ import { ADAPTIVE_TEMPLATES, isBoundaryLabel } from './templateLayouts.js';
 import { mapTemplateFont } from './templateFonts.js';
 import { isUserGraphic } from './shapeLibrary.js';
 import { buildTemplateArt, withoutTemplateArt } from './templateArt.js';
-import { avoidArt, fitToCalm, withoutCrossingRules, withReadablePanels } from './templateAvoid.js';
+import { avoidArt, withoutCrossingRules } from './templateAvoid.js';
 
 const escapeHtml = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // Alignment and size are deliberately not imported: the layout engine already
@@ -67,7 +67,7 @@ export function prepareTemplateContent(slide, theme) {
   };
 }
 
-export function applyCustomTemplateResult(slide, match, preferredBaseTheme, calm = null) {
+export function applyCustomTemplateResult(slide, match, preferredBaseTheme) {
   const hasImportedStyles = [match?.titleStyle, match?.bodyStyle]
     .some((style) => style && Object.keys(style).length);
   if (!hasImportedStyles && (!Array.isArray(match?.elements) || !match.elements.length)) {
@@ -89,7 +89,7 @@ export function applyCustomTemplateResult(slide, match, preferredBaseTheme, calm
   }
   const rebuilt = reflowSlideTemplate({ ...slide, richText, elements: [] }, baseTheme);
   // The layout only knows a left/right band; move any text still lying on a picture or shape clear of it.
-  const elements = withReadablePanels(fitToCalm(avoidArt(rebuilt.elements, art.decor), calm), art.decor).map((element) => {
+  const elements = avoidArt(rebuilt.elements, art.decor).map((element) => {
     const importedStyle = element.type === 'text' && element.role === 'title'
       ? titleStyle
       : element.type === 'text' && element.role === 'body' ? bodyStyle : null;

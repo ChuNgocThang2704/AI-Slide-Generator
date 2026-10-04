@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { avoidArt, artObstacles, withoutCrossingRules, withReadablePanels } from '../src/utils/templateAvoid.js';
+import { avoidArt, artObstacles, withoutCrossingRules } from '../src/utils/templateAvoid.js';
 
 const text = (role, x, y, width, height) => ({ type: 'text', role, x, y, width, height });
 const photo = (x, y, width, height) => ({ type: 'image', role: 'decoration', x, y, width, height, src: 'asset:p.jpg' });
@@ -78,21 +78,3 @@ test('a picture placed over the title is moved below the title text', () => {
   assert.ok(moved.y > 178 && moved.height >= 120);
 });
 
-test('text over a bare photo gets a soft panel, over the template sheet it does not', () => {
-  const photo = { type: 'image', role: 'decoration', x: 0, y: 0, width: 960, height: 540 };
-  const sheet = { type: 'shape', role: 'decoration', x: 0, y: 0, width: 960, height: 540, fill: 'rgba(0, 0, 0, 0.79)' };
-  const dark = { ...text('body', 96, 190, 800, 250), style: { color: '#123456' } };
-  const [bare] = withReadablePanels([dark], [photo]);
-  assert.match(bare.style.background, /255, 255, 255/);
-  const [covered] = withReadablePanels([dark], [photo, sheet]);
-  assert.equal(covered.style.background, undefined);
-});
-
-test('a table over a bare photo gets a sheet behind it', () => {
-  const photo = { type: 'image', role: 'decoration', x: 0, y: 0, width: 960, height: 540 };
-  const table = { id: 't1', type: 'table', x: 60, y: 200, width: 840, height: 260 };
-  const out = withReadablePanels([table], [photo]);
-  assert.equal(out.length, 2);
-  assert.equal(out[0].type, 'shape');
-  assert.equal(out[1], table);
-});
