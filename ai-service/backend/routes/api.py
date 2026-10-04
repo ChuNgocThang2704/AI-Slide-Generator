@@ -1012,6 +1012,35 @@ async def _build_revised_slide_spec_payload(
                 len(old_slides),
             )
 
+    # A translation must carry every point across. The one-call deck rewrite tends to summarise
+    # while it translates, so a slide that came back with fewer bullets is translated again by itself.
+    from services.revision_rules import requested_translation_language as _translation_language_of
+    if (
+        (intent.language or _translation_language_of(revision_prompt))
+        and wants_deck_restructure and old_slides and not explicit_add_count and not explicit_delete_targets
+        and len(revised.get("slides") or []) == len(old_slides)
+    ):
+        def _count(slide: Any) -> int:
+            return len([b for b in ((slide or {}).get("bullets") or []) if str(b).strip()]) if isinstance(slide, dict) else 0
+        shortened = [
+            idx for idx, (new_slide, old_slide) in enumerate(zip(revised["slides"], old_slides))
+            if _count(new_slide) < _count(old_slide)
+        ]
+        if shortened:
+            print(f"[revise-spec] translation dropped bullets on slides {shortened}; translating them one by one")
+            retry_base = {**revised, "slides": [
+                dict(old_slides[idx]) if idx in shortened else slide
+                for idx, slide in enumerate(revised["slides"])
+            ]}
+            try:
+                retried = await content_extractor.revise_selected_slides(retry_base, revision_prompt, shortened)
+                retried_slides = retried.get("slides") or []
+                for idx in shortened:
+                    if idx < len(retried_slides) and _count(retried_slides[idx]) > _count(revised["slides"][idx]):
+                        revised["slides"][idx] = retried_slides[idx]
+            except Exception as translation_retry_error:
+                print(f"[revise-spec] per-slide translation retry failed: {translation_retry_error!r}")
+
     # A deck-wide rewrite (fix wording, translate, change tone) returns text only: each slide keeps
     # the table, chart, picture and layout it had, and the cover stays a cover.
     if (
