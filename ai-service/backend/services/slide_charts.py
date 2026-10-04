@@ -342,6 +342,68 @@ def labelled_value_series(bullets: List[Any]) -> Optional[List[tuple]]:
     return series if len(units) == 1 else None
 
 
+_NAMED_TYPE = re.compile(
+    r"(?:bieu\s*do|do\s*thi|chart|graph)\s+(?:hinh\s+|dang\s+)?(?P<vi>tron|duong|cot|thanh|mien|radar)\b"
+    r"|\b(?P<en>pie|donut|doughnut|line|bar|column|area|radar)\s+(?:chart|graph)\b"
+)
+_NAMED_TYPE_MAP = {
+    "tron": "pie", "pie": "pie", "donut": "doughnut", "doughnut": "doughnut",
+    "duong": "line", "line": "line", "cot": "bar", "bar": "bar", "column": "bar",
+    "thanh": "bar_horizontal", "mien": "area", "area": "area", "radar": "radar",
+}
+_TIME_LABEL = re.compile(
+    r"^(?:nam\s+)?(?:19|20)\d{2}(?:\s*[-/]\s*(?:19|20)?\d{2})?$"
+    r"|^(?:q|quy)\s*[1-4](?:\s*[/-]?\s*(?:19|20)?\d{2})?$"
+    r"|^(?:thang|t|month)\s*\d{1,2}(?:\s*[/-]\s*(?:19|20)?\d{2})?$"
+    r"|^\d{1,2}\s*[/-]\s*(?:19|20)?\d{2}$"
+    r"|^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s+(?:19|20)?\d{2})?$"
+)
+_SHARE_HINT = re.compile(r"thi\s+phan|co\s+cau|ty\s+trong|ti\s+trong|market\s+share|breakdown|share\s+of|proportion")
+_TREND_HINT = re.compile(r"xu\s+huong|tang\s+truong|bien\s+dong|dien\s+bien|qua\s+cac\s+nam|theo\s+thoi\s+gian|trend|over\s+time|growth")
+
+
+def named_chart_type(text: str) -> Optional[str]:
+    """The chart type the text asks for by name ("biểu đồ tròn", "line chart"), else None."""
+    match = _NAMED_TYPE.search(_fold_text(text))
+    if not match:
+        return None
+    chart_type = _NAMED_TYPE_MAP.get(match.group("vi") or match.group("en"))
+    return chart_type if chart_type in _ALLOWED_CHART_TYPES else None
+
+
+def suggest_chart_type(labels: List[Any], values: List[Any], is_percent: bool = False, text: str = "") -> str:
+    """The type that fits the shape of one series when nobody named one:
+    parts that add up to a whole -> pie, points along time -> line, anything else -> bar."""
+    folded = _fold_text(text)
+    numbers = [float(v) for v in values if isinstance(v, (int, float))]
+    count = len(numbers)
+    if count != len(labels) or count < 2:
+        return "bar"
+    total = sum(numbers)
+    whole = abs(total - 100) <= 1.5 or (is_percent and abs(total - 1) <= 0.015)
+    if 2 <= count <= 6 and min(numbers) >= 0 and (whole or (is_percent and _SHARE_HINT.search(folded) and total <= 101.5)):
+        return "pie"
+    temporal = all(_TIME_LABEL.match(_fold_text(str(label)).strip()) for label in labels)
+    if temporal and (count >= 4 or (count >= 3 and _TREND_HINT.search(folded))):
+        return "line"
+    if not temporal and (count > 7 or max(len(str(label)) for label in labels) > 22):
+        return "bar_horizontal" if "bar_horizontal" in _ALLOWED_CHART_TYPES else "bar"
+    return "bar"
+
+
+def _retyped(spec: Optional[Dict[str, Any]], text: str) -> Optional[Dict[str, Any]]:
+    """`spec` with the type the text names, or else the one its data suggests. Only for charts read
+    off plain numbers, where the type was a default; a multi-series chart is left as it is."""
+    if not isinstance(spec, dict) or len(spec.get("series") or []) > 1:
+        return spec
+    chart_type = named_chart_type(text) or suggest_chart_type(
+        spec.get("labels") or [], spec.get("values") or [], bool(spec.get("is_percent")), text,
+    )
+    if chart_type == spec.get("chart_type"):
+        return spec
+    return normalize_chart_spec({**spec, "chart_type": chart_type}) or spec
+
+
 _INLINE_CHART_WORD = re.compile(r"biểu đồ|đồ thị|\bcharts?\b|\bgraphs?\b", re.IGNORECASE)
 _INLINE_ITEM = re.compile(
     r"^\s*(?P<label>[^,;:=]{1,30}?)\s*(?:\blà\b|:|=|\bis\b|\bđạt\b|\bat\b)\s*"
@@ -384,13 +446,7 @@ def _inline_series_candidates(raw_content: str) -> List[Dict[str, Any]]:
         if len(labels) < 3 or len(set(labels)) != len(labels) or (tuple(labels), tuple(values)) in seen:
             continue
         seen.add((tuple(labels), tuple(values)))
-        folded = _fold_text(sentence)
-        if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", folded):
-            chart_type = "line"
-        elif re.search(r"\b(?:tron|pie|thi\s+phan)\b", folded):
-            chart_type = "pie"
-        else:
-            chart_type = "bar"
+        chart_type = named_chart_type(sentence) or suggest_chart_type(labels, values, unit == "%", sentence)
         subject = " ".join(_INLINE_TYPE_WORDS.sub(" ", head).split()).strip(" -–—")
         title = (subject[:1].upper() + subject[1:]) if subject else ""
         if title and unit and unit != "%":
@@ -474,12 +530,18 @@ def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Di
         folded = _fold_text(segment)
         if not re.search(r"\b(?:bieu\s*do|chart|graph)\b", folded):
             continue
-        if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", folded):
-            chart_type = "line"
-        elif re.search(r"\b(?:tron|pie|thi\s+phan)\b", folded):
-            chart_type = "pie"
+        named_type = named_chart_type(segment)
+        if named_type:
+            chart_type = named_type
+        elif re.search(r"\b(?:duong|line)\b", folded):
+            chart_type = named_type = "line"
+        elif re.search(r"\b(?:tron|pie)\b", folded):
+            chart_type = named_type = "pie"
+        elif re.search(r"\b(?:cot|column|bar)\b", folded):
+            chart_type = named_type = "bar"
         else:
             chart_type = "bar"
+        titles = {"line": "Biểu đồ đường", "bar": "Biểu đồ cột", "pie": "Biểu đồ tròn"}
 
         # Natural requests often provide a label range followed by a separate
         # value list: "2021-2025 with values 13, 16, 20, 25, 31".
@@ -499,8 +561,10 @@ def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Di
                 ) if value is not None
             ]
             if len(labels) >= 2 and len(labels) == len(values):
+                if not named_type:
+                    chart_type = suggest_chart_type(labels, values, "%" in segment, segment)
                 spec = normalize_chart_spec({
-                    "title": "Biá»ƒu Ä‘á»“ cá»™t" if chart_type == "bar" else "Biá»ƒu Ä‘á»“ Ä‘Æ°á»ng",
+                    "title": titles.get(chart_type, "Biểu đồ"),
                     "chart_type": chart_type,
                     "labels": labels,
                     "values": values,
@@ -546,14 +610,11 @@ def _explicit_chart_requests(raw_content: str, slide_count: int) -> Dict[int, Di
                 break
         if len(labels) < 2:
             continue
-        titles = {
-            "line": "Biểu đồ đường",
-            "bar": "Biểu đồ cột",
-            "pie": "Biểu đồ tròn",
-        }
+        if not named_type:
+            chart_type = suggest_chart_type(labels, values, "%" in " ".join(raw_values), segment)
         spec = normalize_chart_spec(
             {
-                "title": titles[chart_type],
+                "title": titles.get(chart_type, "Biểu đồ"),
                 "chart_type": chart_type,
                 "labels": labels,
                 "values": values,
@@ -974,6 +1035,7 @@ async def build_chart_specs_for_slides(
 
         inline_table_chart = _chart_from_inline_table(slide)
         if inline_table_chart:
+            inline_table_chart = _retyped(inline_table_chart, _slide_context(slide, max_chars=1200))
             out[idx] = inline_table_chart
             debug_records.append(
                 {
@@ -1005,6 +1067,7 @@ async def build_chart_specs_for_slides(
 
         markdown_chart = _chart_from_markdown_table(slide)
         if markdown_chart and (idx not in skip or chart_intent_from_slide(slide, slide_spec=slide)):
+            markdown_chart = _retyped(markdown_chart, _slide_context(slide, max_chars=1200))
             out[idx] = markdown_chart
             debug_records.append(
                 {
@@ -1036,6 +1099,7 @@ async def build_chart_specs_for_slides(
             chart_intent_from_slide(slide, slide_spec=slide) or "bar",
         )
         if pair_chart:
+            pair_chart = _retyped(pair_chart, _slide_context(slide, max_chars=1200))
             out[idx] = pair_chart
             debug_records.append(
                 {

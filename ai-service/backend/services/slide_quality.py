@@ -605,6 +605,26 @@ async def build_visual_plan(
             if labelled_value_series(slide.get("bullets") or []):
                 plan[idx] = "chart"
                 print(f"[slide_quality] visual plan: slide {idx} has a labelled value series -> chart")
+        # A series the user dictated for a chart ("biểu đồ doanh thu theo quý: Quý 1 là 320, ...")
+        # belongs on the slide that talks about it, whatever visual the planner picked there.
+        from services.slide_charts import _inline_series_candidates, _slide_match_score
+        dictated: set = set()
+        for candidate in _inline_series_candidates(raw_content):
+            scores = {
+                idx: _slide_match_score(slide, candidate)
+                for idx, slide in enumerate(slides)
+                if isinstance(slide, dict) and idx not in dictated
+                and str(slide.get("layout") or "").strip().lower() not in {"intro", "title", "thankyou", "thank_you"}
+            }
+            if not scores:
+                continue
+            best = max(scores, key=lambda idx: (scores[idx], plan.get(idx) == "chart"))
+            if scores[best] < 2:
+                continue
+            dictated.add(best)
+            if plan.get(best) != "chart":
+                print(f"[slide_quality] visual plan: slide {best} carries a chart the request dictated ({plan.get(best)} -> chart)")
+                plan[best] = "chart"
         for idx, item in items_by_index.items():
             if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
                 _apply_planned_composition(slides[idx], item, plan.get(idx, "none"))
