@@ -4,6 +4,7 @@ import { ADAPTIVE_TEMPLATES, isBoundaryLabel } from './templateLayouts.js';
 import { mapTemplateFont } from './templateFonts.js';
 import { isUserGraphic } from './shapeLibrary.js';
 import { buildTemplateArt, withoutTemplateArt } from './templateArt.js';
+import { avoidArt } from './templateAvoid.js';
 
 const escapeHtml = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // Alignment and size are deliberately not imported: the layout engine already
@@ -87,7 +88,8 @@ export function applyCustomTemplateResult(slide, match, preferredBaseTheme) {
     if (art.safe) richText._safe = art.safe;
   }
   const rebuilt = reflowSlideTemplate({ ...slide, richText, elements: [] }, baseTheme);
-  const elements = rebuilt.elements.map((element) => {
+  // The layout only knows a left/right band; move any text still lying on a picture or shape clear of it.
+  const elements = avoidArt(rebuilt.elements, art.decor).map((element) => {
     const importedStyle = element.type === 'text' && element.role === 'title'
       ? titleStyle
       : element.type === 'text' && element.role === 'body' ? bodyStyle : null;

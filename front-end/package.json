@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test:layouts": "node --test tests/templateLayouts.test.js tests/layoutMatrix.test.js tests/dynamicTemplate.test.js tests/generatedTheme.test.js tests/templateArt.test.js tests/shapeLibrary.test.js tests/ornaments.test.js tests/selection.test.js tests/generationErrors.test.js tests/pptxImport.test.js",
+    "test:layouts": "node --test tests/templateLayouts.test.js tests/layoutMatrix.test.js tests/dynamicTemplate.test.js tests/generatedTheme.test.js tests/templateArt.test.js tests/shapeLibrary.test.js tests/ornaments.test.js tests/selection.test.js tests/generationErrors.test.js tests/pptxImport.test.js tests/templateAvoid.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
