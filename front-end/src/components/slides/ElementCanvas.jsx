@@ -800,6 +800,8 @@ export default function ElementCanvas({
         <button type="button" onClick={() => imageInputRef.current?.click()} disabled={uploadingImage || selectedElement?.locked} title={selectedElement?.type === 'image' ? 'Thay ảnh' : 'Thêm ảnh'}>
           {uploadingImage ? <Loader2 size={15} className="spin"/> : <ImagePlus size={15}/>} {selectedElement?.type === 'image' ? 'Thay' : 'Ảnh'}
         </button>
+        {/* Tools that only act on a picture appear with one selected. */}
+        {selectedElement?.type === 'image' && (<>
         <button
           type="button"
           onClick={() => updateElement(selectedElement.id, {
@@ -856,6 +858,7 @@ export default function ElementCanvas({
         >
           <RotateCcw size={15}/>
         </button>
+        </>)}
         <button type="button" onClick={copySelected} disabled={!selectedId} title="Sao chép (Ctrl+C)"><Copy size={15}/></button>
         <button type="button" onClick={pasteElement} disabled={!hasClipboard} title="Dán (Ctrl+V)"><ClipboardPaste size={15}/></button>
         <button type="button" onClick={duplicateSelected} disabled={!selectedId} title="Nhân bản (Ctrl+D)"><Copy size={15}/><Plus size={10}/></button>

@@ -75,20 +75,32 @@ const IconVerticalAlign = ({ position }) => {
 
 // ── Font options ─────────────────────────────────────────────────────────────
 const FONT_OPTIONS = [
-  { label: 'Body font',   value: '' },
-  { label: 'Inter',       value: 'Inter, sans-serif' },
-  { label: 'Be Vietnam Pro',      value: "'Be Vietnam Pro', sans-serif" },
-  { label: 'Arial',       value: 'Arial, sans-serif' },
-  { label: 'Verdana',     value: 'Verdana, sans-serif' },
-  { label: 'Tahoma',      value: 'Tahoma, sans-serif' },
-  { label: 'Trebuchet MS', value: "'Trebuchet MS', sans-serif" },
-  { label: 'Georgia',     value: 'Georgia, serif' },
-  { label: 'Times New Roman', value: "'Times New Roman', serif" },
-  { label: 'Garamond',    value: 'Garamond, serif' },
-  { label: 'Roboto',      value: 'Roboto, sans-serif' },
-  { label: 'Impact',      value: 'Impact, sans-serif' },
-  { label: 'Comic Sans MS', value: "'Comic Sans MS', cursive" },
-  { label: 'Courier New', value: "'Courier New', monospace" },
+  { label: 'Font mặc định', value: '' },
+  // Web fonts the app loads (index.html); every one has Vietnamese glyphs.
+  { label: 'Inter',            value: 'Inter, sans-serif' },
+  { label: 'Be Vietnam Pro',   value: "'Be Vietnam Pro', sans-serif" },
+  { label: 'Roboto',           value: 'Roboto, sans-serif' },
+  { label: 'Open Sans',        value: "'Open Sans', sans-serif" },
+  { label: 'Montserrat',       value: 'Montserrat, sans-serif' },
+  { label: 'Nunito',           value: 'Nunito, sans-serif' },
+  { label: 'Quicksand',        value: 'Quicksand, sans-serif' },
+  { label: 'Plus Jakarta Sans', value: "'Plus Jakarta Sans', sans-serif" },
+  { label: 'Space Grotesk',    value: "'Space Grotesk', sans-serif" },
+  { label: 'Exo 2',            value: "'Exo 2', sans-serif" },
+  { label: 'Saira',            value: 'Saira, sans-serif' },
+  { label: 'Oswald',           value: 'Oswald, sans-serif' },
+  { label: 'Baloo 2',          value: "'Baloo 2', cursive" },
+  { label: 'Playfair Display', value: "'Playfair Display', serif" },
+  { label: 'Merriweather',     value: 'Merriweather, serif' },
+  { label: 'Lora',             value: 'Lora, serif' },
+  { label: 'Dancing Script',   value: "'Dancing Script', cursive" },
+  // Fonts of the viewer's own system (also the safest in an exported PPTX).
+  { label: 'Arial',            value: 'Arial, sans-serif' },
+  { label: 'Tahoma',           value: 'Tahoma, sans-serif' },
+  { label: 'Verdana',          value: 'Verdana, sans-serif' },
+  { label: 'Times New Roman',  value: "'Times New Roman', serif" },
+  { label: 'Georgia',          value: 'Georgia, serif' },
+  { label: 'Courier New',      value: "'Courier New', monospace" },
 ];
 const FONT_SIZE_OPTIONS = [4, 5, 6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 54, 60, 72, 80, 96, 120, 144, 180, 200];
 
@@ -327,21 +339,21 @@ export default function FloatingTextToolbar({
       <button
         className={`ft-btn ${isBold ? 'active' : ''}`}
         onClick={toggleBold}
-        title="Bold (Ctrl+B)"
+        title="In đậm (Ctrl+B)"
       ><IconBold /></button>
 
       {/* ── Italic ── */}
       <button
         className={`ft-btn ${isItalic ? 'active' : ''}`}
         onClick={toggleItalic}
-        title="Italic (Ctrl+I)"
+        title="In nghiêng (Ctrl+I)"
       ><IconItalic /></button>
 
       {/* ── Underline ── */}
       <button
         className={`ft-btn ${isUnderline ? 'active' : ''}`}
         onClick={toggleUnderline}
-        title="Underline (Ctrl+U)"
+        title="Gạch chân (Ctrl+U)"
       ><IconUnderline /></button>
 
       <div className="ft-divider" />
@@ -399,17 +411,17 @@ export default function FloatingTextToolbar({
       <button
         className={`ft-btn ${align === 'left' ? 'active' : ''}`}
         onClick={() => applyAlign('left')}
-        title="Align left"
+        title="Căn trái"
       ><IconAlignLeft /></button>
       <button
         className={`ft-btn ${align === 'center' ? 'active' : ''}`}
         onClick={() => applyAlign('center')}
-        title="Align center"
+        title="Căn giữa"
       ><IconAlignCenter /></button>
       <button
         className={`ft-btn ${align === 'right' ? 'active' : ''}`}
         onClick={() => applyAlign('right')}
-        title="Align right"
+        title="Căn phải"
       ><IconAlignRight /></button>
 
       <div className="ft-divider" />
