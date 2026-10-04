@@ -64,7 +64,7 @@ public class AiService {
         this.restTemplate.getMessageConverters().add(0, new StringHttpMessageConverter(StandardCharsets.UTF_8));
     }
 
-    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole, Consumer<String> taskIdConsumer) throws JsonProcessingException {
+    public JsonNode generateSlides(String prompt, String documentUrl, String fileName, String userRole, boolean fastMode, Consumer<String> taskIdConsumer) throws JsonProcessingException {
         String submitUrl = buildAiUrl("/api/generate-slide-spec");
         log.info("[document-service] Calling AI submit endpoint: {}", submitUrl);
 
@@ -82,6 +82,7 @@ public class AiService {
             body.add("text", prompt != null ? prompt : "");
             body.add("plan", resolveAiPlan(userRole));
             body.add("image_limit", null);
+            if (fastMode) body.add("fast", "true");
 
             if (tempFile != null && tempFile.exists() && tempFile.length() > 0) {
                 FileSystemResource fileResource = new FileSystemResource(tempFile);

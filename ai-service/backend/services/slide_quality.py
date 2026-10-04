@@ -355,6 +355,38 @@ def _apply_planned_composition(slide: Dict[str, Any], item: Dict[str, Any], visu
     slide["layout"] = "split_columns"
 
 
+_COLUMN_PREFIX_RE = re.compile(r"^(.{1,48}?)\s[—–-]\s(?=\S)")
+
+
+def limit_split_columns(slides: List[Dict[str, Any]]) -> int:
+    """Keep two-column slides to about a third of the deck and never two in a row.
+
+    The author and the visual planner both reach for the two-column layout, and a deck came back
+    with five of its eight slides in it. The extra ones go back to plain bullets (their column
+    heading is taken off the front of each bullet). Returns how many were changed.
+    """
+    content = [i for i, s in enumerate(slides) if isinstance(s, dict)
+               and str(s.get("layout") or "").lower() not in {"intro", "title", "thankyou", "thank_you"}]
+    split = [i for i in content if str(slides[i].get("layout") or "").lower() == "split_columns"]
+    allowed = max(1, (len(content) + 2) // 3)
+    kept: List[int] = []
+    changed = 0
+    for index in split:
+        if len(kept) < allowed and (not kept or index - kept[-1] > 1):
+            kept.append(index)
+            continue
+        bullets = [str(b) for b in (slides[index].get("bullets") or [])]
+        matches = [_COLUMN_PREFIX_RE.match(b) for b in bullets]
+        headings = {m.group(1).strip().casefold() for m in matches if m}
+        if bullets and all(matches) and len(headings) <= 2:
+            slides[index]["bullets"] = [b[m.end():] for b, m in zip(bullets, matches)]
+        slides[index]["layout"] = "text_only"
+        changed += 1
+    if changed:
+        print(f"[slide_quality] two-column layout limited: {changed} slide(s) back to plain bullets")
+    return changed
+
+
 async def build_visual_plan(
     content_extractor,
     structured: Dict[str, Any],
@@ -569,6 +601,7 @@ async def build_visual_plan(
         for idx, item in items_by_index.items():
             if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
                 _apply_planned_composition(slides[idx], item, plan.get(idx, "none"))
+        limit_split_columns(slides)
         print(f"[slide_quality] visual plan: {plan}")
         return plan
     except Exception as e:

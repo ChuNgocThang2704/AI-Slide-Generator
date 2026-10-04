@@ -715,3 +715,7 @@
 .gen2-tpl-pick span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; }
 .gen2-tpl-del { background:none; border:0; color:inherit; opacity:.6; cursor:pointer; display:inline-flex; padding:0; }
 .gen2-tpl-del:hover { opacity:1; }
+.gen2-fast { display:flex; align-items:flex-start; gap:10px; cursor:pointer; color:rgba(255,255,255,0.8); font-size:0.85rem; }
+.gen2-fast input { margin-top:3px; accent-color:#6c63ff; }
+.gen2-fast span { display:flex; flex-direction:column; gap:2px; }
+.gen2-fast small { color:rgba(255,255,255,0.45); font-size:0.76rem; line-height:1.4; }

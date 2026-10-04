@@ -272,7 +272,9 @@ async def finalize_deck_for_visuals(
                 source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
             ),
             skip_reason=(
-                "all_speaker_notes_pass_deterministic_checks"
+                "quick_draft"
+                if getattr(content_extractor, "_fast_draft", False)
+                else "all_speaker_notes_pass_deterministic_checks"
                 if not deck_needs_speaker_notes_review(deck)
                 else ""
             ),
@@ -369,7 +371,9 @@ async def finalize_deck_for_visuals(
             source_language=(getattr(content_extractor, "_slide_lang_hint", "auto") or "auto"),
         ),
         skip_reason=(
-            "all_speaker_notes_pass_deterministic_checks"
+            "quick_draft"
+            if getattr(content_extractor, "_fast_draft", False)
+            else "all_speaker_notes_pass_deterministic_checks"
             if not deck_needs_speaker_notes_review(deck)
             else ""
         ),

@@ -28,11 +28,13 @@ export const projectService = {
     fileUrl = null,
     fileName = null,
     fileSize = null,
-    sourceDocId = null
+    sourceDocId = null,
+    fastMode = false
   ) {
     const response = await apiClient.post('/document/projects', {
       prompt: prompt || title,
       templateId,
+      fastMode,
       sourceDocId,
       fileUrl: sourceDocId ? null : fileUrl,
       fileName: sourceDocId ? null : fileName,

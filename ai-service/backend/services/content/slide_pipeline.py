@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from services.revision_intent import PLANNER_INTENT_RULES, PLANNER_INTENT_SHAPE
 from services.content.prompts import (
     ANTI_TRUNCATION_TOKEN_RULE,
     MAX_BULLETS_PER_SLIDE,
@@ -532,7 +533,7 @@ class SlidePipelineMixin:
     def _apply_requested_translation(self, prompt: str) -> None:
         """A request to translate the deck sets the output language, overriding the deck's own."""
         from services.revision_rules import requested_translation_language
-        target = requested_translation_language(prompt)
+        target = getattr(self, "_revision_target_language", None) or requested_translation_language(prompt)
         if target:
             self._slide_lang_hint = target
 
@@ -705,8 +706,9 @@ class SlidePipelineMixin:
             "- Prefer scope slides when one or more target slides are intended; otherwise use deck.\n"
             "- If the request is not an understandable editing instruction at all (random characters, no "
             "meaning), return operations as an empty list and add \"unclear\": true.\n\n"
-            + "Return ONLY JSON with this shape:\n"
-            "{\"scope\":\"slides|deck\",\"target_slide_numbers\":[1],\"operations\":[{\"type\":\"rewrite_text|regenerate_image|change_layout|restructure_deck\",\"instruction\":\"...\"}],\"preserve_unmentioned\":true}\n"
+            + PLANNER_INTENT_RULES
+            + "\nReturn ONLY JSON with this shape:\n"
+            "{\"scope\":\"slides|deck\",\"target_slide_numbers\":[1],\"operations\":[{\"type\":\"rewrite_text|regenerate_image|change_layout|restructure_deck\",\"instruction\":\"...\"}],\"preserve_unmentioned\":true" + PLANNER_INTENT_SHAPE + "}\n"
         )
         user_msg = (
             f"Current deck summary JSON:\n{payload}\n\n"
@@ -798,6 +800,8 @@ class SlidePipelineMixin:
             operations = [{"type": "rewrite_text", "instruction": prompt}]
 
         return {
+            # The planner's reading of the concrete operations (validated by services.revision_intent).
+            "intent_raw": plan.get("intent") if planner_succeeded and isinstance(plan.get("intent"), dict) else None,
             "unclear": unclear,
             "scope": scope,
             "target_slide_numbers": sorted(set(target_numbers)),

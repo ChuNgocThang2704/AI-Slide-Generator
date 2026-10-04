@@ -65,7 +65,7 @@ public class DocumentController {
     public ApiResponse<ProjectResponse> createProject(@RequestBody @Valid ProjectCreateRequest request) {
         request.setOwnerId(currentUserId());
         ProjectResponse response = projectService.createProject(request, currentUserRole());
-        projectService.generateSlidesAsync(response.getId(), currentUserRole());
+        projectService.generateSlidesAsync(response.getId(), currentUserRole(), Boolean.TRUE.equals(request.getFastMode()));
         return ApiResponse.<ProjectResponse>builder()
                 .data(response)
                 .build();

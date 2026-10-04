@@ -49,6 +49,7 @@ export default function GeneratePage() {
   const [myTemplates, setMyTemplates] = useState([]);
   const [templateId, setTemplateId] = useState(null);
   const [templateUploading, setTemplateUploading] = useState(false);
+  const [fastMode, setFastMode] = useState(false);
   const [form, setForm] = useState({
     prompt: '',
     slideCount: 8,
@@ -282,7 +283,8 @@ export default function GeneratePage() {
         uploadedFileData?.fileUrl || null,
         uploadedFileData?.fileName || null,
         uploadedFileData?.fileSize || null,
-        uploadedFileData?.sourceDocId || null
+        uploadedFileData?.sourceDocId || null,
+        fastMode
       );
       
       addProject(project);
@@ -489,6 +491,14 @@ export default function GeneratePage() {
               </label>
             </div>
           </div>
+
+          <label className="gen2-fast">
+            <input type="checkbox" checked={fastMode} onChange={(event) => setFastMode(event.target.checked)} disabled={loading} />
+            <span>
+              <strong>Tạo nhanh (bản nháp)</strong>
+              <small>Nhanh hơn: AI bỏ bước viết tài liệu nền và bước trau chuốt ghi chú diễn giả, nội dung gọn hơn.</small>
+            </span>
+          </label>
 
           <button
             id="create-btn"

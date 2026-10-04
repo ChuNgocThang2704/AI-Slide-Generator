@@ -367,7 +367,7 @@ public class ProjectService {
     }
 
     @Async
-    public void generateSlidesAsync(UUID projectId, String userRole) {
+    public void generateSlidesAsync(UUID projectId, String userRole, boolean fastMode) {
         try {
             Project project = projectRepository.findById(projectId)
                     .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
@@ -399,7 +399,7 @@ public class ProjectService {
                     project.getInitialPrompt(), 
                     finalDocumentUrl, 
                     finalFileName, 
-                    effectiveUserRole,
+                    effectiveUserRole, fastMode,
                     taskId -> {
                         Project proj = projectRepository.findById(projectId).orElse(project);
                         proj.setAiTaskId(taskId);

@@ -853,6 +853,11 @@ async def _review_speaker_notes(
     ]
     if not pending:
         return structured, []
+    reasons: Dict[str, int] = {}
+    for idx in pending:
+        for issue in _speaker_note_issues(slides[idx], idx=idx):
+            reasons[issue] = reasons.get(issue, 0) + 1
+    print(f"[slide_text_quality] speaker notes to review: {len(pending)} slide(s), reasons={reasons}")
 
     improved = copy.deepcopy(structured)
     changed: List[int] = []

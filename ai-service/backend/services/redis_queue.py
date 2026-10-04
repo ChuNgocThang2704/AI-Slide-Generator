@@ -419,6 +419,8 @@ class RedisQueue:
                 return await self.is_task_cancelled(task_id)
 
             content_extractor = ContentExtractor(model_name=LLM_MODEL)
+            # A quick draft skips the pre-written source document and the speaker-notes review.
+            content_extractor._fast_draft = bool(task_data.get("fast"))
             structured_content = task_data.get("content")
             raw_content = task_data.get("raw_content") or ""
             instruction_text = str(task_data.get("user_instruction") or raw_content or "")

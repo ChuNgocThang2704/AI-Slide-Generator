@@ -752,7 +752,7 @@ class ContentExtractor(
                     context = context.evolve(focused_source_text=focused_content)
                     self._set_generation_context(context)
 
-        if (self.vllm_available or self.gemini_available) and not self._is_document_mode:
+        if (self.vllm_available or self.gemini_available) and not self._is_document_mode and not getattr(self, "_fast_draft", False):
             print(f"Detected prompt/outline input. Pre-generating detailed content for {target_slides} slides...")
             if progress_cb:
                 await progress_cb(1, 18)

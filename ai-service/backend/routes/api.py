@@ -831,6 +831,20 @@ async def _build_revised_slide_spec_payload(
         context_slide_number=context_slide_number,
     )
     planner_succeeded = bool(revision_plan.get("planner_succeeded"))
+    # What the planner read out of the request takes the place of the keyword rules wherever it
+    # found something; a field it left empty falls back to the rule.
+    from services.revision_intent import added_indices as _intent_added_indices, parse_intent as _parse_intent
+    intent = _parse_intent(revision_plan.get("intent_raw") if planner_succeeded else None, len(old_slides))
+    if intent.add_count:
+        explicit_add_count = intent.add_count
+    if intent.delete:
+        explicit_delete_targets = list(intent.delete)
+    if intent.titles:
+        explicit_title_overrides = dict(intent.titles)
+        explicit_preserve_targets.difference_update(explicit_title_overrides.keys())
+    if intent.visuals:
+        explicit_visual_targets = dict(intent.visuals)
+    content_extractor._revision_target_language = intent.language
     if revision_plan.get("unclear") and not target_slide_indices:
         # Rewriting the deck for a request nobody can read only damages it.
         raise RuntimeError(
@@ -940,7 +954,9 @@ async def _build_revised_slide_spec_payload(
                 ]
         revised["slides"] = revised_slides
 
-    added_slide_indices = _revision_added_slide_indices(
+    added_slide_indices = _intent_added_indices(
+        intent, len(old_slides), len(revised.get("slides") or []),
+    ) or _revision_added_slide_indices(
         revision_prompt,
         len(old_slides),
         len(revised.get("slides") or []),
@@ -1084,7 +1100,7 @@ async def _build_revised_slide_spec_payload(
                 if "chart" not in slide and isinstance(old_slide.get("chart"), dict):
                     slide["chart"] = old_slide.get("chart")
 
-    expected_bullet_count = _requested_exact_bullet_count(revision_prompt)
+    expected_bullet_count = intent.bullet_count or _requested_exact_bullet_count(revision_prompt)
     count_contract_targets = sorted(set(plan_targets) | set(added_slide_indices))
     if expected_bullet_count is not None and count_contract_targets and wants_text_revision:
         revised_slides = revised.get("slides") or []
@@ -1199,6 +1215,13 @@ async def _build_revised_slide_spec_payload(
                 precomputed_issues=technical_issues,
             )
 
+    # A translated deck gets its tables and charts translated too (they are carried over as they were).
+    from services.revision_rules import requested_translation_language as _requested_translation_language
+    translation_target = intent.language or _requested_translation_language(revision_prompt)
+    if translation_target:
+        from services.visual_translate import translate_visual_text
+        await translate_visual_text(content_extractor, revised, translation_target)
+
     # The title the user typed is final: the title-quality and coherence passes above may reword
     # any title, and "Vận động đúng cách" is what they asked for, not a better one.
     for idx, title in explicit_title_overrides.items():
@@ -1227,7 +1250,7 @@ async def _build_revised_slide_spec_payload(
         revision_prompt or "",
         want_images=want_images,
     )
-    explicit_visual_targets = _explicit_visual_targets_from_prompt(
+    explicit_visual_targets = dict(intent.visuals) if intent.visuals else _explicit_visual_targets_from_prompt(
         revision_prompt,
         len(revised.get("slides") or []),
     )
@@ -1382,10 +1405,27 @@ async def _build_revised_slide_spec_payload(
         len(revised.get("slides") or []),
         default_slide_index=default_chart_target,
     )
+    explicit_chart_type_targets = {**explicit_chart_type_targets, **intent.chart_types}
     _apply_explicit_chart_type_targets(
         chart_specs,
         explicit_chart_type_targets,
     )
+
+    # "Add a table/chart to slide N": the slide keeps the text it had and gains the visual, instead
+    # of being rewritten into a slide about the visual.
+    for idx, keep in intent.keep_text.items():
+        slides_now = revised.get("slides") or []
+        if not keep or not (0 <= idx < len(old_slides)) or idx >= len(slides_now):
+            continue
+        if idx not in table_specs and idx not in (chart_specs or {}):
+            continue
+        old_slide = old_slides[idx] if isinstance(old_slides[idx], dict) else {}
+        if isinstance(old_slide.get("table"), dict) or isinstance(old_slide.get("chart"), dict):
+            continue  # it already had a visual: this request replaces it
+        kept_bullets = [b for b in (old_slide.get("bullets") or []) if str(b).strip()][:3]
+        if old_slide.get("title") and kept_bullets:
+            slides_now[idx]["title"] = old_slide["title"]
+            slides_now[idx]["bullets"] = kept_bullets
 
     note_slides = revised.get("slides") or []
     for idx, spec in table_specs.items():
@@ -1604,8 +1644,10 @@ async def generate_slide_spec(
     slide_count: Optional[int] = Form(None),
     image_limit: Optional[int] = Form(None),
     generate_images: str = Form("true"),
+    fast: str = Form("false"),
 ):
     """Generate AI slide output as JSON spec (no PPTX rendering)."""
+    fast_draft = str(fast or "").strip().lower() in {"1", "true", "yes", "on"}
     try:
         task_id = str(uuid.uuid4())
         plan_norm = (plan or "pro").strip().lower()
@@ -1686,6 +1728,7 @@ async def generate_slide_spec(
                 # ContentExtractor keeps source/language/mode/progress state, so it
                 # must never be shared by concurrent background generations.
                 content_extractor = _new_task_content_extractor(task_id_bg)
+                content_extractor._fast_draft = fast_draft
                 await redis_queue.update_task_status(task_id_bg, "processing", progress=10)
 
                 async def should_stop() -> bool:
@@ -1919,6 +1962,7 @@ async def generate_slide_spec(
                 "source_file_path": source_file_path,
                 "source_is_document": bool(file_content),
                 "slide_count_notice": slide_count_notice,
+                "fast": fast_draft,
             }
             await redis_queue.add_task(task_id, task_data)
             return {

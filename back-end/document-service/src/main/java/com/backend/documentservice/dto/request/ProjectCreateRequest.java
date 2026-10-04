@@ -24,4 +24,7 @@ public class ProjectCreateRequest {
     private Long fileSize;
 
     private UUID ownerId;
+
+    /** A quick draft: the AI skips its longest steps (see ai-service "fast"). */
+    private Boolean fastMode;
 }
