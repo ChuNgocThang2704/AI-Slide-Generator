@@ -191,7 +191,30 @@ function hasOverlay(decor, picture, box) {
 export function withReadablePanels(elements, decor) {
   const pictures = (Array.isArray(decor) ? decor : []).filter((item) => item.type === 'image');
   if (!pictures.length) return elements;
-  return elements.map((el) => {
+  const out = [];
+  elements.forEach((el) => {
+    if (['table', 'chart'].includes(el.type)) {
+      // A table or chart cannot be read over a busy picture either: set a soft sheet behind it.
+      const frame = { x: el.x, y: el.y, width: el.width, height: el.height };
+      const busy = pictures.some((picture) => {
+        const pic = { x: Number(picture.x) || 0, y: Number(picture.y) || 0, width: Number(picture.width) || 0, height: Number(picture.height) || 0 };
+        return overlap(frame, pic) >= 0.25 * area(frame) && !hasOverlay(decor, picture, frame);
+      });
+      if (busy) {
+        out.push({
+          id: `${el.id || 'visual'}-sheet`, type: 'shape', shape: 'rect', role: 'decoration', locked: true,
+          x: frame.x - 8, y: frame.y - 8, width: frame.width + 16, height: frame.height + 16,
+          fill: 'rgba(255, 255, 255, 0.86)', borderColor: 'transparent', borderWidth: 0, borderRadius: 10, rotation: 0,
+        });
+      }
+      out.push(el);
+      return;
+    }
+    out.push(withTextPanel(el));
+  });
+  return out;
+
+  function withTextPanel(el) {
     if (el.type !== 'text' || !['title', 'body'].includes(el.role)) return el;
     const box = { x: el.x, y: el.y, width: el.width, height: el.height };
     const busy = pictures.some((picture) => {
@@ -209,7 +232,7 @@ export function withReadablePanels(elements, decor) {
         borderRadius: '10px',
       },
     };
-  });
+  }
 }
 
 /** Rough height of an element's text from its length, width and font size (HTML tags ignored). */

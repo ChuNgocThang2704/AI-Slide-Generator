@@ -87,3 +87,12 @@ test('text over a bare photo gets a soft panel, over the template sheet it does 
   const [covered] = withReadablePanels([dark], [photo, sheet]);
   assert.equal(covered.style.background, undefined);
 });
+
+test('a table over a bare photo gets a sheet behind it', () => {
+  const photo = { type: 'image', role: 'decoration', x: 0, y: 0, width: 960, height: 540 };
+  const table = { id: 't1', type: 'table', x: 60, y: 200, width: 840, height: 260 };
+  const out = withReadablePanels([table], [photo]);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].type, 'shape');
+  assert.equal(out[1], table);
+});
