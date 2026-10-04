@@ -33,6 +33,13 @@ export const templateService = {
     return unwrap(response);
   },
 
+  // Reads the template's original file again with the current reader, so a template uploaded before
+  // a fix picks the fix up.
+  async reparseCustom(templateId) {
+    const response = await apiClient.post(`/template/custom/${templateId}/reparse`);
+    return unwrap(response);
+  },
+
   async deleteCustom(templateId) {
     const response = await apiClient.delete(`/template/custom/${templateId}`);
     return unwrap(response);

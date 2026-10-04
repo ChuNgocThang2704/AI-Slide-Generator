@@ -1194,6 +1194,17 @@ export default function EditorPage() {
       return;
     }
     const tmpl = [...TEMPLATES, ...customOptions].find((item) => item.id === tmplId);
+    if (tmpl?.isCustom) {
+      // Applying again also re-reads the file, so a template uploaded before a reader fix gets it.
+      try {
+        setApplyingTemplate(true);
+        await templateService.reparseCustom(tmpl.id);
+      } catch {
+        // The stored analysis still works; apply it as it is.
+      } finally {
+        setApplyingTemplate(false);
+      }
+    }
     if (tmpl) await applyTemplate(tmpl);
   };
 
