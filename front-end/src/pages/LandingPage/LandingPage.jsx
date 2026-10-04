@@ -11,7 +11,7 @@ const FEATURES = [
   { icon: <Download size={24} />, title: 'Xuất PPTX và PDF', desc: 'Tải bài trình chiếu về để tiếp tục chỉnh sửa hoặc sử dụng ngoại tuyến.' },
   { icon: <FileText size={24} />, title: 'Nhiều Loại Slide', desc: 'Title, Content, Two-Column, Image+Text, Quote, Thank You – đầy đủ cấu trúc bài thuyết trình.' },
   { icon: <Zap size={24} />, title: 'Quy trình tự động', desc: 'Hệ thống xử lý nội dung, lựa chọn bố cục và bổ sung thành phần trực quan theo tiến trình.' },
-  { icon: <BarChart3 size={24} />, title: 'Quản Lý Dễ Dàng', desc: 'Lưu trữ toàn bộ presentation, chỉnh sửa lại bất cứ lúc nào, không bao giờ mất dữ liệu.' },
+  { icon: <BarChart3 size={24} />, title: 'Quản Lý Dễ Dàng', desc: 'Lưu trữ toàn bộ bài thuyết trình, chỉnh sửa lại bất cứ lúc nào, không bao giờ mất dữ liệu.' },
 ];
 
 // Real templates from the editor, rendered with the real slide renderer.

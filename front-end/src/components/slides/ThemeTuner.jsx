@@ -7,15 +7,25 @@ const HUE_TRACK = `linear-gradient(90deg, ${[0, 60, 120, 180, 240, 300, 360].map
 const QUICK_HUES = [8, 27, 45, 142, 175, 215, 255, 300, 335];
 
 function Segmented({ label, value, options, onPick, disabled }) {
+  // More than four choices do not fit one row of the narrow panel (labels wrapped unevenly):
+  // they go on two even rows, the last choice filling whatever is left of the second.
+  const columns = options.length > 4 ? Math.ceil(options.length / 2) : options.length;
+  const spare = options.length > 4 ? columns * 2 - options.length : 0;
   return (
     <div className="tt-field">
       <span className="tt-label">{label}</span>
-      <div className="tt-seg" role="group" aria-label={label}>
+      <div
+        className={`tt-seg${options.length > 4 ? ' rows' : ''}`}
+        style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+        role="group"
+        aria-label={label}
+      >
         {options.map((option, index) => (
           <button
             key={option}
             type="button"
             className={value === index ? 'active' : ''}
+            style={spare && index === options.length - 1 ? { gridColumn: `span ${spare + 1}` } : undefined}
             aria-pressed={value === index}
             disabled={disabled}
             onClick={() => onPick(index)}

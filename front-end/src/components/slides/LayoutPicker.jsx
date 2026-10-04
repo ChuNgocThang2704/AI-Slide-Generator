@@ -49,7 +49,7 @@ export default function LayoutPicker({ slide, theme, onPick, onAutoMix, onResetA
       <div className="lp-head">
         <span><LayoutGrid size={14} /> Kiểu trình bày</span>
       </div>
-      <div className="lp-grid">
+      <div className={`lp-grid${variants.length % 3 === 1 ? ' even' : ''}`}>
         {variants.map((variant) => (
           <button
             key={variant.id}

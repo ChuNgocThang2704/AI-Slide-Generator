@@ -715,7 +715,10 @@
 .gen2-tpl-pick span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; }
 .gen2-tpl-del { background:none; border:0; color:inherit; opacity:.6; cursor:pointer; display:inline-flex; padding:0; }
 .gen2-tpl-del:hover { opacity:1; }
-.gen2-fast { display:flex; align-items:flex-start; gap:10px; cursor:pointer; color:rgba(255,255,255,0.8); font-size:0.85rem; }
-.gen2-fast input { margin-top:3px; accent-color:#6c63ff; }
-.gen2-fast span { display:flex; flex-direction:column; gap:2px; }
+.gen2-fast { display:flex; align-items:center; gap:12px; cursor:pointer; padding:12px 14px; border-radius:12px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03); color:rgba(255,255,255,0.85); font-size:0.85rem; }
+.gen2-fast input { appearance:none; -webkit-appearance:none; flex:none; order:2; margin-left:auto; width:36px; height:20px; border-radius:999px; background:rgba(255,255,255,0.16); position:relative; cursor:pointer; transition:background .15s; }
+.gen2-fast input::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:transform .15s; }
+.gen2-fast input:checked { background:#6c63ff; }
+.gen2-fast input:checked::after { transform:translateX(16px); }
+.gen2-fast span { display:flex; flex-direction:column; gap:3px; min-width:0; }
 .gen2-fast small { color:rgba(255,255,255,0.45); font-size:0.76rem; line-height:1.4; }

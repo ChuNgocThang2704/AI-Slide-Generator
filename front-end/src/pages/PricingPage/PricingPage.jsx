@@ -17,8 +17,8 @@ const PLANS = [
     color: '#6c63ff',
       features: [
         'Tối đa 3 bài trình chiếu / ngày',
-        'Tối đa 10 slides / presentation',
-        'Tối đa 5 hình ảnh / presentation',
+        'Tối đa 10 slide mỗi bài',
+        'Tối đa 5 hình ảnh mỗi bài',
         'Giới hạn 10.000 ký tự nội dung',
         '2 lượt chỉnh sửa bằng AI mỗi ngày',
         'Toàn bộ 12 template thiết kế',
@@ -38,8 +38,8 @@ const PLANS = [
     popular: true,
       features: [
         'Tối đa 20 bài trình chiếu / ngày',
-        'Tối đa 30 slides / presentation',
-        'Tối đa 15 hình ảnh / presentation',
+        'Tối đa 30 slide mỗi bài',
+        'Tối đa 15 hình ảnh mỗi bài',
         'Giới hạn 50.000 ký tự nội dung',
         '10 lượt chỉnh sửa bằng AI mỗi ngày',
         'Toàn bộ 12 template thiết kế',
@@ -58,8 +58,8 @@ const PLANS = [
     color: '#fbbf24',
       features: [
         'Không giới hạn bài trình chiếu / ngày',
-        'Tối đa 50 slides / presentation',
-        'Tối đa 35 hình ảnh / presentation',
+        'Tối đa 50 slide mỗi bài',
+        'Tối đa 35 hình ảnh mỗi bài',
         'Giới hạn 100.000 ký tự nội dung',
         '30 lượt chỉnh sửa bằng AI mỗi ngày',
         'Toàn bộ 12 template thiết kế',
@@ -350,7 +350,6 @@ export default function PricingPage() {
                 </div>
                 <div className="plan-name" style={{ color: plan.color }}>{plan.name}</div>
                 <div className="plan-price">
-                  <span className="price-currency">$</span>
                   <span className="price-amount">{plan.price}</span>
                   <span className="price-period">/{plan.period}</span>
                 </div>

@@ -364,7 +364,7 @@ export default function DashboardPage() {
             </div>
             <div>
               <div className="dsc-value">{loading ? '-' : totalElements}</div>
-              <div className="dsc-label">Tổng presentations</div>
+              <div className="dsc-label">Tổng bài thuyết trình</div>
             </div>
           </div>
           <div className="dash-stat-card">
@@ -407,7 +407,7 @@ export default function DashboardPage() {
             <Search size={15} className="search-icon" />
             <input
               className="input search-input"
-              placeholder="Tìm kiếm presentations..."
+              placeholder="Tìm bài thuyết trình..."
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -433,7 +433,7 @@ export default function DashboardPage() {
         ) : filtered.length === 0 ? (
           <div className="dash-empty">
             <div className="empty-icon"><Palette size={44} strokeWidth={1.4} /></div>
-            <h3>Chưa có presentation nào</h3>
+            <h3>Chưa có bài thuyết trình nào</h3>
             <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.9rem', marginTop: 8, marginBottom: 24 }}>
               Bắt đầu tạo slide AI đầu tiên của bạn ngay nào!
             </p>

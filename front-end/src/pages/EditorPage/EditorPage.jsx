@@ -151,6 +151,15 @@ const PEDAGOGICAL_ROLE_LABELS = {
   practice: 'Thực hành',
   knowledge_check: 'Kiểm tra kiến thức',
   summary: 'Tổng kết',
+  intro: 'Mở đầu',
+  introduction: 'Mở đầu',
+  overview: 'Tổng quan',
+  example: 'Ví dụ',
+  comparison: 'So sánh',
+  case_study: 'Tình huống',
+  discussion: 'Thảo luận',
+  closing: 'Kết thúc',
+  conclusion: 'Kết luận',
 };
 const SLIDE_LAYOUTS = [
   { value: 'title', label: 'Tiêu đề' },
@@ -2368,7 +2377,7 @@ export default function EditorPage() {
                     <div className="e2-notes-section">
                       <label className="e2-notes-label" htmlFor="speaker-notes">
                         Ghi chú diễn giả
-                        <span>Speaker notes</span>
+                        <span>Lời thuyết trình</span>
                       </label>
                       <textarea
                         id="speaker-notes"
