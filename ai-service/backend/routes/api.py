@@ -1012,12 +1012,13 @@ async def _build_revised_slide_spec_payload(
                 len(old_slides),
             )
 
-    # A translation must carry every point across. The one-call deck rewrite tends to summarise
-    # while it translates, so a slide that came back with fewer bullets is translated again by itself.
+    # A translation must carry every point across. The model tends to summarise while it translates
+    # (on the one-call deck rewrite and on single slides alike), so a slide that came back with fewer
+    # bullets is translated again by itself, bullet by bullet.
     from services.revision_rules import requested_translation_language as _translation_language_of
     if (
         (intent.language or _translation_language_of(revision_prompt))
-        and wants_deck_restructure and old_slides and not explicit_add_count and not explicit_delete_targets
+        and old_slides and not explicit_add_count and not explicit_delete_targets
         and len(revised.get("slides") or []) == len(old_slides)
     ):
         def _count(slide: Any) -> int:
@@ -1028,14 +1029,21 @@ async def _build_revised_slide_spec_payload(
         ]
         if shortened:
             print(f"[revise-spec] translation dropped bullets on slides {shortened}; translating them one by one")
-            retry_base = {**revised, "slides": [
-                dict(old_slides[idx]) if idx in shortened else slide
-                for idx, slide in enumerate(revised["slides"])
-            ]}
             try:
-                retried = await content_extractor.revise_selected_slides(retry_base, revision_prompt, shortened)
-                retried_slides = retried.get("slides") or []
                 for idx in shortened:
+                    wanted = _count(old_slides[idx])
+                    retry_base = {**revised, "slides": [
+                        dict(old_slides[i]) if i == idx else slide
+                        for i, slide in enumerate(revised["slides"])
+                    ]}
+                    retried = await content_extractor.revise_selected_slides(
+                        retry_base,
+                        f"{revision_prompt} MANDATORY: translate this slide bullet by bullet. Return exactly "
+                        f"{wanted} bullets, in the same order, one for each original bullet; do not merge, drop or "
+                        "summarise any of them.",
+                        [idx],
+                    )
+                    retried_slides = retried.get("slides") or []
                     if idx < len(retried_slides) and _count(retried_slides[idx]) > _count(revised["slides"][idx]):
                         revised["slides"][idx] = retried_slides[idx]
             except Exception as translation_retry_error:
@@ -1235,7 +1243,9 @@ async def _build_revised_slide_spec_payload(
         # The coherence pass re-narrates a slide to fit the deck's story. That is a fair polish for
         # a deck the AI wrote, but on a deck the user brought (an opened PPTX) it turned a chapter
         # list into a different slide altogether, after the rewrite that was actually asked for.
-        if not user_authored:
+        # ... and a translation is faithful by definition: the coherence pass would drop the bullets it
+        # judges redundant, which is an edit nobody asked for.
+        if not user_authored and not (intent.language or _translation_language_of(revision_prompt)):
             revised = await improve_deck_coherence(
                 content_extractor,
                 revised,
