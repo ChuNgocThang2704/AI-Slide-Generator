@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useProjectStore, useUIStore } from '../../store';
 import { projectService, documentService } from '../../services/documentService';
+import { templateService } from '../../services/templateService';
 import { evaluatePromptQuality } from '../../utils/promptQuality';
 import { codeFromBrief, makeThemeCode } from '../../utils/generatedTheme';
 import { explainGenerationError } from '../../utils/generationErrors';
 import {
-  Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X,
+  Sparkles, ChevronRight, Loader2, UploadCloud, FileText, X, Palette,
   LayoutDashboard, AlertCircle, CheckCircle2, Library, Search, PenLine, FolderOpen,
 } from 'lucide-react';
 import './GeneratePage.css';
@@ -44,10 +45,58 @@ export default function GeneratePage() {
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryDocuments, setLibraryDocuments] = useState([]);
   const [librarySearch, setLibrarySearch] = useState('');
+  // The user's own PowerPoint templates: uploaded here without a deck, picked before generating.
+  const [myTemplates, setMyTemplates] = useState([]);
+  const [templateId, setTemplateId] = useState(null);
+  const [templateUploading, setTemplateUploading] = useState(false);
   const [form, setForm] = useState({
     prompt: '',
     slideCount: 8,
   });
+  React.useEffect(() => {
+    let cancelled = false;
+    templateService.getAll()
+      .then((items) => { if (!cancelled) setMyTemplates(items.filter((item) => item.sourceType === 'CUSTOM_PPTX')); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleTemplateUpload = async (event) => {
+    const picked = event.target.files?.[0];
+    event.target.value = '';
+    if (!picked) return;
+    const extension = picked.name.slice(picked.name.lastIndexOf('.')).toLowerCase();
+    if (!['.pptx', '.potx'].includes(extension)) {
+      addToast('Chỉ hỗ trợ template PowerPoint định dạng PPTX hoặc POTX', 'error');
+      return;
+    }
+    if (picked.size > 50 * 1024 * 1024) {
+      addToast('Dung lượng template tối đa là 50MB', 'error');
+      return;
+    }
+    setTemplateUploading(true);
+    try {
+      const template = await templateService.uploadCustom(picked);
+      setMyTemplates((current) => [template, ...current.filter((item) => item.id !== template.id)]);
+      setTemplateId(template.id);
+      addToast(`Đã lưu template "${template.name}" vào thư viện của bạn`, 'success');
+    } catch (error) {
+      addToast(error.message || 'Không thể phân tích template PowerPoint', 'error');
+    } finally {
+      setTemplateUploading(false);
+    }
+  };
+
+  const handleTemplateDelete = async (template) => {
+    try {
+      await templateService.deleteCustom(template.id);
+      setMyTemplates((current) => current.filter((item) => item.id !== template.id));
+      if (templateId === template.id) setTemplateId(null);
+    } catch (error) {
+      addToast(error.message || 'Không thể xóa template', 'error');
+    }
+  };
+
   // Why the last attempt failed, shown right under the prompt (not a toast that disappears).
   const [genError, setGenError] = useState(null);
   const promptQuality = evaluatePromptQuality(form.prompt, { hasFile: Boolean(uploadedFileData) });
@@ -227,8 +276,8 @@ export default function GeneratePage() {
       
       const project = await projectService.create(
         promptText,
-        // Every prompt gets its own template, derived from the subject.
-        makeThemeCode(promptText),
+        // Every prompt gets its own template, derived from the subject, unless the user picked one.
+        templateId || makeThemeCode(promptText),
         promptText,
         uploadedFileData?.fileUrl || null,
         uploadedFileData?.fileName || null,
@@ -239,7 +288,7 @@ export default function GeneratePage() {
       addProject(project);
       // The keyword-based template is applied at once; the AI's design for the same subject
       // replaces it in the background (the slides are still being generated meanwhile).
-      projectService.themeBrief(promptText).then((brief) => {
+      if (!templateId) projectService.themeBrief(promptText).then((brief) => {
         if (!brief) return null;
         const code = codeFromBrief(brief, promptText);
         return projectService.update(project.id, { templateId: code }).then(() => {
@@ -414,6 +463,31 @@ export default function GeneratePage() {
                 )}
               </div>
             )}
+          </div>
+
+          <div className="gen2-field">
+            <label className="gen2-label"><Palette size={15} /> Template</label>
+            <div className="gen2-tpl-row">
+              <button type="button" className={`gen2-tpl-chip${templateId ? '' : ' selected'}`} onClick={() => setTemplateId(null)} disabled={loading}>
+                Tự động theo chủ đề
+              </button>
+              {myTemplates.map((template) => (
+                <span key={template.id} className={`gen2-tpl-chip${templateId === template.id ? ' selected' : ''}`}>
+                  <button type="button" className="gen2-tpl-pick" onClick={() => setTemplateId(template.id)} disabled={loading} title={template.name}>
+                    <i style={{ background: template.primaryColor || template.backgroundColor || '#4f46e5' }} />
+                    <span>{template.name}</span>
+                  </button>
+                  <button type="button" className="gen2-tpl-del" onClick={() => handleTemplateDelete(template)} disabled={loading} aria-label={`Xóa template ${template.name}`}>
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              <label className={`gen2-tpl-chip gen2-tpl-upload${templateUploading || loading ? ' disabled' : ''}`}>
+                {templateUploading ? <Loader2 size={13} className="spin" /> : <UploadCloud size={13} />}
+                {templateUploading ? 'Đang phân tích...' : 'Upload template PPTX'}
+                <input type="file" accept=".pptx,.potx" hidden onChange={handleTemplateUpload} disabled={templateUploading || loading} />
+              </label>
+            </div>
           </div>
 
           <button
