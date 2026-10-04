@@ -173,3 +173,13 @@ class ChartTypeBeforeSlideMarkerTests(unittest.TestCase):
         self.assertEqual(targets, {3: "bar"})
         two = explicit_chart_type_targets_from_prompt("Slide 2 dùng biểu đồ tròn, slide 5 dùng biểu đồ đường", 6)
         self.assertEqual(two, {1: "pie", 4: "line"})
+
+
+class TranslationRequestTests(unittest.TestCase):
+    def test_translation_target_is_read_in_both_languages(self):
+        from services.revision_rules import requested_translation_language as f
+        self.assertEqual(f("Translate the whole presentation into Vietnamese"), "vi")
+        self.assertEqual(f("Dịch toàn bộ bài thuyết trình sang tiếng Anh"), "en")
+        self.assertEqual(f("Chuyển sang tiếng Việt giúp tôi"), "vi")
+        self.assertIsNone(f("Rút gọn slide 3"))
+        self.assertIsNone(f("Thêm slide về học tiếng Anh"))

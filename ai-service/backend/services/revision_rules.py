@@ -105,6 +105,22 @@ def explicit_chart_type_targets_from_prompt(
             targets[idx] = "bar"
     return targets
 
+def requested_translation_language(text: str) -> Optional[str]:
+    """'en' or 'vi' when the request asks to translate the deck into that language, else None.
+
+    Without it the revision keeps telling the model to write in the deck's current language, and a
+    "translate into Vietnamese" request came back half translated.
+    """
+    folded = fold_revision_text(text)
+    if not re.search(r"\b(?:dich|translate|translation|chuyen\s+(?:sang|thanh|ngu)|convert|viet\s+lai\s+bang)\b", folded):
+        return None
+    if re.search(r"\b(?:tieng\s+anh|english|anh\s+ngu)\b", folded):
+        return "en"
+    if re.search(r"\b(?:tieng\s+viet|vietnamese|viet\s+ngu)\b", folded):
+        return "vi"
+    return None
+
+
 def refers_to_current_slide(text: str) -> bool:
     """True for deictic requests such as "rut gon slide nay" / "this slide"."""
     folded = fold_revision_text(text)

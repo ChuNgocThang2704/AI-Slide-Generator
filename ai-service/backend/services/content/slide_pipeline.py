@@ -529,6 +529,13 @@ class SlidePipelineMixin:
         )
         return [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}]
 
+    def _apply_requested_translation(self, prompt: str) -> None:
+        """A request to translate the deck sets the output language, overriding the deck's own."""
+        from services.revision_rules import requested_translation_language
+        target = requested_translation_language(prompt)
+        if target:
+            self._slide_lang_hint = target
+
     async def revise_slide_deck(
         self,
         structured: Dict[str, Any],
@@ -548,6 +555,7 @@ class SlidePipelineMixin:
                 ]
             )
         )
+        self._apply_requested_translation(prompt)
         msgs = self._build_revision_messages(base, prompt)
         target = max(1, min(len(base.get("slides") or []) or 8, 30))
         revised = await self._request_json_dict(
@@ -621,6 +629,7 @@ class SlidePipelineMixin:
             )
         )
 
+        self._apply_requested_translation(prompt)
         deck_title = str(base.get("title") or "Bài thuyết trình")
         for idx in valid_indices:
             current = dict(slides[idx]) if isinstance(slides[idx], dict) else {}
