@@ -308,6 +308,20 @@ _SERIES_PAREN = re.compile(r"^\s*([^:(]{2,40}?)\s*\(\s*([-+]?\d+(?:[.,]\d+)?)\s*
 _SERIES_COLON = re.compile(r"^\s*([^:(]{2,40}?)\s*:\s*([-+]?\d+(?:[.,]\d+)?)\s*([^\d\s.,;()]{0,8})(?=[\s.,;]|$)")
 
 
+_BARE_SERIES_BULLET = re.compile(r"^\s*[^:(]{2,40}:\s*[-+]?\d+(?:[.,]\d+)?\s*\S{0,8}\s*$")
+
+
+def drop_charted_series_bullets(slide: Dict[str, Any]) -> int:
+    """A slide that got a chart keeps no bullet that is only one of its data points ("2021: 1.74"):
+    the chart shows it. Nothing is removed unless at least two real bullets stay."""
+    bullets = [b for b in (slide.get("bullets") or []) if str(b).strip()]
+    bare = [b for b in bullets if _BARE_SERIES_BULLET.match(str(b))]
+    if len(bare) < 3 or len(bullets) - len(bare) < 2:
+        return 0
+    slide["bullets"] = [b for b in bullets if b not in bare]
+    return len(bare)
+
+
 def labelled_value_series(bullets: List[Any]) -> Optional[List[tuple]]:
     """[(label, value, unit)] when at least three bullets each open with a label and one value in a
     shared unit ("Quý 1 (12 tỷ VNĐ): ..." or "2023: 12 cuốn ..."); otherwise None."""
@@ -328,9 +342,77 @@ def labelled_value_series(bullets: List[Any]) -> Optional[List[tuple]]:
     return series if len(units) == 1 else None
 
 
+_INLINE_CHART_WORD = re.compile(r"biểu đồ|đồ thị|\bcharts?\b|\bgraphs?\b", re.IGNORECASE)
+_INLINE_ITEM = re.compile(
+    r"^\s*(?P<label>[^,;:=]{1,30}?)\s*(?:\blà\b|:|=|\bis\b|\bđạt\b|\bat\b)\s*"
+    r"(?P<value>[-+]?\d+(?:[.,]\d+)?)\s*(?P<unit>%|[^\d,;.]{0,24})?\s*$",
+    re.IGNORECASE,
+)
+_INLINE_TYPE_WORDS = re.compile(
+    r"\b(?:cột|đường|tròn|thanh|miền|bar|line|pie|column|area|of|về|cho|thể hiện|showing|for|a|an|the)\b",
+    re.IGNORECASE,
+)
+
+
+def _inline_series_candidates(raw_content: str) -> List[Dict[str, Any]]:
+    """Charts the user dictates inside a sentence of the request:
+    "một slide biểu đồ cột sản lượng theo năm: 2020 là 1,76 triệu tấn, 2021 là 1,74, 2022 là 1,85"."""
+    candidates: List[Dict[str, Any]] = []
+    seen: Set[tuple] = set()
+    for sentence in re.split(r"[.!?](?:\s+|$)|\n", str(raw_content or "")):
+        word = _INLINE_CHART_WORD.search(sentence)
+        if not word:
+            continue
+        tail = sentence[word.end():]
+        head, colon, data = tail.partition(":")
+        if not colon:
+            head, data = "", tail
+        labels: List[str] = []
+        values: List[float] = []
+        unit = ""
+        for item in re.split(r";|,\s+|\s+và\s+|\s+and\s+", data):
+            match = _INLINE_ITEM.match(item)
+            if not match:
+                continue
+            try:
+                value = float(match.group("value").replace(",", "."))
+            except ValueError:
+                continue
+            labels.append(" ".join(match.group("label").split()))
+            values.append(value)
+            unit = unit or " ".join((match.group("unit") or "").split())
+        if len(labels) < 3 or len(set(labels)) != len(labels) or (tuple(labels), tuple(values)) in seen:
+            continue
+        seen.add((tuple(labels), tuple(values)))
+        folded = _fold_text(sentence)
+        if re.search(r"\b(?:duong|line|xu\s+huong|trend)\b", folded):
+            chart_type = "line"
+        elif re.search(r"\b(?:tron|pie|thi\s+phan)\b", folded):
+            chart_type = "pie"
+        else:
+            chart_type = "bar"
+        subject = " ".join(_INLINE_TYPE_WORDS.sub(" ", head).split()).strip(" -–—")
+        title = (subject[:1].upper() + subject[1:]) if subject else ""
+        if title and unit and unit != "%":
+            title = f"{title} ({unit})"
+        spec = normalize_chart_spec({
+            "title": title or "Tổng quan số liệu",
+            "chart_type": chart_type,
+            "labels": labels,
+            "values": values,
+            "unit": "percent" if unit == "%" else "number",
+            "is_percent": unit == "%",
+        })
+        if spec:
+            candidates.append({
+                "source": "request_inline_series", "heading": title, "context": _fold_text(sentence), "spec": spec,
+            })
+    return candidates
+
+
 def _raw_chart_candidates(raw_content: str) -> List[Dict[str, Any]]:
     lines = str(raw_content or "").splitlines()
-    candidates: List[Dict[str, Any]] = []
+    candidates: List[Dict[str, Any]] = _inline_series_candidates(raw_content)
     current_heading = ""
     section_lines: List[str] = []
 
@@ -1019,4 +1101,7 @@ async def build_chart_specs_for_slides(
     if task_id:
         _write_debug_json(task_id, debug_records)
         _write_quality_report(task_id, debug_records)
+    for idx in out:
+        if 0 <= idx < len(slides) and isinstance(slides[idx], dict):
+            drop_charted_series_bullets(slides[idx])
     return out

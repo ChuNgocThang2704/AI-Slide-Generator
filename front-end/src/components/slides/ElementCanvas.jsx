@@ -195,6 +195,13 @@ export default function ElementCanvas({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [formatOpen, setFormatOpen] = useState(false);
   const [alignOpen, setAlignOpen] = useState(false);
+  // A panel opened for one slide does not follow the user to the next one.
+  const slideKey = slide?.id ?? slide?.page;
+  const [panelSlideKey, setPanelSlideKey] = useState(slideKey);
+  if (panelSlideKey !== slideKey) {
+    setPanelSlideKey(slideKey);
+    setPickerOpen(false); setFormatOpen(false); setAlignOpen(false);
+  }
   const [multi, setMulti] = useState([]);
   const [marquee, setMarquee] = useState(null);
   const [uploadingImage, setUploadingImage] = useState(false);

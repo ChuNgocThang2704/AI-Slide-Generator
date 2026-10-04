@@ -901,7 +901,36 @@ async def _build_revised_slide_spec_payload(
     )
     changed_fields: List[str] = []
 
-    if wants_deck_restructure:
+    # A request that only asks for a translation is not handed to the deck rewriter (which
+    # reorders and reinvents slides while it "translates"): every string is translated in place.
+    from services.revision_rules import requested_translation_language as _pure_translation_language
+    pure_translation_target = intent.language or _pure_translation_language(revision_prompt)
+    translation_is_whole_request = bool(pure_translation_target) and not (
+        explicit_add_count or explicit_delete_targets or explicit_title_overrides
+        or intent.visuals or intent.bullet_count
+    ) and (
+        intent.translate_only if intent.translate_only is not None
+        else len(str(revision_prompt or "").split()) <= 14
+    )
+    translated_in_place = None
+    if translation_is_whole_request:
+        from services.visual_translate import translate_deck_text
+        # Only slides the user named or selected narrow a translation; the planner's own target
+        # list is a guess (it tends to leave the closing slide out of "the whole deck").
+        translation_targets = list(target_slide_indices or []) or _parse_revision_target_indices(
+            revision_prompt=revision_prompt,
+            slide_count=len(old_slides),
+        )
+        translated_in_place = await translate_deck_text(
+            content_extractor, previous_structured_content, pure_translation_target, translation_targets or None,
+        )
+
+    if translated_in_place is not None:
+        revised = translated_in_place
+        # Later steps put back every slide outside plan_targets: they must cover what was translated.
+        plan_targets = list(translation_targets) or list(range(len(old_slides)))
+        changed_fields.append("text" if plan_targets else "deck")
+    elif wants_deck_restructure:
         revised = await content_extractor.revise_slide_deck(
             previous_structured_content,
             revision_prompt,
@@ -1225,7 +1254,8 @@ async def _build_revised_slide_spec_payload(
         raise TaskCancelledError()
 
     from services.slide_text_quality import improve_slide_titles_quality, improve_speaker_notes_quality
-    if not wants_deck_restructure:
+    # (An in-place translation is already faithful: polishing its titles or notes would rewrite them.)
+    if not wants_deck_restructure and translated_in_place is None:
         revised = await improve_slide_titles_quality(
             content_extractor,
             revised,
@@ -1258,8 +1288,11 @@ async def _build_revised_slide_spec_payload(
     from services.revision_rules import requested_translation_language as _requested_translation_language
     translation_target = intent.language or _requested_translation_language(revision_prompt)
     if translation_target:
-        from services.visual_translate import translate_visual_text
+        from services.visual_translate import restore_dropped_bullets, translate_visual_text
         await translate_visual_text(content_extractor, revised, translation_target)
+        # Whatever the passes above did, no slide leaves a translation with fewer points than it had.
+        if not explicit_add_count and not explicit_delete_targets:
+            await restore_dropped_bullets(content_extractor, revised, old_slides, translation_target)
 
     # The title the user typed is final: the title-quality and coherence passes above may reword
     # any title, and "Vận động đúng cách" is what they asked for, not a better one.
@@ -1283,12 +1316,28 @@ async def _build_revised_slide_spec_payload(
     revised["_structure_locked"] = True
     revised["_structure_signature"] = list(locked_signature)
 
-    visual_plan = await build_visual_plan(
-        content_extractor,
-        revised,
-        revision_prompt or "",
-        want_images=want_images,
-    )
+    if translated_in_place is not None:
+        # A translation changes no layout: each slide keeps the visual it had, and nobody
+        # re-plans (or re-composes into columns) a deck that was only translated.
+        visual_plan = {}
+        for idx, slide in enumerate(revised.get("slides") or []):
+            if not isinstance(slide, dict):
+                continue
+            if isinstance(slide.get("table"), dict):
+                visual_plan[idx] = "table"
+            elif isinstance(slide.get("chart"), dict):
+                visual_plan[idx] = "chart"
+            elif slide.get("image_url") or "image" in str(slide.get("layout") or "").lower():
+                visual_plan[idx] = "image"
+            else:
+                visual_plan[idx] = "none"
+    else:
+        visual_plan = await build_visual_plan(
+            content_extractor,
+            revised,
+            revision_prompt or "",
+            want_images=want_images,
+        )
     explicit_visual_targets = dict(intent.visuals) if intent.visuals else _explicit_visual_targets_from_prompt(
         revision_prompt,
         len(revised.get("slides") or []),

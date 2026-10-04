@@ -29,6 +29,14 @@ export function parseBullets(page) {
   return [];
 }
 
+// The closing composition shows two lines (a closing sentence and a contact line). A last slide
+// the AI filled with a real summary has more points than that: it is shown as a content slide,
+// otherwise every point after the second is dropped on screen and then on the next save.
+const CLOSING_LINES = 2;
+const fitsClosingComposition = (page) => (
+  parseBullets(page).filter((bullet) => String(bullet || '').trim()).length <= CLOSING_LINES
+);
+
 export function backendLayoutToFrontend(page) {
   const layout = String(page?.layout || '').toLowerCase();
   const role = String(page?.pedagogicalRole || '').toLowerCase();
@@ -37,11 +45,12 @@ export function backendLayoutToFrontend(page) {
   // Boundary slides keep their dedicated composition even when they contain
   // an optional visual or stale persisted editor metadata.
   if (layout === 'title' || layout === 'intro') return 'title';
-  if (['thankyou', 'thank_you'].includes(layout)) return 'thankyou';
+  if (['thankyou', 'thank_you'].includes(layout) && fitsClosingComposition(page)) return 'thankyou';
   if (Number(page?.pageIndex) === 0 && !['table', 'chart'].includes(layout)) return 'title';
   if (
     role === 'summary'
     && /(tổng kết|kết luận|hỏi đáp|cảm ơn|summary|conclusion|thank|q&a)/i.test(title)
+    && fitsClosingComposition(page)
   ) return 'thankyou';
 
   if (page?.table) return 'table';
@@ -310,11 +319,13 @@ export function formatSlideDeck(pages, presentationMode = '', theme) {
     const rawLayout = String(rawLast.layout || '').toLowerCase();
     const rawRole = String(rawLast.pedagogicalRole || '').toLowerCase();
     const closingTitle = String(rawLast.title || last.title || '').toLocaleLowerCase('vi');
-    const isClosing = ['thankyou', 'thank_you'].includes(rawLayout)
+    const isClosing = fitsClosingComposition(rawLast) && (
+      ['thankyou', 'thank_you'].includes(rawLayout)
       || (
         rawRole === 'summary'
         && /(tổng kết|kết luận|hỏi đáp|cảm ơn|summary|conclusion|thank|q&a)/i.test(closingTitle)
-      );
+      )
+    );
     if (isClosing) slides[lastIndex] = { ...last, type: 'thankyou' };
   }
 

@@ -387,6 +387,9 @@ def limit_split_columns(slides: List[Dict[str, Any]]) -> int:
     return changed
 
 
+_CHART_REQUEST = re.compile(r"biểu đồ|đồ thị|\bcharts?\b|\bgraphs?\b", re.IGNORECASE)
+
+
 async def build_visual_plan(
     content_extractor,
     structured: Dict[str, Any],
@@ -429,7 +432,8 @@ async def build_visual_plan(
                 "You are a presentation visual-routing planner.\n"
                 "Choose the best primary visual for each slide: none, image, chart, or table.\n"
                 "Rules:\n"
-                "- chart: only for explicit comparable numeric data with at least two meaningful points.\n"
+                "- chart: only for explicit comparable numeric data with at least two meaningful points. When the "
+                "user request asks for a chart of some data, the slide carrying that data is a chart, not a table.\n"
                 "- table: for comparisons, before/after, pros/cons, options, criteria, status, or repeated key-value structure.\n"
                 "- image: for conceptual/story/domain slides when images are requested and chart/table is not better.\n"
                 "- none: for title, conclusion, thin, or abstract slides where a visual would add little value.\n"
@@ -589,9 +593,12 @@ async def build_visual_plan(
 
         # A slide whose bullets are a labelled series of comparable values (four quarters, yearly
         # totals) reads far better as a chart, and the planner often leaves it as plain text.
+        # When the request itself asks for a chart, the same series wins over a table the planner chose.
         from services.slide_charts import labelled_value_series
+        chart_asked = bool(_CHART_REQUEST.search(str(raw_content or "")))
         for idx, slide in enumerate(slides):
-            if plan.get(idx) != "none" or not isinstance(slide, dict):
+            replaceable = {"none", "table"} if chart_asked else {"none"}
+            if plan.get(idx) not in replaceable or not isinstance(slide, dict):
                 continue
             if str(slide.get("layout") or "").strip().lower() in {"intro", "title", "thankyou", "thank_you"}:
                 continue

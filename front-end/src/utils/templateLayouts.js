@@ -560,8 +560,12 @@ export function layoutTemplateElements(slide, source, theme, colors) {
     // width even where a theme keeps text clear of a decoration.
     const RW = 896;
     const WW = RW - P;
-    const side = variant === 'data-side' || variant === 'data-side-right';
     const describes = bodies.length && bodyHtml && !visuals.some((el) => el.type === 'table');
+    // The strip above a chart holds a caption of a line or two. Text that only fits there by
+    // shrinking below a readable size (several bullets) goes into a rail beside the chart instead
+    // of running under it.
+    const crowded = describes && planBody(bodyHtml, WW, 96, { min: 14, max: 19 }).fs < 14;
+    const side = variant === 'data-side' || variant === 'data-side-right' || crowded;
     if (!side) {
       const tFit = fitT(titleText, WW, { max: D.titleSize, weight: D.weight });
       const tBox = box(P, 40, WW, tFit.height);
@@ -575,8 +579,8 @@ export function layoutTemplateElements(slide, source, theme, colors) {
       putVisuals(box(P - 8, y, WW + 16, 500 - y));
       if (code) putCode(y, P, WW);
     } else {
-      const left = variant === 'data-side';
-      const railW = 236;
+      const left = variant !== 'data-side-right';
+      const railW = crowded ? 300 : 236;
       const rx = left ? P : RW - railW;
       const vx = left ? P + railW + 36 : P;
       const vw = WW - railW - 36;

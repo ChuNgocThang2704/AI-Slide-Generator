@@ -24,12 +24,14 @@ PLANNER_INTENT_RULES = (
     "\"keep_text\": true when the user wants the table/chart ADDED to the slide's existing content, false when "
     "the slide should be turned into / replaced by it}]. Use the selected slide when the request says 'this slide'.\n"
     "- language: \"vi\" or \"en\" when the request asks to translate the deck or slides into that language, else null.\n"
+    "- translate_only: true when translating is the ONLY thing the request asks for (no shortening, rewriting, "
+    "adding or removing anything), else false.\n"
     "- bullet_count: the exact number of bullets requested for the target slides, else null.\n"
 )
 
 PLANNER_INTENT_SHAPE = (
     ",\"intent\":{\"add_slides\":{\"count\":0,\"after_slide\":null},\"delete_slides\":[],\"titles\":[],"
-    "\"visuals\":[],\"language\":null,\"bullet_count\":null}"
+    "\"visuals\":[],\"language\":null,\"translate_only\":false,\"bullet_count\":null}"
 )
 
 _CHART_TYPES = {"bar", "line", "pie"}
@@ -45,6 +47,7 @@ class RevisionIntent:
     chart_types: Dict[int, str] = field(default_factory=dict)
     keep_text: Dict[int, bool] = field(default_factory=dict)
     language: Optional[str] = None
+    translate_only: Optional[bool] = None    # None: the planner did not say
     bullet_count: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -112,6 +115,8 @@ def parse_intent(raw: Any, slide_count: int) -> RevisionIntent:
     language = str(raw.get("language") or "").strip().lower()
     if language in {"vi", "en"}:
         intent.language = language
+        if isinstance(raw.get("translate_only"), bool):
+            intent.translate_only = raw["translate_only"]
 
     bullets = _int(raw.get("bullet_count"))
     if bullets and 1 <= bullets <= 10:
