@@ -36,13 +36,8 @@ export function artObstacles(decor, { forBody = false } = {}) {
     const size = area(box);
     if (forBody && isPicture(item) && !coversPage(box) && size >= MIN_ART_AREA) return true;
     if (size < MIN_ART_AREA || size >= PAGE_SIZED) return false;
-    if (item.type === 'shape') {
-      // A shape with no fill and no outline draws nothing; a translucent one is a tint the text may sit on.
-      const fill = String(item.fill || '');
-      if (!fill || fill === 'transparent') return Boolean(item.borderColor && item.borderColor !== 'transparent');
-      const alpha = /rgba\(.*,\s*([0-9.]+)\)$/.exec(fill);
-      if (alpha && Number(alpha[1]) < 0.5) return false;
-    }
+    // Shapes (cards, panels, tints) are what the text is laid on, never something to dodge.
+    if (item.type === 'shape') return false;
     return true;
   }).map((item) => ({ x: Number(item.x) || 0, y: Number(item.y) || 0, width: Number(item.width) || 0, height: Number(item.height) || 0 }));
 }

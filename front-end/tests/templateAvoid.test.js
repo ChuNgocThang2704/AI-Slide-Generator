@@ -21,13 +21,13 @@ test('a row of photos across the middle leaves the text above or below it', () =
   row.forEach((art) => assert.ok(!overlaps(title, art)));
 });
 
-test('art the text is meant to sit on is not an obstacle', () => {
+test('shapes the text sits on (cards, panels) are not obstacles', () => {
   const panel = { type: 'shape', role: 'decoration', x: 0, y: 0, width: 462, height: 540, fill: 'rgba(255, 255, 255, 0.23)' };
   const backdrop = { type: 'image', role: 'background', x: 0, y: 0, width: 960, height: 540 };
-  const card = { type: 'shape', role: 'decoration', x: 50, y: 140, width: 400, height: 260, fill: '#112233' };
-  assert.deepEqual(artObstacles([panel, backdrop]), []);
-  const box = text('body', 64, 160, 360, 220);
-  assert.deepEqual(avoidArt([box], [card])[0], box);   // text fully inside a card stays put
+  const cards = [50, 345, 641].map((x) => ({ type: 'shape', role: 'decoration', x, y: 110, width: 269, height: 241, fill: 'linear-gradient(90deg, rgba(255,255,255,0) 0%, #FFFFFF 50%)' }));
+  assert.deepEqual(artObstacles([panel, backdrop, ...cards]), []);
+  const box = text('body', 64, 130, 832, 300);
+  assert.deepEqual(avoidArt([box], cards)[0], box);   // a body spanning three cards stays across them
 });
 
 test('lines, tiny marks and unfilled shapes are ignored', () => {
