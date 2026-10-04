@@ -91,6 +91,9 @@ public class ProjectService {
     private final SubscriptionClient subscriptionClient;
     private final RestTemplate imageProxyClient = new RestTemplate();
 
+    @Value("${app.template-service.url:http://template-service:8083}")
+    private String templateServiceUrl;
+
     @Value("${app.ai.url}")
     private String aiUrl;
 
@@ -104,7 +107,7 @@ public class ProjectService {
         }
 
         String normalizedRequestedUrl = normalizeImageUrl(requestedUrl);
-        if (normalizedRequestedUrl == null) {
+        if (normalizedRequestedUrl == null && !TEMPLATE_ASSET_PATH.matcher(templateAssetPathOf(requestedUrl)).matches()) {
             throw new AppException(ErrorCode.ACCESS_DENIED);
         }
 
@@ -112,15 +115,25 @@ public class ProjectService {
         for (SlidePage page : slidePageRepository.findByProjectIdOrderByPageIndexAsc(projectId)) {
             addAllowedImageUrl(allowedUrls, page.getImageUrl());
             collectImageUrls(allowedUrls, page.getElements());
+            // A custom template's pictures (backdrop, gallery) live in the slide's rich text, not in
+            // its elements; without them every PDF/image export of such a deck 403s.
+            collectImageUrls(allowedUrls, page.getRichText());
         }
         // The deck-wide logo (Project.deckMaster) isn't part of any one slide's elements,
         // so it needs its own entry in the allowlist or every export/render of it 403s.
         collectImageUrls(allowedUrls, project.getDeckMaster());
-        if (!allowedUrls.contains(normalizedRequestedUrl)) {
-            throw new AppException(ErrorCode.ACCESS_DENIED);
+        // A custom template's pictures are stored as "/template/public/assets/..." and requested with
+        // the API prefix and the site's own host; they are read from the template service itself.
+        URI proxyTarget;
+        java.util.regex.Matcher templateAsset = TEMPLATE_ASSET_PATH.matcher(templateAssetPathOf(requestedUrl));
+        if (templateAsset.matches() && allowedUrls.contains("tpl:" + templateAsset.group(1))) {
+            proxyTarget = URI.create(templateServiceUrl.replaceAll("/+$", "") + "/api" + templateAsset.group(1));
+        } else {
+            if (!allowedUrls.contains(normalizedRequestedUrl)) {
+                throw new AppException(ErrorCode.ACCESS_DENIED);
+            }
+            proxyTarget = resolveImageProxyTarget(requestedUrl);
         }
-
-        URI proxyTarget = resolveImageProxyTarget(requestedUrl);
         ResponseEntity<byte[]> response = imageProxyClient.getForEntity(proxyTarget, byte[].class);
         byte[] body = response.getBody();
         if (!response.getStatusCode().is2xxSuccessful() || body == null || body.length == 0) {
@@ -186,7 +199,22 @@ public class ProjectService {
         }
     }
 
+    private static final java.util.regex.Pattern TEMPLATE_ASSET_PATH =
+            java.util.regex.Pattern.compile("^(?:/api)?(/template/public/assets/[A-Za-z0-9._/-]+)$");
+
+    /** The path of a requested picture (without host and query), or an empty string when it is not a URL. */
+    private String templateAssetPathOf(String value) {
+        if (value == null) return "";
+        try {
+            String path = URI.create(value).getRawPath();
+            return path == null ? "" : path;
+        } catch (IllegalArgumentException exception) {
+            return "";
+        }
+    }
+
     private void addAllowedImageUrl(Set<String> urls, String url) {
+        if (url != null && url.startsWith("/template/public/assets/")) urls.add("tpl:" + url);
         String normalized = normalizeImageUrl(url);
         if (normalized == null && url != null && url.startsWith("/")) {
             normalized = normalizeImageUrl(aiUrl.replaceAll("/+$", "") + url);
