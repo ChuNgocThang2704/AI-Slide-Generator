@@ -69,15 +69,21 @@ const adaptiveCanvasFontSize = (element) => {
 // The uploaded template's own art. It is not part of the slide's elements, so clicking a
 // piece hands it to the editor, which turns the decoration into real, editable shapes
 // (see adoptArtAt in EditorPage) — no "edit the decorations" switch to find first.
+// A backdrop, or a piece covering a good part of the slide (a panel, a tinted sheet), is the page
+// itself: a click on it belongs to the canvas, so it clears the selection or starts a marquee
+// instead of being swallowed here.
+const isPageSizedArt = (item) => isBackdrop(item) || item.width * item.height >= 0.25 * 960 * 540;
+
 function TemplateArt({ art, onPick }) {
   return (
     <div className={`element-canvas-art${onPick ? ' pickable' : ''}`} aria-hidden="true">
       {art.map((item) => (
         <div
           key={item.id}
-          onPointerDown={onPick ? (event) => { event.stopPropagation(); onPick(item); } : undefined}
-          title={onPick ? 'Bấm để tách trang trí thành hình có thể sửa' : undefined}
+          onPointerDown={onPick && !isPageSizedArt(item) ? (event) => { event.stopPropagation(); onPick(item); } : undefined}
+          title={onPick && !isPageSizedArt(item) ? 'Bấm để tách trang trí thành hình có thể sửa' : undefined}
           style={{
+            ...(isPageSizedArt(item) ? { pointerEvents: 'none' } : null),
             position: 'absolute',
             left: item.x,
             top: item.y,
