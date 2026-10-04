@@ -129,6 +129,17 @@ export function estimatedTextHeight(el) {
   return lines * size * (Number(el.style?.lineHeight) || 1.2);
 }
 
+export function withoutTextBackings(decor, elements) {
+  const boxes = elements.filter((el) => el.type === 'text' && ['title', 'body'].includes(el.role));
+  return (Array.isArray(decor) ? decor : []).filter((item) => {
+    if (item.type !== 'shape' || item.role === 'background') return true;
+    const box = { x: Number(item.x) || 0, y: Number(item.y) || 0, width: Number(item.width) || 0, height: Number(item.height) || 0 };
+    if (Math.min(box.width, box.height) < 12 || area(box) >= PAGE_SIZED) return true;   // lines and page-sized art stay
+    // A coloured card or panel lying under the text is dropped, so the text sits on the page like the rest.
+    return !boxes.some((text) => overlap(box, text) >= 0.4 * area(box));
+  });
+}
+
 /**
  * A rule the template drew between its own sample text rows would cut through the new text: drop
  * thin lines that cross the inside of a title or body box.

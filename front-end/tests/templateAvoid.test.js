@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { avoidArt, artObstacles, withoutCrossingRules } from '../src/utils/templateAvoid.js';
+import { avoidArt, artObstacles, withoutCrossingRules, withoutTextBackings } from '../src/utils/templateAvoid.js';
 
 const text = (role, x, y, width, height) => ({ type: 'text', role, x, y, width, height });
 const photo = (x, y, width, height) => ({ type: 'image', role: 'decoration', x, y, width, height, src: 'asset:p.jpg' });
@@ -78,3 +78,11 @@ test('a picture placed over the title is moved below the title text', () => {
   assert.ok(moved.y > 178 && moved.height >= 120);
 });
 
+
+test('coloured cards lying under the text are dropped; a rule and a far-away mark stay', () => {
+  const card = (x) => ({ type: 'shape', role: 'decoration', x, y: 110, width: 269, height: 241, fill: 'linear-gradient(90deg, #fff, #fff)' });
+  const rule = { type: 'shape', role: 'decoration', x: 40, y: 80, width: 880, height: 2, fill: '#456' };
+  const far = { type: 'shape', role: 'decoration', x: 40, y: 480, width: 120, height: 40, fill: '#123' };
+  const kept = withoutTextBackings([card(50), card(345), card(641), rule, far], [text('body', 64, 130, 832, 300)]);
+  assert.deepEqual(kept, [rule, far]);
+});

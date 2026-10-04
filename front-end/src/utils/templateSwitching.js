@@ -4,7 +4,7 @@ import { ADAPTIVE_TEMPLATES, isBoundaryLabel } from './templateLayouts.js';
 import { mapTemplateFont } from './templateFonts.js';
 import { isUserGraphic } from './shapeLibrary.js';
 import { buildTemplateArt, withoutTemplateArt } from './templateArt.js';
-import { avoidArt, withoutCrossingRules } from './templateAvoid.js';
+import { avoidArt, withoutCrossingRules, withoutTextBackings } from './templateAvoid.js';
 
 const escapeHtml = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // Alignment and size are deliberately not imported: the layout engine already
@@ -77,7 +77,8 @@ export function applyCustomTemplateResult(slide, match, preferredBaseTheme) {
   const titleStyle = styleForRole(match, 'title');
   const bodyStyle = styleForRole(match, 'body');
   const theme = importedTheme(match, titleStyle, bodyStyle);
-  const extras = supplements(slide.elements || []);
+  // (An earlier version put a soft sheet behind some text; it is not carried into the new look.)
+  const extras = supplements(slide.elements || []).filter((el) => !String(el.id || '').endsWith('-sheet'));
   // The sample slide's background and pictures live beside the elements, and tell the
   // layout where the art sits so the text keeps clear of it.
   const art = buildTemplateArt(match);
@@ -101,7 +102,7 @@ export function applyCustomTemplateResult(slide, match, preferredBaseTheme) {
       style: importedStyle ? { ...element.style, ...importedStyle } : element.style,
     };
   });
-  if (art.decor.length) richText._decor = withoutCrossingRules(art.decor, elements);
+  if (art.decor.length) richText._decor = withoutTextBackings(withoutCrossingRules(art.decor, elements), elements);
   return {
     ...slide,
     richText,

@@ -209,6 +209,8 @@ async function formatPagesWithTemplate(pages, templateId, force = false, sourceT
   }));
 }
 
+const TEMPLATE_READER_VERSION = 3;
+
 function toCustomTemplateOption(template) {
   return {
     id: template.id,
@@ -1195,14 +1197,22 @@ export default function EditorPage() {
     }
     const tmpl = [...TEMPLATES, ...customOptions].find((item) => item.id === tmplId);
     if (tmpl?.isCustom) {
-      // Applying again also re-reads the file, so a template uploaded before a reader fix gets it.
-      try {
-        setApplyingTemplate(true);
-        await templateService.reparseCustom(tmpl.id);
-      } catch {
-        // The stored analysis still works; apply it as it is.
-      } finally {
-        setApplyingTemplate(false);
+      // A template uploaded before a reader fix is read again once (it takes a while), so the fix
+      // reaches it; later presses apply at once. Bump TEMPLATE_READER_VERSION when the reader changes.
+      const readKey = `tplRead:${TEMPLATE_READER_VERSION}:${tmpl.id}`;
+      let alreadyRead = false;
+      try { alreadyRead = Boolean(localStorage.getItem(readKey)); } catch { /* storage unavailable */ }
+      if (!alreadyRead) {
+        try {
+          setApplyingTemplate(true);
+          addToast('Đang đọc lại template để cập nhật cách hiển thị (khoảng 20 giây)…', 'info');
+          await templateService.reparseCustom(tmpl.id);
+          try { localStorage.setItem(readKey, '1'); } catch { /* storage unavailable */ }
+        } catch {
+          // The stored analysis still works; apply it as it is.
+        } finally {
+          setApplyingTemplate(false);
+        }
       }
     }
     if (tmpl) await applyTemplate(tmpl);
