@@ -334,7 +334,8 @@ async def describe_figures(extractor, slides: List[Dict[str, Any]], vietnamese: 
                 "loại hình (sơ đồ, biểu đồ, bảng, ảnh chụp màn hình, ảnh minh hoạ), các thành phần chính, nhãn chữ đọc được, mũi tên hay quan hệ giữa chúng. "
                 "2-4 câu tiếng Việt, CHỈ tả điều thực sự nhìn thấy: không đoán tên một thành phần nếu hình không ghi, không suy ra từ tiêu đề; chỗ nào không có chữ thì nói là không có chữ. "
                 f"Hình chỉ để trang trí (ảnh nền, logo, họa tiết, ảnh người, và dãy biểu tượng nhỏ minh hoạ cho các bước hay ý mà chữ của chúng đã có trên slide, như các icon trong vòng tròn nối nhau) thì mô tả của hình đó là đúng hai chữ: {_DECORATIVE}.\n"
-                'Trả về DUY NHẤT JSON: {"items":[{"k":số thứ tự hình,"description":"..."}]} với đúng một phần tử cho mỗi hình.'
+                'Trả về DUY NHẤT JSON: {"items":[{"k":số thứ tự hình,"kind":"diagram|chart|table|screenshot|photo|decoration","has_text":true nếu trong hình có chữ đọc được, "description":"..."}]} '
+                "với đúng một phần tử cho mỗi hình. Hình có kind=decoration thì để description là TRANG TRI."
             )
         else:
             ask = (
@@ -342,7 +343,8 @@ async def describe_figures(extractor, slides: List[Dict[str, Any]], vietnamese: 
                 "listeners who cannot see it: the kind of picture (diagram, chart, table, screenshot, illustration), its main parts, readable labels, arrows or relations between them. "
                 "2-4 sentences, ONLY what is really visible: do not guess the name of a part the picture does not label, do not infer from the title, and say so where there is no text. "
                 f"A picture that is only decoration (a background, logo, pattern, a person, and a row of small icons that merely illustrate steps or points whose words are already on the slide, like icons in linked circles) gets exactly the two words: {_DECORATIVE}.\n"
-                'Return ONLY JSON: {"items":[{"k":picture number,"description":"..."}]} with exactly one item per picture.'
+                'Return ONLY JSON: {"items":[{"k":picture number,"kind":"diagram|chart|table|screenshot|photo|decoration","has_text":true if the picture has readable text,"description":"..."}]} '
+                "with exactly one item per picture. A picture with kind=decoration gets TRANG TRI as its description."
             )
         content: List[Dict[str, Any]] = [{"type": "text", "text": ask}]
         for number, ((slide, _), url) in enumerate(zip(group, urls), start=1):
@@ -362,7 +364,17 @@ async def describe_figures(extractor, slides: List[Dict[str, Any]], vietnamese: 
             found: Dict[int, str] = {}
             for item in (parsed or {}).get("items") or []:
                 try:
-                    found[int(item.get("k"))] = " ".join(str(item.get("description") or "").split())
+                    text = " ".join(str(item.get("description") or "").split())
+                    kind = str(item.get("kind") or "").strip().lower()
+                    has_text = item.get("has_text")
+                    if isinstance(has_text, str):
+                        has_text = has_text.strip().lower() in {"true", "yes", "1", "có", "co"}
+                    # A diagram or chart with no word in it is a drawing, not something to teach from:
+                    # the model's own description can still sound like content ("three blue arrows..."),
+                    # so the rule is applied here, not left to its judgement.
+                    if kind == "decoration" or (kind in {"diagram", "chart"} and has_text is False):
+                        text = _DECORATIVE
+                    found[int(item.get("k"))] = text
                 except (TypeError, ValueError, AttributeError):
                     continue
             if set(range(1, len(group) + 1)) <= set(found):

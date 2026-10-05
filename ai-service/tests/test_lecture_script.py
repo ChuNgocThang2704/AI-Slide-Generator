@@ -162,7 +162,9 @@ class _Vision:
                     if isinstance(answer, Exception):
                         raise answer
                     reply = answer
-            items.append({"k": number, "description": reply})
+            kind = "decoration" if reply == "TRANG TRÍ" else ("diagram_without_text" if reply.startswith("[no text]") else "diagram")
+            item = {"k": number, "kind": "diagram" if kind != "decoration" else "decoration", "has_text": kind != "diagram_without_text", "description": reply.replace("[no text]", "").strip()}
+            items.append(item)
         return json.dumps({"items": items})
 
 
@@ -219,6 +221,16 @@ class FigureTests(unittest.TestCase):
         self.assertTrue(all("images" not in slide for slide in slides))
         self.assertEqual(vision.sent[0]["kwargs"]["model_override"], "gateway-model")   # never the self-hosted primary host
         self.assertTrue(vision.sent[0]["images"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+
+    def test_a_diagram_with_no_word_in_it_is_a_drawing_not_something_to_teach_from(self):
+        slides = _slides(3)
+        for index, slide in enumerate(slides[1:]):
+            slide["images"] = [_png(color=(40 * index, 30, 30))]
+        vision = _Vision({"Mục 2": "[no text] Sơ đồ ba mũi tên xanh xếp song song trên nền đen, không có nhãn.", "Mục 3": "Sơ đồ có nhãn Threat, Vulnerability, Attack nối bằng mũi tên."})
+        described = asyncio.run(describe_figures(vision, slides, True))
+        self.assertEqual(described, 1)
+        self.assertNotIn("figure", slides[1])
+        self.assertIn("Threat", slides[2]["figure"])
 
     def test_a_failed_call_leaves_the_slides_to_be_written_from_their_text(self):
         slides = _slides(3)
