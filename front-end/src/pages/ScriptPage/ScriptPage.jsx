@@ -60,7 +60,7 @@ const formatDate = (value) => {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' });
 };
 
-function ScriptCell({ value, onChange, label, className = 'sp-script' }) {
+function ScriptCell({ value, onChange, label, className = 'sp-script', placeholder = '' }) {
   const ref = useRef(null);
   useEffect(() => {
     const node = ref.current;
@@ -68,7 +68,7 @@ function ScriptCell({ value, onChange, label, className = 'sp-script' }) {
     node.style.height = 'auto';
     node.style.height = `${node.scrollHeight + 2}px`;
   }, [value]);
-  return <textarea ref={ref} className={className} value={value} aria-label={label} onChange={(event) => onChange(event.target.value)} />;
+  return <textarea ref={ref} className={className} value={value} aria-label={label} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />;
 }
 
 export default function ScriptPage() {
@@ -758,6 +758,7 @@ export default function ScriptPage() {
                   <div className="sp-row sp-head">
                     <div>PHÂN CẢNH</div>
                     <div>LỜI THOẠI</div>
+                    <div>LỜI THOẠI (ENGLISH)</div>
                     <div>LƯU Ý DỰNG</div>
                     <div />
                   </div>
@@ -769,11 +770,17 @@ export default function ScriptPage() {
                       </div>
                       <div>
                         <ScriptCell value={row.script} label={`Lời thoại ${row.scene}`} onChange={(value) => updateRow(index, { script: value })} />
-                        {String(row.en || '').trim() && (
-                          <div className="sp-en-row">
-                            <span>EN{row.enFor !== String(row.script || '').trim() && <em title="Tiếng Việt đã đổi sau khi dịch"> · cần dịch lại</em>}</span>
-                            <ScriptCell className="sp-script sp-script-en" value={row.en} label={`English ${row.scene}`} onChange={(value) => updateRow(index, { en: value })} />
-                          </div>
+                      </div>
+                      <div className="sp-en-cell">
+                        <ScriptCell
+                          className="sp-script sp-script-en"
+                          value={row.en || ''}
+                          label={`English ${row.scene}`}
+                          placeholder={String(row.script || '').trim() ? 'Chưa dịch' : ''}
+                          onChange={(value) => updateRow(index, { en: value, enFor: row.enFor ?? String(row.script || '').trim() })}
+                        />
+                        {String(row.en || '').trim() && row.enFor !== String(row.script || '').trim() && (
+                          <small className="warn">Tiếng Việt đã đổi, cần dịch lại</small>
                         )}
                       </div>
                       <div>
@@ -796,7 +803,9 @@ export default function ScriptPage() {
                   {!working && emptyRows > 0 && <><AlertTriangle size={14} /> Còn {emptyRows} phân cảnh chưa có lời thoại. </>}
                   {!working && emptyRows === 0 && (done.length > 1
                     ? `Kiểm tra xong thì xuất: một file Excel gồm ${done.length} sheet, mỗi file slide một sheet.`
-                    : 'Kiểm tra xong thì xuất file. File Excel có 3 cột như trên, đúng mẫu kịch bản dựng.')}
+                    : (anyEnglish && withEnglish
+                      ? 'Kiểm tra xong thì xuất file. File Excel có các cột như trên: phân cảnh, lời thoại, lời thoại tiếng Anh, lưu ý dựng.'
+                      : 'Kiểm tra xong thì xuất file. File Excel có 3 cột như trên, đúng mẫu kịch bản dựng.'))}
                 </span>
                 <div className="sp-footer-actions">
                   {anyEnglish && (
