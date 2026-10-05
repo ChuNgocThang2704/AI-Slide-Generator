@@ -50,6 +50,11 @@ public class LectureScriptController {
         return ApiResponse.<JsonNode>builder().data(lectureScriptService.revise(request)).build();
     }
 
+    @PostMapping("/translate")
+    public ApiResponse<JsonNode> translate(@RequestBody JsonNode request) {
+        return ApiResponse.<JsonNode>builder().data(lectureScriptService.translate(request)).build();
+    }
+
     @GetMapping("/status/{taskId}")
     public ApiResponse<JsonNode> status(@PathVariable String taskId) {
         return ApiResponse.<JsonNode>builder().data(lectureScriptService.status(taskId)).build();

@@ -524,3 +524,81 @@ async def write_script(
         "rows": rows,
         "missing": missing,
     }
+
+
+# ── English subtitles ──────────────────────────────────────────────────────────
+
+_TRANSLATE_KIND = (
+    "paragraphs of a lecturer's spoken lecture script that will be shown as English subtitles: write natural, clear "
+    "spoken English, keep the meaning and the register of a teacher talking to students, keep technical terms; where "
+    "the Vietnamese gives a term with its English original in parentheses, use that English term once without repeating it"
+)
+_TRANSLATE_BATCH_CHARS = 3000
+
+
+async def _translate_batch(extractor, batch: List[str]) -> List[Optional[str]]:
+    """English for every string of `batch`, in order; a batch the model gets wrong is split in two and
+    asked again, down to one string, so one stubborn paragraph cannot spoil its neighbours."""
+    from services.visual_translate import translate_strings
+
+    for _ in range(2):
+        result = await translate_strings(extractor, batch, "en", _TRANSLATE_KIND)
+        if result and all(result):
+            return list(result)
+    if len(batch) == 1:
+        return [None]
+    middle = len(batch) // 2
+    return await _translate_batch(extractor, batch[:middle]) + await _translate_batch(extractor, batch[middle:])
+
+
+async def translate_scripts(extractor, scripts: List[str], on_progress: Optional[Progress] = None) -> Dict[str, Any]:
+    """{"items": [{"i": row index, "en": "..."}], "failed": [row index]} for Vietnamese `scripts`.
+
+    Each script is cut into its paragraphs (the lines of the video) and translated paragraph by
+    paragraph, so the English keeps the same blank-line structure and lines up with the Vietnamese."""
+    pieces: List[tuple] = []          # (row index, paragraph index, text)
+    counts: Dict[int, int] = {}
+    for row, script in enumerate(scripts):
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n|\n", str(script or "")) if part.strip()]
+        counts[row] = len(paragraphs)
+        pieces.extend((row, position, text) for position, text in enumerate(paragraphs))
+    batches: List[List[tuple]] = []
+    current: List[tuple] = []
+    size = 0
+    for piece in pieces:
+        if current and size + len(piece[2]) > _TRANSLATE_BATCH_CHARS:
+            batches.append(current)
+            current, size = [], 0
+        current.append(piece)
+        size += len(piece[2])
+    if current:
+        batches.append(current)
+
+    done = 0
+    gate = asyncio.Semaphore(_PARALLEL_BATCHES)
+
+    async def run(batch: List[tuple]) -> List[Optional[str]]:
+        nonlocal done
+        async with gate:
+            out = await _translate_batch(extractor, [text for _, _, text in batch])
+        done += 1
+        if on_progress:
+            await on_progress(5 + int(90 * done / max(1, len(batches))))
+        return out
+
+    results = await asyncio.gather(*(run(batch) for batch in batches))
+    english: Dict[int, Dict[int, Optional[str]]] = {}
+    for batch, texts in zip(batches, results):
+        for (row, position, _), text in zip(batch, texts):
+            english.setdefault(row, {})[position] = text
+    items: List[Dict[str, Any]] = []
+    failed: List[int] = []
+    for row in range(len(scripts)):
+        if not counts.get(row):
+            continue
+        parts = [english.get(row, {}).get(position) for position in range(counts[row])]
+        if any(part is None for part in parts):
+            failed.append(row)            # a row with a missing line is not half-translated: it is left to try again
+            continue
+        items.append({"i": row, "en": "\n\n".join(tidy_script(part) for part in parts if part)})
+    return {"items": items, "failed": failed}

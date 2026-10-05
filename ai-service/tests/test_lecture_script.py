@@ -4,6 +4,7 @@ import json
 import unittest
 
 from services.lecture_script import (
+    translate_scripts,
     NOTE_PRESENTER, SCENE_INTRO, SCENE_OUTRO, assemble_rows, estimated_minutes, has_cover, tidy_script, write_script,
 )
 from services.lecture_script_xlsx import build_workbook, build_workbook_of, sheet_name
@@ -110,7 +111,59 @@ class LectureScriptTests(unittest.TestCase):
         self.assertEqual(script["rows"][3]["script"], "")
 
 
+class _Translator:
+    """Answers translate_strings: 'EN:' in front of each item; `drop` makes it return one item too few."""
+
+    def __init__(self, drop=False):
+        self.drop = drop
+        self.calls = 0
+
+    async def _llm_completion_plain_text(self, messages, **kwargs):
+        self.calls += 1
+        items = json.loads(messages[1]["content"])["items"]
+        if self.drop and len(items) > 1:
+            items = items[:-1]
+        return json.dumps({"items": [f"EN:{item}" for item in items]})
+
+
+class EnglishSubtitleTests(unittest.TestCase):
+    def test_every_paragraph_is_translated_and_the_blank_line_structure_is_kept(self):
+        result = asyncio.run(translate_scripts(_Translator(), ["Chào các em.\n\nHôm nay học bài mới.", "", "Một đoạn."]))
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(result["items"], [
+            {"i": 0, "en": "EN:Chào các em.\n\nEN:Hôm nay học bài mới."},
+            {"i": 2, "en": "EN:Một đoạn."},
+        ])
+
+    def test_a_batch_the_model_gets_wrong_is_split_until_it_is_right(self):
+        translator = _Translator(drop=True)
+        result = asyncio.run(translate_scripts(translator, ["a\n\nb\n\nc\n\nd"]))
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(result["items"][0]["en"], "EN:a\n\nEN:b\n\nEN:c\n\nEN:d")
+        self.assertGreater(translator.calls, 2)
+
+    def test_nothing_to_translate_gives_nothing(self):
+        self.assertEqual(asyncio.run(translate_scripts(_Translator(), ["", "  "])), {"items": [], "failed": []})
+
+
 class LectureScriptWorkbookTests(unittest.TestCase):
+    def test_english_goes_in_a_fourth_column_only_when_there_is_some(self):
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            self.skipTest("openpyxl is not installed")
+        plain = load_workbook(io.BytesIO(build_workbook({"title": "T", "rows": [{"scene": "Slide 2", "script": "Một.", "note": ""}]}))).active
+        self.assertIsNone(plain["D4"].value)
+        self.assertEqual({str(c) for c in plain.merged_cells.ranges}, {"A1:C1", "A2:C2"})
+        both = load_workbook(io.BytesIO(build_workbook({"title": "T", "rows": [
+            {"scene": "Slide 2", "script": "Một.", "note": "", "en": "One."},
+            {"scene": "Slide 3", "script": "Hai.", "note": ""},
+        ]}))).active
+        self.assertEqual([both[f"{c}4"].value for c in "ABCD"], ["PHÂN CẢNH", "LỜI THOẠI", "LƯU Ý DỰNG", "LỜI THOẠI (ENGLISH)"])
+        self.assertEqual(both["D5"].value, "One.")
+        self.assertIsNone(both["D6"].value)
+        self.assertEqual({str(c) for c in both.merged_cells.ranges}, {"A1:D1", "A2:D2"})
+
     def test_workbook_has_the_layout_of_a_production_script(self):
         try:
             from openpyxl import load_workbook

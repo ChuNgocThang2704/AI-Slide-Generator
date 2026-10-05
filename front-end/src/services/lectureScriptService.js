@@ -27,6 +27,11 @@ export const lectureScriptService = {
     return unwrap(await apiClient.post('/document/lecture-script/revise', { slides, rows, prompt, filename }, { timeout: 60000 }));
   },
 
+  /** English subtitle lines for Vietnamese scripts: [string] -> task; its result is {items: [{i, en}], failed: [i]}. */
+  async translate(scripts) {
+    return unwrap(await apiClient.post('/document/lecture-script/translate', { scripts }, { timeout: 60000 }));
+  },
+
   /** Resolves with {script, slides} once the task is done; `onProgress` gets 0-100 on the way. */
   async waitFor(taskId, onProgress, isCancelled = () => false) {
     for (let attempt = 0; attempt < 240; attempt += 1) {
@@ -69,7 +74,10 @@ export const lectureScriptService = {
       '/document/lecture-script/export',
       {
         sheets: sheets.map((item) => ({
-          title: item.title, sheet: item.sheet, duration_minutes: item.durationMinutes, rows: item.rows,
+          title: item.title,
+          sheet: item.sheet,
+          duration_minutes: item.durationMinutes,
+          rows: item.rows.map((row) => ({ ...row, en: item.withEnglish ? (row.en || '') : '' })),
         })),
       },
       { responseType: 'blob', timeout: 90000 },

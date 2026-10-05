@@ -77,6 +77,12 @@ public class LectureScriptService {
         return call("/api/lecture-script/revise", new HttpEntity<>(request.toString(), headers));
     }
 
+    public JsonNode translate(JsonNode request) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return call("/api/lecture-script/translate", new HttpEntity<>(request.toString(), headers));
+    }
+
     public JsonNode status(String taskId) {
         try {
             return objectMapper.readTree(restTemplate.getForObject(url("/api/status/" + taskId), String.class));
