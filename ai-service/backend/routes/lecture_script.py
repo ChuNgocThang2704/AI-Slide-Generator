@@ -58,6 +58,7 @@ class ExportRequest(ExportSheet):
 
 def _start(
     task_id: str, slides: List[Dict[str, Any]], prompt: str, filename: str, previous_rows=None, first_video: bool = False,
+    look_at_figures: bool = True,
 ) -> None:
     async def run() -> None:
         queue = core.redis_queue
@@ -71,6 +72,7 @@ def _start(
             script = await write_script(
                 extractor, slides, prompt=prompt, filename=filename,
                 previous_rows=previous_rows, on_progress=progress, first_video=first_video,
+                look_at_figures=look_at_figures,
             )
             await queue.update_task_status(task_id, "completed", progress=100, result={"script": script, "slides": slides})
         except Exception as error:
@@ -84,7 +86,9 @@ def _start(
 
 
 @router.post("/generate")
-async def generate(file: UploadFile = File(...), prompt: str = Form(""), first_video: str = Form("false")):
+async def generate(
+    file: UploadFile = File(...), prompt: str = Form(""), first_video: str = Form("false"), figures: str = Form("true"),
+):
     """Read the deck and start writing its script; poll /api/status/{task_id} for the result."""
     data = await file.read()
     if not data:
@@ -100,7 +104,11 @@ async def generate(file: UploadFile = File(...), prompt: str = Form(""), first_v
         raise HTTPException(status_code=400, detail="Không đọc được file. Hãy dùng file .pptx hoặc .pdf không bị khoá.")
     task_id = str(uuid.uuid4())
     await core.redis_queue.update_task_status(task_id, "processing", progress=3)
-    _start(task_id, slides, prompt, file.filename or "", first_video=str(first_video).strip().lower() in {"1", "true", "yes", "on"})
+    _start(
+        task_id, slides, prompt, file.filename or "",
+        first_video=str(first_video).strip().lower() in {"1", "true", "yes", "on"},
+        look_at_figures=str(figures).strip().lower() not in {"0", "false", "no", "off"},
+    )
     return {"task_id": task_id, "slide_count": len(slides)}
 
 

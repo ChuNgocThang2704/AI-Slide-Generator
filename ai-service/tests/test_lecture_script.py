@@ -4,7 +4,7 @@ import json
 import unittest
 
 from services.lecture_script import (
-    describe_figures, read_pptx, shrink_image,
+    _drop_template_pictures, describe_figures, read_pptx, shrink_image,
     translate_scripts,
     NOTE_PRESENTER, SCENE_INTRO, SCENE_OUTRO, assemble_rows, estimated_minutes, has_cover, tidy_script, write_script,
 )
@@ -170,8 +170,8 @@ class FigureTests(unittest.TestCase):
 
     def test_described_figures_reach_the_slide_and_the_pictures_are_dropped(self):
         slides = _slides(4)
-        for slide in slides[1:]:
-            slide["images"] = [_png()]
+        for index, slide in enumerate(slides[1:]):
+            slide["images"] = [_png(color=(40 * index, 30, 30))]      # each its own picture, none a repeated logo
         vision = _Vision({"Mục 2": "Sơ đồ ba khối nối nhau bằng mũi tên: mối đe dọa khai thác lỗ hổng dẫn tới tấn công.", "Mục 3": "TRANG TRÍ", "Mục 4": RuntimeError("model down")})
         described = asyncio.run(describe_figures(vision, slides, True))
         self.assertEqual(described, 1)
@@ -182,10 +182,44 @@ class FigureTests(unittest.TestCase):
         self.assertEqual(vision.sent[0]["kwargs"]["model_override"], "gateway-model")   # never the self-hosted primary host
         self.assertTrue(vision.sent[0]["images"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
 
+    def test_a_powerpoint_chart_is_read_as_its_data(self):
+        from pptx import Presentation
+        from pptx.chart.data import CategoryChartData
+        from pptx.enum.chart import XL_CHART_TYPE
+        from pptx.util import Emu
+
+        deck = Presentation()
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        data = CategoryChartData()
+        data.categories = ["2020", "2021", "2022"]
+        data.add_series("Sản lượng", (1.76, 1.74, 1.85))
+        slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Emu(500000), Emu(500000), Emu(5000000), Emu(3000000), data)
+        out = io.BytesIO()
+        deck.save(out)
+        text = read_pptx(out.getvalue())[0]["text"]
+        self.assertIn("Biểu đồ", text)
+        self.assertIn("Sản lượng", text)
+        self.assertIn("2021 = 1.74", text)
+
+    def test_a_picture_repeated_on_several_slides_is_template_not_lesson(self):
+        logo, figure = _png(color=(0, 0, 200)), _png(color=(0, 200, 0))
+        slides = [{"images": [logo]}, {"images": [logo, figure]}, {"images": [logo]}, {"images": [figure]}]
+        removed = _drop_template_pictures(slides)
+        self.assertEqual(removed, 3)
+        self.assertEqual([len(slide["images"]) for slide in slides], [0, 1, 0, 1])    # the figure is on two slides only
+
+    def test_figures_can_be_switched_off(self):
+        slides = _slides(3)
+        slides[1]["images"] = [_png()]
+        vision = _Extractor()
+        script = asyncio.run(write_script(vision, slides, look_at_figures=False))
+        self.assertEqual(script["figures_described"], 0)
+        self.assertNotIn("images", slides[1])
+
     def test_the_title_slide_is_not_looked_at(self):
         slides = _slides(3)
-        for slide in slides:
-            slide["images"] = [_png()]
+        for index, slide in enumerate(slides):
+            slide["images"] = [_png(color=(40 * index, 30, 30))]
         vision = _Vision({})
         asyncio.run(describe_figures(vision, slides, True))
         self.assertEqual(len(vision.sent), 2)

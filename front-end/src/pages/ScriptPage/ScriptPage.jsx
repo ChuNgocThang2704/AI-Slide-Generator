@@ -76,6 +76,7 @@ export default function ScriptPage() {
   const [picked, setPicked] = useState([]);                 // files chosen, not yet started
   const [prompt, setPrompt] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [lookAtFigures, setLookAtFigures] = useState(true);   // the AI looks at the pictures of each slide (costs tokens)
   const [autoEnglish, setAutoEnglish] = useState(true);      // translate each script into English as soon as it is written
   const [firstVideo, setFirstVideo] = useState(false);       // the first file opens the course: welcome, lecturer, course
   const [items, setItems] = useState([]);
@@ -98,6 +99,7 @@ export default function ScriptPage() {
   const itemsRef = useRef([]);          // the latest items, for work that outlives a render
   const filesRef = useRef(new Map());   // id -> File, kept in memory so a failed file can be retried
   const autoEnglishRef = useRef(true);
+  const figuresRef = useRef(true);
   const firstRef = useRef(new Set());   // ids of the file that opens the course
   const queueRef = useRef([]);          // ids waiting for a free slot
   const runningRef = useRef(0);
@@ -108,6 +110,7 @@ export default function ScriptPage() {
   useEffect(() => { promptRef.current = prompt; }, [prompt]);
   useEffect(() => { itemsRef.current = items; }, [items]);
   useEffect(() => { autoEnglishRef.current = autoEnglish; }, [autoEnglish]);
+  useEffect(() => { figuresRef.current = lookAtFigures; }, [lookAtFigures]);
   useEffect(() => () => { sessionRef.current += 1; }, []);
 
   const started = items.length > 0 || opening;
@@ -241,7 +244,7 @@ export default function ScriptPage() {
       patchItem(id, { status: 'writing', progress: 3, error: '' });
       (async () => {
         try {
-          const { task_id: taskId } = await lectureScriptService.start(file, promptRef.current, firstRef.current.has(id));
+          const { task_id: taskId } = await lectureScriptService.start(file, promptRef.current, firstRef.current.has(id), figuresRef.current);
           const result = await lectureScriptService.waitFor(
             taskId,
             (value) => { if (sessionRef.current === session) patchItem(id, { progress: value }); },
@@ -538,6 +541,13 @@ export default function ScriptPage() {
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="Ví dụ: Môn An toàn và Bảo mật HTTT, video thuộc Chương 2. Giảng viên xưng thầy, giọng gần gũi, có câu hỏi gợi mở cho sinh viên."
             />
+            <label className="sp-check">
+              <input type="checkbox" checked={lookAtFigures} onChange={(event) => setLookAtFigures(event.target.checked)} />
+              <span>
+                <strong>AI xem hình trong slide để giảng đúng nội dung hình</strong>
+                <small>Sơ đồ, biểu đồ, ảnh chụp màn hình được mô tả rồi đưa vào lời thoại. Logo và ảnh lặp ở nhiều slide tự bị bỏ qua. Tốn thêm khoảng 3.500 token cho mỗi ảnh; bỏ tick nếu chỉ cần giảng theo chữ.</small>
+              </span>
+            </label>
             <label className="sp-check">
               <input type="checkbox" checked={autoEnglish} onChange={(event) => setAutoEnglish(event.target.checked)} />
               <span>
