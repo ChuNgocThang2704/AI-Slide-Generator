@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  byFileName, countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName, sheetNameFromFile, suggestedSetName,
+  byFileName, countWords, estimatedMinutes, firstShownNumber, englishStatus, renumberRows, rowsToTranslate, safeFileName, sheetNameFromFile, suggestedSetName,
 } from '../src/utils/lectureScript.js';
 
 const rows = () => [
@@ -50,4 +50,16 @@ test('a set is named after what its files share', () => {
   assert.equal(suggestedSetName([{ sheet: 'Bài A', title: 'Mở đầu' }, { sheet: 'Chương 3' }]), 'Mở đầu');
   assert.equal(suggestedSetName([{ sheet: 'C1 Video 1', title: 'Tổng quan ATTT' }]), 'Tổng quan ATTT');
   assert.equal(suggestedSetName([]), 'Bộ kịch bản');
+});
+
+test('English is needed for rows that have none or whose Vietnamese changed after translating', () => {
+  const rows = [
+    { script: 'Một.', en: 'One.', enFor: 'Một.' },
+    { script: 'Hai (đã sửa).', en: 'Two.', enFor: 'Hai.' },
+    { script: 'Ba.', en: '' },
+    { script: '   ', en: '' },
+  ];
+  assert.deepEqual(rowsToTranslate(rows), [{ i: 1, script: 'Hai (đã sửa).' }, { i: 2, script: 'Ba.' }]);
+  assert.deepEqual(englishStatus(rows), { translated: 2, stale: 1, missing: 1 });
+  assert.deepEqual(rowsToTranslate([]), []);
 });

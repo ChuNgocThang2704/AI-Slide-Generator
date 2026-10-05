@@ -14,7 +14,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import routes.api as core
-from services.lecture_script import MAX_SLIDES, estimated_minutes, read_deck, tidy_script, word_count, write_script
+from services.lecture_script import (
+    MAX_SLIDES, estimated_minutes, read_deck, tidy_script, translate_scripts, word_count, write_script,
+)
 from services.lecture_script_xlsx import build_workbook_of
 
 router = APIRouter(prefix="/api/lecture-script")
@@ -28,6 +30,11 @@ class ScriptRow(BaseModel):
     slide: Optional[int] = None
     script: str = ""
     note: str = ""
+    en: str = ""          # English subtitle lines, translated from `script`
+
+
+class TranslateRequest(BaseModel):
+    scripts: List[str] = Field(default_factory=list)   # Vietnamese scripts to translate, one per row
 
 
 class ReviseRequest(BaseModel):
@@ -97,6 +104,35 @@ async def generate(file: UploadFile = File(...), prompt: str = Form(""), first_v
     return {"task_id": task_id, "slide_count": len(slides)}
 
 
+@router.post("/translate")
+async def translate(request: TranslateRequest):
+    """English subtitle lines for Vietnamese scripts, paragraph by paragraph so the lines match one for one."""
+    scripts = [str(text or "")[:20000] for text in request.scripts[:200]]
+    if not any(text.strip() for text in scripts):
+        raise HTTPException(status_code=400, detail="Chưa có lời thoại để dịch")
+    task_id = str(uuid.uuid4())
+    await core.redis_queue.update_task_status(task_id, "processing", progress=3)
+
+    async def run() -> None:
+        queue = core.redis_queue
+
+        async def progress(value: int) -> None:
+            await queue.update_task_status(task_id, "processing", progress=value)
+
+        try:
+            extractor = core._new_task_content_extractor(task_id)
+            result = await translate_scripts(extractor, scripts, on_progress=progress)
+            await queue.update_task_status(task_id, "completed", progress=100, result=result)
+        except Exception as error:
+            print(f"[lecture_script] translate {task_id} failed: {error!r}")
+            await queue.update_task_status(task_id, "error", progress=0, result={"message": "Không dịch được. Hãy thử lại."})
+
+    task = asyncio.create_task(run())
+    _running.add(task)
+    task.add_done_callback(_running.discard)
+    return {"task_id": task_id}
+
+
 @router.post("/revise")
 async def revise(request: ReviseRequest):
     """Rewrite a script the user is looking at so it follows `prompt`."""
@@ -120,7 +156,7 @@ async def revise(request: ReviseRequest):
 
 def _sheet_payload(sheet: ExportSheet) -> Optional[Dict[str, Any]]:
     rows = [
-        {"scene": row.scene.strip()[:60], "script": tidy_script(row.script), "note": row.note.strip()[:200]}
+        {"scene": row.scene.strip()[:60], "script": tidy_script(row.script), "note": row.note.strip()[:200], "en": tidy_script(row.en)}
         for row in sheet.rows if row.scene.strip() or row.script.strip()
     ]
     if not rows:

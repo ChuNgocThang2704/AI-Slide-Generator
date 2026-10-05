@@ -66,3 +66,30 @@ export function suggestedSetName(items) {
   }
   return String(items?.[0]?.title || names[0] || 'Bộ kịch bản').trim().slice(0, 200);
 }
+
+/** Rows whose Vietnamese has no English yet, or changed since it was translated: [{i, script}]. */
+export function rowsToTranslate(rows) {
+  const out = [];
+  (rows || []).forEach((row, i) => {
+    const script = String(row.script || '').trim();
+    if (script && (!String(row.en || '').trim() || row.enFor !== script)) out.push({ i, script });
+  });
+  return out;
+}
+
+/** How many rows carry English, and how many of those are out of date against their Vietnamese. */
+export function englishStatus(rows) {
+  let translated = 0;
+  let stale = 0;
+  let missing = 0;
+  for (const row of rows || []) {
+    const script = String(row.script || '').trim();
+    if (!script) continue;
+    if (!String(row.en || '').trim()) missing += 1;
+    else {
+      translated += 1;
+      if (row.enFor !== script) stale += 1;
+    }
+  }
+  return { translated, stale, missing };
+}

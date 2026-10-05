@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, Check, Clapperboard, Cloud, CloudOff, Download, FileUp, FolderOpen, Loader2, Plus, RotateCw,
+  AlertTriangle, ArrowLeft, Check, Clapperboard, Cloud, CloudOff, Download, FileUp, FolderOpen, Languages, Loader2, Plus, RotateCw,
   Search, Sparkles, Trash2, Wand2, X,
 } from 'lucide-react';
 import { useUIStore } from '../../store';
 import { confirmDialog } from '../../services/dialogService';
 import { lectureScriptService } from '../../services/lectureScriptService';
 import {
-  byFileName, countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName, sheetNameFromFile,
-  suggestedSetName, totalWords,
+  byFileName, countWords, englishStatus, estimatedMinutes, firstShownNumber, renumberRows, rowsToTranslate, safeFileName,
+  sheetNameFromFile, suggestedSetName, totalWords,
 } from '../../utils/lectureScript';
 import './ScriptPage.css';
 
@@ -60,7 +60,7 @@ const formatDate = (value) => {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' });
 };
 
-function ScriptCell({ value, onChange, label }) {
+function ScriptCell({ value, onChange, label, className = 'sp-script' }) {
   const ref = useRef(null);
   useEffect(() => {
     const node = ref.current;
@@ -68,7 +68,7 @@ function ScriptCell({ value, onChange, label }) {
     node.style.height = 'auto';
     node.style.height = `${node.scrollHeight + 2}px`;
   }, [value]);
-  return <textarea ref={ref} className="sp-script" value={value} aria-label={label} onChange={(event) => onChange(event.target.value)} />;
+  return <textarea ref={ref} className={className} value={value} aria-label={label} onChange={(event) => onChange(event.target.value)} />;
 }
 
 export default function ScriptPage() {
@@ -81,6 +81,7 @@ export default function ScriptPage() {
   const [activeId, setActiveId] = useState(null);
   const [revisePrompt, setRevisePrompt] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [withEnglish, setWithEnglish] = useState(true);       // the English column goes into the Excel when there is English
   // Saved sets: the list, and the one open in the workspace.
   const [sets, setSets] = useState([]);
   const [setsLoading, setSetsLoading] = useState(true);
@@ -93,6 +94,7 @@ export default function ScriptPage() {
   const setIdRef = useRef(null);
   const savingRef = useRef(false);
   const sessionRef = useRef(0);         // bumped by "start over": answers of an older run are dropped
+  const itemsRef = useRef([]);          // the latest items, for work that outlives a render
   const filesRef = useRef(new Map());   // id -> File, kept in memory so a failed file can be retried
   const firstRef = useRef(new Set());   // ids of the file that opens the course
   const queueRef = useRef([]);          // ids waiting for a free slot
@@ -102,12 +104,14 @@ export default function ScriptPage() {
   const addInputRef = useRef(null);
 
   useEffect(() => { promptRef.current = prompt; }, [prompt]);
+  useEffect(() => { itemsRef.current = items; }, [items]);
   useEffect(() => () => { sessionRef.current += 1; }, []);
 
   const started = items.length > 0 || opening;
   const active = items.find((item) => item.id === activeId) || items[0] || null;
   const done = useMemo(() => items.filter((item) => item.status === 'done'), [items]);
-  const working = items.some((item) => item.status === 'queued' || item.status === 'writing' || item.revising);
+  const working = items.some((item) => item.status === 'queued' || item.status === 'writing' || item.revising || item.translating);
+  const anyEnglish = done.some((item) => item.rows.some((row) => String(row.en || '').trim()));
   const rows = useMemo(() => (active?.status === 'done' ? active.rows : []), [active]);
   const words = useMemo(() => totalWords(rows), [rows]);
   const minutes = useMemo(() => estimatedMinutes(rows), [rows]);
@@ -167,7 +171,7 @@ export default function ScriptPage() {
       const set = await lectureScriptService.getSet(id);
       if (sessionRef.current !== session) return;
       const opened = (set.items || []).filter((item) => item?.rows?.length).map((item) => ({
-        ...item, status: 'done', progress: 100, error: '', canRetry: false, revising: false, rows: withKinds(item.rows),
+        ...item, status: 'done', progress: 100, error: '', canRetry: false, revising: false, translating: false, rows: withKinds(item.rows),
       }));
       setIdRef.current = set.id;
       rememberSetId(set.id);
@@ -386,12 +390,60 @@ export default function ScriptPage() {
     }
   };
 
+  // English subtitles: the Vietnamese rows that have none (or changed since) are translated paragraph by paragraph.
+  const translateItem = async (id) => {
+    const target = itemsRef.current.find((item) => item.id === id);
+    if (!target || target.status !== 'done' || target.translating || target.revising) return 0;
+    const needed = rowsToTranslate(target.rows);
+    if (!needed.length) return 0;
+    const session = sessionRef.current;
+    patchItem(id, { translating: true, progress: 3 });
+    try {
+      const { task_id: taskId } = await lectureScriptService.translate(needed.map((row) => row.script));
+      const result = await lectureScriptService.waitFor(
+        taskId,
+        (value) => { if (sessionRef.current === session) patchItem(id, { progress: value }); },
+        () => sessionRef.current !== session,
+      );
+      if (sessionRef.current !== session) return 0;
+      const english = new Map((result.items || []).map((entry) => [needed[entry.i]?.i, { en: entry.en, enFor: needed[entry.i]?.script }]));
+      patchItem(id, (item) => ({
+        translating: false,
+        rows: item.rows.map((row, index) => (english.has(index) ? { ...row, ...english.get(index) } : row)),
+      }));
+      if (result.failed?.length) addToast(`“${target.sheet}”: ${result.failed.length} dòng chưa dịch được, bấm dịch lại để thử tiếp`, 'warning');
+      return english.size;
+    } catch (error) {
+      if (sessionRef.current !== session) return 0;
+      patchItem(id, { translating: false });
+      if (error.message !== 'cancelled') addToast(error.message || 'Không dịch được', 'error');
+      return 0;
+    }
+  };
+
+  const translateActive = async () => {
+    if (!active) return;
+    const count = await translateItem(active.id);
+    if (count) addToast(`Đã dịch ${count} dòng sang tiếng Anh`, 'success');
+  };
+
+  const translateAll = async () => {
+    const ids = done.map((item) => item.id);
+    let total = 0;
+    const queue = [...ids];
+    const worker = async () => {
+      while (queue.length) total += await translateItem(queue.shift());
+    };
+    await Promise.all([worker(), worker()]);     // two files at a time
+    if (total) addToast(`Đã dịch ${total} dòng sang tiếng Anh`, 'success');
+  };
+
   const exportXlsx = async (list) => {
     if (!list.length || exporting) return;
     setExporting(true);
     try {
       const blob = await lectureScriptService.exportXlsx(list.map((item) => ({
-        title: item.title, sheet: item.sheet, durationMinutes: estimatedMinutes(item.rows), rows: item.rows,
+        title: item.title, sheet: item.sheet, durationMinutes: estimatedMinutes(item.rows), rows: item.rows, withEnglish,
       })));
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -658,7 +710,35 @@ export default function ScriptPage() {
                   </button>
                 </section>
 
-                <section className={`sp-card sp-table${active.revising ? ' dim' : ''}`}>
+                {(() => {
+                  const status = englishStatus(rows);
+                  const need = status.missing + status.stale;
+                  return (
+                    <section className="sp-card sp-en">
+                      <Languages size={18} />
+                      <div className="sp-en-text">
+                        <strong>Lời thoại tiếng Anh (phụ đề)</strong>
+                        <small>
+                          {status.translated === 0 && 'Dịch từ lời thoại tiếng Việt, từng đoạn đối chiếu với đoạn tiếng Việt. Xuất Excel sẽ có thêm cột tiếng Anh.'}
+                          {status.translated > 0 && need === 0 && `Đã dịch đủ ${status.translated} dòng. Bạn vẫn sửa được từng câu tiếng Anh bên dưới.`}
+                          {status.translated > 0 && need > 0 && `Đã dịch ${status.translated} dòng${status.stale ? ` · ${status.stale} dòng đã sửa tiếng Việt nên cần dịch lại` : ''}${status.missing ? ` · ${status.missing} dòng chưa dịch` : ''}.`}
+                        </small>
+                      </div>
+                      <div className="sp-en-actions">
+                        <button type="button" className="btn btn-secondary btn-sm" disabled={active.translating || active.revising || need === 0} onClick={translateActive}>
+                          {active.translating
+                            ? <><Loader2 size={14} className="spin" /> {active.progress}%</>
+                            : status.translated === 0 ? 'Dịch sang tiếng Anh' : need === 0 ? 'Đã dịch đủ' : `Dịch ${need} dòng còn lại`}
+                        </button>
+                        {done.length > 1 && (
+                          <button type="button" className="btn btn-ghost btn-sm" disabled={working} onClick={translateAll}>Dịch cả {done.length} file</button>
+                        )}
+                      </div>
+                    </section>
+                  );
+                })()}
+
+                <section className={`sp-card sp-table${active.revising || active.translating ? ' dim' : ''}`}>
                   <div className="sp-row sp-head">
                     <div>PHÂN CẢNH</div>
                     <div>LỜI THOẠI</div>
@@ -673,6 +753,12 @@ export default function ScriptPage() {
                       </div>
                       <div>
                         <ScriptCell value={row.script} label={`Lời thoại ${row.scene}`} onChange={(value) => updateRow(index, { script: value })} />
+                        {String(row.en || '').trim() && (
+                          <div className="sp-en-row">
+                            <span>EN{row.enFor !== String(row.script || '').trim() && <em title="Tiếng Việt đã đổi sau khi dịch"> · cần dịch lại</em>}</span>
+                            <ScriptCell className="sp-script sp-script-en" value={row.en} label={`English ${row.scene}`} onChange={(value) => updateRow(index, { en: value })} />
+                          </div>
+                        )}
                       </div>
                       <div>
                         <input className="sp-notecell" value={row.note || ''} maxLength={200} aria-label="Lưu ý dựng" placeholder="—" onChange={(event) => updateRow(index, { note: event.target.value })} />
@@ -697,6 +783,12 @@ export default function ScriptPage() {
                     : 'Kiểm tra xong thì xuất file. File Excel có 3 cột như trên, đúng mẫu kịch bản dựng.')}
                 </span>
                 <div className="sp-footer-actions">
+                  {anyEnglish && (
+                    <label className="sp-footer-check">
+                      <input type="checkbox" checked={withEnglish} onChange={(event) => setWithEnglish(event.target.checked)} />
+                      <span>Kèm cột tiếng Anh</span>
+                    </label>
+                  )}
                   {done.length > 1 && active?.status === 'done' && (
                     <button type="button" className="btn btn-ghost" disabled={exporting} onClick={() => exportXlsx([active])}>Chỉ sheet này</button>
                   )}

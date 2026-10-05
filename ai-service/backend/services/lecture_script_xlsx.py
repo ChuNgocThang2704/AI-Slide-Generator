@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 _FONT = "Times New Roman"
 _NAVY = "FF003366"
 _TITLE_BLUE = "FF000080"
-_WIDTHS = {"A": 25, "B": 80, "C": 35}
+_WIDTHS = {"A": 25, "B": 80, "C": 35, "D": 80}
 _CHARS_PER_LINE = 92          # what an 80-wide column of 11pt Times New Roman holds
 _LINE_POINTS = 15.0
 
@@ -59,27 +59,32 @@ def build_workbook_of(scripts: List[Dict[str, Any]]) -> bytes:
 def _fill_sheet(sheet, script: Dict[str, Any]) -> None:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    for column, width in _WIDTHS.items():
-        sheet.column_dimensions[column].width = width
+    rows: List[Dict[str, Any]] = [row for row in (script.get("rows") or []) if isinstance(row, dict)]
+    # English lines for the subtitles go in a fourth column; the first three stay exactly as in the template.
+    with_english = any(str(row.get("en") or "").strip() for row in rows)
+    columns = "ABCD" if with_english else "ABC"
+    last = columns[-1]
+    for column in columns:
+        sheet.column_dimensions[column].width = _WIDTHS[column]
 
     thin = Side(style="thin", color="FF000000")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    sheet.merge_cells("A1:C1")
+    sheet.merge_cells(f"A1:{last}1")
     sheet["A1"] = str(script.get("title") or "Kịch bản bài giảng")
     sheet["A1"].font = Font(name=_FONT, size=14, bold=True, color=_TITLE_BLUE)
     sheet["A1"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     sheet.row_dimensions[1].height = 30
 
     minutes = script.get("duration_minutes")
-    sheet.merge_cells("A2:C2")
+    sheet.merge_cells(f"A2:{last}2")
     sheet["A2"] = f"Thời lượng dự kiến: {minutes} phút" if minutes else "Thời lượng dự kiến:  phút"
     sheet["A2"].font = Font(name=_FONT, size=12, bold=True, color="FF333333")
     sheet["A2"].alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[2].height = 24.75
     sheet.row_dimensions[3].height = 9.75
 
-    for column, heading in zip("ABC", ("PHÂN CẢNH", "LỜI THOẠI", "LƯU Ý DỰNG")):
+    for column, heading in zip(columns, ("PHÂN CẢNH", "LỜI THOẠI", "LƯU Ý DỰNG", "LỜI THOẠI (ENGLISH)")):
         cell = sheet[f"{column}4"]
         cell.value = heading
         cell.font = Font(name=_FONT, size=11, bold=True, color="FFFFFFFF")
@@ -88,14 +93,15 @@ def _fill_sheet(sheet, script: Dict[str, Any]) -> None:
         cell.border = border
     sheet.row_dimensions[4].height = 22
 
-    rows: List[Dict[str, Any]] = [row for row in (script.get("rows") or []) if isinstance(row, dict)]
     for offset, row in enumerate(rows):
         index = 5 + offset
         values = (str(row.get("scene") or ""), str(row.get("script") or ""), str(row.get("note") or ""))
-        for column, value in zip("ABC", values):
+        if with_english:
+            values += (str(row.get("en") or ""),)
+        for column, value in zip(columns, values):
             cell = sheet[f"{column}{index}"]
             cell.value = value or None
             cell.font = Font(name=_FONT, size=11, bold=(column == "A"))
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             cell.border = border
-        sheet.row_dimensions[index].height = _row_height(values[1])
+        sheet.row_dimensions[index].height = max(_row_height(values[1]), _row_height(values[3]) if with_english else 0)
