@@ -33,12 +33,32 @@ def sheet_name(title: str) -> str:
 
 def build_workbook(script: Dict[str, Any]) -> bytes:
     """.xlsx bytes for {"title", "sheet", "duration_minutes", "rows": [{"scene","script","note"}]}."""
+    return build_workbook_of([script])
+
+
+def build_workbook_of(scripts: List[Dict[str, Any]]) -> bytes:
+    """One workbook with a sheet per script, the way a chapter's videos are kept together."""
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = sheet_name(script.get("sheet") or script.get("title") or "Kịch bản")
+    workbook.remove(workbook.active)
+    used: set = set()
+    for script in scripts:
+        base = sheet_name(script.get("sheet") or script.get("title") or "Kịch bản")
+        name, counter = base, 2
+        while name.lower() in used:     # Excel refuses two sheets with one name
+            suffix = f" ({counter})"
+            name, counter = base[: 31 - len(suffix)] + suffix, counter + 1
+        used.add(name.lower())
+        _fill_sheet(workbook.create_sheet(title=name), script)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _fill_sheet(sheet, script: Dict[str, Any]) -> None:
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
     for column, width in _WIDTHS.items():
         sheet.column_dimensions[column].width = width
 
@@ -79,7 +99,3 @@ def build_workbook(script: Dict[str, Any]) -> bytes:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             cell.border = border
         sheet.row_dimensions[index].height = _row_height(values[1])
-
-    buffer = io.BytesIO()
-    workbook.save(buffer)
-    return buffer.getvalue()

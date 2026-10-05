@@ -41,11 +41,16 @@ export const lectureScriptService = {
     throw new Error('Quá thời gian chờ. Hãy thử lại.');
   },
 
-  async exportXlsx({ title, sheet, durationMinutes, rows }) {
+  /** One workbook with a sheet per script: [{title, sheet, durationMinutes, rows}]. */
+  async exportXlsx(sheets) {
     const response = await apiClient.post(
       '/document/lecture-script/export',
-      { title, sheet, duration_minutes: durationMinutes, rows },
-      { responseType: 'blob', timeout: 60000 },
+      {
+        sheets: sheets.map((item) => ({
+          title: item.title, sheet: item.sheet, duration_minutes: item.durationMinutes, rows: item.rows,
+        })),
+      },
+      { responseType: 'blob', timeout: 90000 },
     );
     return response.data;
   },

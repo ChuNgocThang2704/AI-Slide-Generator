@@ -41,3 +41,11 @@ export function firstShownNumber(rows) {
 export const safeFileName = (title) => (
   `Kịch bản dựng_${String(title || 'bài giảng').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)}.xlsx`
 );
+
+/** "C2 Video 4.pptx" -> "C2 Video 4": the default sheet name of a file (Excel allows 31 characters). */
+export const sheetNameFromFile = (fileName) => (
+  String(fileName || '').replace(/\.(pptx|pdf)$/i, '').replace(/[[\]:*?/\\]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31) || 'Kịch bản'
+);
+
+/** File order as a person reads it: "Video 4" before "Video 11". */
+export const byFileName = (a, b) => String(a).localeCompare(String(b), 'vi', { numeric: true, sensitivity: 'base' });
