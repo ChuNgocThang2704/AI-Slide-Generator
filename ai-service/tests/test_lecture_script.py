@@ -6,7 +6,7 @@ import unittest
 from services.lecture_script import (
     NOTE_PRESENTER, SCENE_INTRO, SCENE_OUTRO, assemble_rows, estimated_minutes, has_cover, tidy_script, write_script,
 )
-from services.lecture_script_xlsx import build_workbook, sheet_name
+from services.lecture_script_xlsx import build_workbook, build_workbook_of, sheet_name
 
 LONG = "Mời các em quan sát nội dung này và ghi nhớ ý chính của phần học hôm nay nhé."
 
@@ -121,6 +121,22 @@ class LectureScriptWorkbookTests(unittest.TestCase):
         self.assertEqual(sheet["B5"].font.name, "Times New Roman")
         self.assertTrue(sheet["B5"].alignment.wrap_text)
         self.assertEqual({str(cells) for cells in sheet.merged_cells.ranges}, {"A1:C1", "A2:C2"})
+
+    def test_several_scripts_share_one_workbook_with_a_sheet_each(self):
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            self.skipTest("openpyxl is not installed")
+        row = [{"scene": "Slide 2", "script": "Nội dung.", "note": ""}]
+        data = build_workbook_of([
+            {"title": "Video 4: A", "sheet": "Video 4", "duration_minutes": 8, "rows": row},
+            {"title": "Video 5: B", "sheet": "Video 5", "duration_minutes": 7, "rows": row},
+            {"title": "Trùng tên", "sheet": "video 4", "duration_minutes": 1, "rows": row},
+        ])
+        workbook = load_workbook(io.BytesIO(data))
+        self.assertEqual(workbook.sheetnames, ["Video 4", "Video 5", "video 4 (2)"])
+        self.assertEqual(workbook["Video 5"]["A1"].value, "Video 5: B")
+        self.assertEqual(workbook["Video 5"]["A2"].value, "Thời lượng dự kiến: 7 phút")
 
     def test_sheet_name_is_legal_in_excel(self):
         self.assertEqual(sheet_name("Video 4: A/B [x]"), "Video 4  A B  x")

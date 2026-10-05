@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -16,7 +15,7 @@ from pydantic import BaseModel, Field
 
 import routes.api as core
 from services.lecture_script import MAX_SLIDES, estimated_minutes, read_deck, tidy_script, word_count, write_script
-from services.lecture_script_xlsx import build_workbook
+from services.lecture_script_xlsx import build_workbook_of
 
 router = APIRouter(prefix="/api/lecture-script")
 
@@ -38,11 +37,16 @@ class ReviseRequest(BaseModel):
     filename: str = ""
 
 
-class ExportRequest(BaseModel):
+class ExportSheet(BaseModel):
     title: str = ""
     sheet: str = ""
     duration_minutes: Optional[int] = None
     rows: List[ScriptRow] = Field(default_factory=list)
+
+
+class ExportRequest(ExportSheet):
+    # Several scripts in one workbook, a sheet each; when empty the request itself is the one sheet.
+    sheets: List[ExportSheet] = Field(default_factory=list)
 
 
 def _start(task_id: str, slides: List[Dict[str, Any]], prompt: str, filename: str, previous_rows=None) -> None:
@@ -112,25 +116,31 @@ async def revise(request: ReviseRequest):
     return {"task_id": task_id, "slide_count": len(slides)}
 
 
-@router.post("/export")
-async def export(request: ExportRequest):
-    """The script the user approved, as an .xlsx in the layout of a production script."""
+def _sheet_payload(sheet: ExportSheet) -> Optional[Dict[str, Any]]:
     rows = [
         {"scene": row.scene.strip()[:60], "script": tidy_script(row.script), "note": row.note.strip()[:200]}
-        for row in request.rows if row.scene.strip() or row.script.strip()
+        for row in sheet.rows if row.scene.strip() or row.script.strip()
     ]
     if not rows:
+        return None
+    return {
+        "title": sheet.title.strip()[:200], "sheet": sheet.sheet.strip(),
+        "duration_minutes": sheet.duration_minutes or estimated_minutes(rows), "rows": rows,
+    }
+
+
+@router.post("/export")
+async def export(request: ExportRequest):
+    """The scripts the user approved, as an .xlsx in the layout of a production script (a sheet each)."""
+    sheets = [payload for payload in (_sheet_payload(sheet) for sheet in (request.sheets or [request])[:40]) if payload]
+    if not sheets:
         raise HTTPException(status_code=400, detail="Kịch bản trống")
-    minutes = request.duration_minutes or estimated_minutes(rows)
-    data = await asyncio.to_thread(build_workbook, {
-        "title": request.title.strip()[:200], "sheet": request.sheet.strip(), "duration_minutes": minutes, "rows": rows,
-    })
-    name = quote((request.title.strip() or "Kich ban dung")[:80] + ".xlsx")
+    data = await asyncio.to_thread(build_workbook_of, sheets)
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{name}",
-            "X-Script-Words": str(sum(word_count(row["script"]) for row in rows)),
+            "Content-Disposition": "attachment; filename=\"kich-ban-dung.xlsx\"",
+            "X-Script-Words": str(sum(word_count(row["script"]) for sheet in sheets for row in sheet["rows"])),
         },
     )

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName } from '../src/utils/lectureScript.js';
+import {
+  byFileName, countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName, sheetNameFromFile,
+} from '../src/utils/lectureScript.js';
 
 const rows = () => [
   { kind: 'intro', scene: 'Lời mở đầu', slide: 1, script: 'Chào các em.', note: 'Hình ảnh GV' },
@@ -33,4 +35,12 @@ test('duration follows the word count at the speaking pace of the reference scri
 
 test('the file name drops characters Windows refuses', () => {
   assert.equal(safeFileName('Video 4: Mối đe dọa / Lỗ hổng?'), 'Kịch bản dựng_Video 4 Mối đe dọa Lỗ hổng.xlsx');
+});
+
+test('several files are ordered the way their numbers read, and each names its sheet', () => {
+  const names = ['C2 Video 11.pptx', 'C2 Video 4.pptx', 'C2 Video 10.pptx', 'C2 Video 5.pptx'];
+  assert.deepEqual([...names].sort(byFileName), ['C2 Video 4.pptx', 'C2 Video 5.pptx', 'C2 Video 10.pptx', 'C2 Video 11.pptx']);
+  assert.equal(sheetNameFromFile('C2 Video 4.pptx'), 'C2 Video 4');
+  assert.equal(sheetNameFromFile('Bài [1]: mở đầu/kết.PDF'), 'Bài 1 mở đầu kết');
+  assert.ok(sheetNameFromFile(`${'a'.repeat(60)}.pptx`).length <= 31);
 });
