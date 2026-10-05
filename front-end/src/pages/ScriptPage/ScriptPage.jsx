@@ -545,7 +545,7 @@ export default function ScriptPage() {
               <input type="checkbox" checked={lookAtFigures} onChange={(event) => setLookAtFigures(event.target.checked)} />
               <span>
                 <strong>AI xem hình trong slide để giảng đúng nội dung hình</strong>
-                <small>Sơ đồ, biểu đồ, ảnh chụp màn hình được mô tả rồi đưa vào lời thoại. Logo và ảnh lặp ở nhiều slide tự bị bỏ qua. Tốn thêm khoảng 3.500 token cho mỗi ảnh; bỏ tick nếu chỉ cần giảng theo chữ.</small>
+                <small>Chỉ sơ đồ, biểu đồ, bảng, ảnh chụp màn hình được mô tả rồi đưa vào lời thoại; ảnh nền, logo, biểu tượng trang trí tự bị bỏ qua. Tốn thêm khoảng 1.500 token mỗi ảnh nội dung; bỏ tick nếu chỉ cần giảng theo chữ.</small>
               </span>
             </label>
             <label className="sp-check">
