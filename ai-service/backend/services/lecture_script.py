@@ -135,7 +135,19 @@ def read_deck(data: bytes, filename: str) -> List[Dict[str, Any]]:
         raise ValueError("Không đọc được slide nào trong file")
     if len(slides) > MAX_SLIDES:
         raise ValueError(f"File có {len(slides)} slide, tối đa {MAX_SLIDES} slide cho một kịch bản")
+    # A deck saved as pictures (a scanned or image-only PDF) has nothing to read: writing a script
+    # for it would mean inventing the lecture.
+    if sum(1 for slide in slides if readable(slide)) < max(1, len(slides) // 3):
+        raise ValueError(
+            "File này gần như không có chữ đọc được (slide được lưu dưới dạng ảnh). "
+            "Hãy dùng file .pptx gốc hoặc PDF xuất trực tiếp từ PowerPoint."
+        )
     return slides
+
+
+def readable(slide: Dict[str, Any]) -> bool:
+    """Whether the slide carries enough words (on it or in its notes) to speak about."""
+    return len(f"{slide.get('text') or ''} {slide.get('notes') or ''}".split()) >= 4
 
 
 def has_cover(slides: List[Dict[str, Any]]) -> bool:
@@ -432,6 +444,8 @@ async def write_script(
         elif isinstance(row.get("slide"), int):
             previous_scripts[row["slide"]] = str(row["script"])
 
+    # A slide with no words is left for the user to write: nothing is made up for it.
+    body = [slide for slide in body if readable(slide) or previous_scripts.get(slide["number"])]
     batches = [body[start:start + _BATCH_SLIDES] for start in range(0, len(body), _BATCH_SLIDES)]
     done = 0
     gate = asyncio.Semaphore(_PARALLEL_BATCHES)
