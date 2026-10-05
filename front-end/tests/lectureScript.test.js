@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  byFileName, countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName, sheetNameFromFile,
+  byFileName, countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName, sheetNameFromFile, suggestedSetName,
 } from '../src/utils/lectureScript.js';
 
 const rows = () => [
@@ -43,4 +43,11 @@ test('several files are ordered the way their numbers read, and each names its s
   assert.equal(sheetNameFromFile('C2 Video 4.pptx'), 'C2 Video 4');
   assert.equal(sheetNameFromFile('Bài [1]: mở đầu/kết.PDF'), 'Bài 1 mở đầu kết');
   assert.ok(sheetNameFromFile(`${'a'.repeat(60)}.pptx`).length <= 31);
+});
+
+test('a set is named after what its files share', () => {
+  assert.equal(suggestedSetName([{ sheet: 'C2 Video 4' }, { sheet: 'C2 Video 5' }, { sheet: 'C2 Video 10' }]), 'C2 Video');
+  assert.equal(suggestedSetName([{ sheet: 'Bài A', title: 'Mở đầu' }, { sheet: 'Chương 3' }]), 'Mở đầu');
+  assert.equal(suggestedSetName([{ sheet: 'C1 Video 1', title: 'Tổng quan ATTT' }]), 'Tổng quan ATTT');
+  assert.equal(suggestedSetName([]), 'Bộ kịch bản');
 });

@@ -49,3 +49,20 @@ export const sheetNameFromFile = (fileName) => (
 
 /** File order as a person reads it: "Video 4" before "Video 11". */
 export const byFileName = (a, b) => String(a).localeCompare(String(b), 'vi', { numeric: true, sensitivity: 'base' });
+
+/**
+ * A name for a set of scripts from what its files share: "C2 Video 4", "C2 Video 5" -> "C2 Video";
+ * one file, or files with nothing in common, fall back to the first title.
+ */
+export function suggestedSetName(items) {
+  const names = (items || []).map((item) => String(item.sheet || '').trim()).filter(Boolean);
+  if (names.length > 1) {
+    let prefix = names[0];
+    for (const name of names.slice(1)) {
+      while (prefix && !name.toLowerCase().startsWith(prefix.toLowerCase())) prefix = prefix.slice(0, -1);
+    }
+    prefix = prefix.replace(/[\s\d._-]+$/, '').trim();
+    if (prefix.length >= 2) return prefix;
+  }
+  return String(items?.[0]?.title || names[0] || 'Bộ kịch bản').trim().slice(0, 200);
+}
