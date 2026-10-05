@@ -4,7 +4,7 @@ import json
 import unittest
 
 from services.lecture_script import (
-    _drop_template_pictures, describe_figures, read_pptx, shrink_image,
+    _drop_template_pictures, describe_figures, is_smooth_picture, read_pptx, shrink_image,
     translate_scripts,
     NOTE_PRESENTER, SCENE_INTRO, SCENE_OUTRO, assemble_rows, estimated_minutes, has_cover, tidy_script, write_script,
 )
@@ -113,15 +113,35 @@ class LectureScriptTests(unittest.TestCase):
 
 
 def _png(width=1600, height=1000, color=(200, 30, 30)):
+    """A picture with sharp edges (white boxes on `color`), the way a diagram has."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (width, height), color)
+    draw = ImageDraw.Draw(image)
+    for index in range(4):
+        left = 80 + 300 * index
+        draw.rectangle([left, 200, left + 160, 400], fill=(255, 255, 255))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _gradient_png():
     from PIL import Image
 
+    image = Image.new("RGB", (800, 500))
+    for x in range(800):
+        for y in range(0, 500, 50):
+            image.paste((230, 150 + x // 12, 180), (x, y, x + 1, y + 50))
     buffer = io.BytesIO()
-    Image.new("RGB", (width, height), color).save(buffer, format="PNG")
+    image.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
 class _Vision:
-    """Answers the figure calls; `answers` maps a slide title to the reply; records what it was sent."""
+    """Answers the figure calls the way the model does: JSON with one item per picture.
+
+    `answers` maps a slide title to the reply for its picture (an Exception makes the whole call fail)."""
 
     model_name = "gateway-model"
 
@@ -131,13 +151,19 @@ class _Vision:
 
     async def _llm_completion_plain_text(self, messages, **kwargs):
         content = messages[0]["content"]
-        self.sent.append({"kwargs": kwargs, "images": [part for part in content if part["type"] == "image_url"], "text": content[0]["text"]})
-        for title, reply in self.answers.items():
-            if f'"{title}"' in content[0]["text"]:
-                if isinstance(reply, Exception):
-                    raise reply
-                return reply
-        return "TRANG TRÍ"
+        labels = [part["text"] for part in content[1:] if part["type"] == "text"]
+        images = [part for part in content if part["type"] == "image_url"]
+        self.sent.append({"kwargs": kwargs, "images": images, "text": content[0]["text"], "labels": labels})
+        items = []
+        for number, label in enumerate(labels, start=1):
+            reply = "TRANG TRÍ"
+            for title, answer in self.answers.items():
+                if label.endswith(f": {title}"):
+                    if isinstance(answer, Exception):
+                        raise answer
+                    reply = answer
+            items.append({"k": number, "description": reply})
+        return json.dumps({"items": items})
 
 
 class FigureTests(unittest.TestCase):
@@ -168,19 +194,48 @@ class FigureTests(unittest.TestCase):
         self.assertLessEqual(max(shrunk.size), 768)
         self.assertIsNone(shrink_image(b"not an image"))
 
-    def test_described_figures_reach_the_slide_and_the_pictures_are_dropped(self):
+    def test_a_soft_backdrop_is_recognised_without_asking_the_model(self):
+        from PIL import Image
+
+        flat = io.BytesIO()
+        Image.new("RGB", (600, 400), (240, 200, 205)).save(flat, format="PNG")
+        self.assertTrue(is_smooth_picture(flat.getvalue()))
+        self.assertTrue(is_smooth_picture(_gradient_png()))
+        self.assertFalse(is_smooth_picture(_png()))
+        self.assertFalse(is_smooth_picture(b"not an image"))       # unknown: left to the model
+
+    def test_pictures_of_a_deck_travel_in_one_call_and_decorations_are_left_out(self):
         slides = _slides(4)
         for index, slide in enumerate(slides[1:]):
             slide["images"] = [_png(color=(40 * index, 30, 30))]      # each its own picture, none a repeated logo
-        vision = _Vision({"Mục 2": "Sơ đồ ba khối nối nhau bằng mũi tên: mối đe dọa khai thác lỗ hổng dẫn tới tấn công.", "Mục 3": "TRANG TRÍ", "Mục 4": RuntimeError("model down")})
+        slides[1]["images"].append(_gradient_png())                    # a soft backdrop: never sent
+        vision = _Vision({"Mục 2": "Sơ đồ ba khối nối nhau bằng mũi tên: mối đe dọa khai thác lỗ hổng dẫn tới tấn công.", "Mục 3": "TRANG TRÍ"})
         described = asyncio.run(describe_figures(vision, slides, True))
-        self.assertEqual(described, 1)
+        self.assertEqual(described, 1)          # Mục 3 and Mục 4 are decorations to the model
+        self.assertEqual(len(vision.sent), 1)                           # one call for all of it
+        self.assertEqual(len(vision.sent[0]["images"]), 3)              # the backdrop was not sent
         self.assertIn("mối đe dọa khai thác lỗ hổng", slides[1]["figure"])
-        self.assertNotIn("figure", slides[2])        # a decoration
-        self.assertNotIn("figure", slides[3])        # a failed call: written from the text alone
+        self.assertNotIn("figure", slides[2])                           # TRANG TRÍ: nothing to say about it
         self.assertTrue(all("images" not in slide for slide in slides))
         self.assertEqual(vision.sent[0]["kwargs"]["model_override"], "gateway-model")   # never the self-hosted primary host
         self.assertTrue(vision.sent[0]["images"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+
+    def test_a_failed_call_leaves_the_slides_to_be_written_from_their_text(self):
+        slides = _slides(3)
+        for index, slide in enumerate(slides[1:]):
+            slide["images"] = [_png(color=(40 * index, 30, 30))]
+        vision = _Vision({"Mục 2": RuntimeError("model down")})
+        self.assertEqual(asyncio.run(describe_figures(vision, slides, True)), 0)
+        self.assertTrue(all("figure" not in slide and "images" not in slide for slide in slides))
+
+    def test_many_pictures_are_split_into_calls_of_a_few(self):
+        slides = _slides(1) + [
+            {"number": number, "title": f"Mục {number}", "text": "chữ", "notes": "", "has_figure": True, "images": [_png(color=(10 * number, 20, 30))]}
+            for number in range(2, 16)
+        ]
+        vision = _Vision({})
+        asyncio.run(describe_figures(vision, slides, True))
+        self.assertEqual([len(call["images"]) for call in vision.sent], [6, 6, 2])
 
     def test_a_powerpoint_chart_is_read_as_its_data(self):
         from pptx import Presentation
@@ -222,7 +277,7 @@ class FigureTests(unittest.TestCase):
             slide["images"] = [_png(color=(40 * index, 30, 30))]
         vision = _Vision({})
         asyncio.run(describe_figures(vision, slides, True))
-        self.assertEqual(len(vision.sent), 2)
+        self.assertEqual(len(vision.sent[0]["images"]), 2)
 
     def test_the_description_is_given_to_the_script_writer(self):
         slides = _slides(3)

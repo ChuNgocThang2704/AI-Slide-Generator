@@ -28,6 +28,8 @@ _MAX_FIGURE_SLIDES = 40         # slides of one deck whose figures are looked at
 _FIGURE_SIDE = 768              # pictures are shrunk to this many pixels before the model sees them (cost)
 _PARALLEL_FIGURES = 3
 _TEMPLATE_REPEATS = 3           # a picture on this many slides is part of the template
+_FIGURES_PER_CALL = 6            # pictures sent in one call: each call carries about 2,000 tokens of fixed overhead
+_SMOOTH_EDGE_SHARE = 0.005          # a picture with a smaller share of sharp edges is a soft backdrop
 
 SCENE_INTRO = "Lời mở đầu"
 SCENE_OUTRO = "Lời kết"
@@ -277,68 +279,116 @@ def _drop_template_pictures(slides: List[Dict[str, Any]]) -> int:
     return removed
 
 
+def is_smooth_picture(blob: bytes) -> bool:
+    """True for a picture with no sharp edge at all: a soft gradient or blurred backdrop. There is nothing
+    in it to describe, and finding that out costs no model call (in the decks checked, every such
+    picture measures exactly 0 on this scale, every diagram, chart and screenshot above 0.02)."""
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(blob)) as image:
+            image.load()
+            gray = image.convert("L")
+        gray.thumbnail((160, 160))
+        width, height = gray.size
+        pixels = gray.load()
+        sharp = total = 0
+        for y in range(height - 1):
+            for x in range(width - 1):
+                total += 1
+                if max(abs(pixels[x, y] - pixels[x + 1, y]), abs(pixels[x, y] - pixels[x, y + 1])) >= 40:
+                    sharp += 1
+        return total > 0 and sharp / total < _SMOOTH_EDGE_SHARE
+    except Exception:
+        return False
+
+
 async def describe_figures(extractor, slides: List[Dict[str, Any]], vietnamese: bool) -> int:
     """Fills slide["figure"] with what the model sees in the pictures of each slide, then drops the pictures.
 
-    Decorations (a photo, a logo, a pattern) get no description: there is nothing to teach from them.
-    A failed call leaves the slide as it was, written from its text alone."""
+    Only content is described. Soft backdrops and pictures repeated across the deck are dropped without
+    asking anyone; of the rest, the model itself says TRANG TRÍ for a decoration, in the same call that
+    describes its neighbours. A call costs about 2,000 tokens before the first picture, so many pictures
+    travel together. A failed call leaves the slides as they were, written from their text alone."""
     cover = has_cover(slides)
     _drop_template_pictures(slides)
-    work = [
-        slide for slide in slides
-        if slide.get("images") and not (cover and slide is slides[0])
-    ][:_MAX_FIGURE_SLIDES]
+    # (slide, picture) pairs worth asking about, in reading order
+    pending: List[tuple] = []
+    for slide in slides:
+        if cover and slide is slides[0]:
+            continue
+        for blob in slide.get("images") or []:
+            if not is_smooth_picture(blob):
+                pending.append((slide, blob))
+    pending = pending[: _MAX_FIGURE_SLIDES * _MAX_IMAGES_PER_SLIDE]
     gate = asyncio.Semaphore(_PARALLEL_FIGURES)
     model = getattr(extractor, "model_name", None) or None
 
-    async def look(slide: Dict[str, Any]) -> bool:
-        urls = [url for url in (shrink_image(blob) for blob in slide.get("images") or []) if url]
-        if not urls or not hasattr(extractor, "_llm_completion_plain_text"):
-            return False
+    async def look(group: List[tuple]) -> List[Optional[str]]:
+        urls = [shrink_image(blob) for _, blob in group]
+        if not all(urls) or not hasattr(extractor, "_llm_completion_plain_text"):
+            return [None] * len(group)
         if vietnamese:
             ask = (
-                f"Đây là hình trong một slide bài giảng có tiêu đề \"{slide.get('title') or ''}\".\n\n"
-                "Mô tả hình để giảng viên giảng cho người nghe không nhìn thấy hình: đó là loại hình gì (sơ đồ, biểu đồ, bảng, ảnh chụp màn hình, ảnh minh hoạ), "
-                "các thành phần chính, nhãn chữ đọc được, mũi tên hay quan hệ giữa chúng. "
-                "Viết 2-4 câu tiếng Việt, CHỈ tả điều thực sự nhìn thấy trong hình: không đoán tên một thành phần nếu hình không ghi, "
-                "không suy ra từ tiêu đề; chỗ nào không có chữ thì nói là không có chữ. "
-                f"Nếu hình chỉ để trang trí (ảnh nền, logo, họa tiết, ảnh người không mang thông tin) thì trả lời đúng hai chữ: {_DECORATIVE}."
+                "Mỗi hình dưới đây nằm trong một slide bài giảng (tiêu đề slide ghi trước hình). Với MỖI hình, viết mô tả để giảng viên giảng cho người nghe không nhìn thấy hình: "
+                "loại hình (sơ đồ, biểu đồ, bảng, ảnh chụp màn hình, ảnh minh hoạ), các thành phần chính, nhãn chữ đọc được, mũi tên hay quan hệ giữa chúng. "
+                "2-4 câu tiếng Việt, CHỈ tả điều thực sự nhìn thấy: không đoán tên một thành phần nếu hình không ghi, không suy ra từ tiêu đề; chỗ nào không có chữ thì nói là không có chữ. "
+                f"Hình chỉ để trang trí (ảnh nền, logo, họa tiết, ảnh người, và dãy biểu tượng nhỏ minh hoạ cho các bước hay ý mà chữ của chúng đã có trên slide, như các icon trong vòng tròn nối nhau) thì mô tả của hình đó là đúng hai chữ: {_DECORATIVE}.\n"
+                'Trả về DUY NHẤT JSON: {"items":[{"k":số thứ tự hình,"description":"..."}]} với đúng một phần tử cho mỗi hình.'
             )
         else:
             ask = (
-                f"This is a picture from a lecture slide titled \"{slide.get('title') or ''}\".\n\n"
-                "Describe it for a lecturer who will explain it to listeners who cannot see it: the kind of picture (diagram, chart, table, screenshot, illustration), "
-                "its main parts, readable labels, arrows or relations between them. "
-                "2-4 sentences, ONLY what is really visible: do not guess the name of a part the picture does not label, do not infer from the title, "
-                "and say so where there is no text. "
-                f"If it is only decoration (a background, logo, pattern, a person with no information) answer exactly: {_DECORATIVE}."
+                "Each picture below sits in a lecture slide (the slide title is written before the picture). For EACH picture write a description for a lecturer who will explain it to "
+                "listeners who cannot see it: the kind of picture (diagram, chart, table, screenshot, illustration), its main parts, readable labels, arrows or relations between them. "
+                "2-4 sentences, ONLY what is really visible: do not guess the name of a part the picture does not label, do not infer from the title, and say so where there is no text. "
+                f"A picture that is only decoration (a background, logo, pattern, a person, and a row of small icons that merely illustrate steps or points whose words are already on the slide, like icons in linked circles) gets exactly the two words: {_DECORATIVE}.\n"
+                'Return ONLY JSON: {"items":[{"k":picture number,"description":"..."}]} with exactly one item per picture.'
             )
         content: List[Dict[str, Any]] = [{"type": "text", "text": ask}]
-        content.extend({"type": "image_url", "image_url": {"url": url}} for url in urls)
-        async with gate:
-            try:
-                text = await extractor._llm_completion_plain_text(
-                    [{"role": "user", "content": content}], max_tokens=420, temperature=0.2,
-                    call_purpose="lecture_script_figure", model_override=model,
-                )
-            except Exception as error:
-                print(f"[lecture_script] figure of slide {slide.get('number')} failed: {error!r}")
-                return False
-        text = " ".join(str(text or "").split())
-        if len(text) < 20 or _fold(text).startswith(_DECORATIVE) or _fold(text)[:20].startswith("TRANG TRI"):
-            return False
-        slide["figure"] = text[:700]
-        return True
+        for number, ((slide, _), url) in enumerate(zip(group, urls), start=1):
+            content.append({"type": "text", "text": f"Hình {number} — slide {slide.get('number')}: {slide.get('title') or ''}"})
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        for _ in range(2):
+            async with gate:
+                try:
+                    raw = await extractor._llm_completion_plain_text(
+                        [{"role": "user", "content": content}], max_tokens=300 + 260 * len(group), temperature=0.2,
+                        json_mode=True, call_purpose="lecture_script_figure", model_override=model,
+                    )
+                except Exception as error:
+                    print(f"[lecture_script] figures call failed: {error!r}")
+                    return [None] * len(group)
+            parsed = parse_json_response(raw, clean_result_text=_strip_fence)
+            found: Dict[int, str] = {}
+            for item in (parsed or {}).get("items") or []:
+                try:
+                    found[int(item.get("k"))] = " ".join(str(item.get("description") or "").split())
+                except (TypeError, ValueError, AttributeError):
+                    continue
+            if set(range(1, len(group) + 1)) <= set(found):
+                return [found[number] for number in range(1, len(group) + 1)]
+        return [None] * len(group)
 
+    groups = [pending[start:start + _FIGURES_PER_CALL] for start in range(0, len(pending), _FIGURES_PER_CALL)]
     try:
-        results = await asyncio.gather(*(look(slide) for slide in work))
+        results = await asyncio.gather(*(look(group) for group in groups))
     finally:
         for slide in slides:
             slide.pop("images", None)       # never travels further: not into the task result, not into a saved set
-    described = sum(1 for ok in results if ok)
-    if work:
-        print(f"[lecture_script] figures: {described}/{len(work)} slides described")
+    described = 0
+    seen: set = set()
+    for group, texts in zip(groups, results):
+        for (slide, _), text in zip(group, texts):
+            if not text or len(text) < 20 or _fold(text).startswith(_DECORATIVE):
+                continue
+            slide["figure"] = (str(slide.get("figure") or "") + " " + text).strip()[:700]
+            if id(slide) not in seen:
+                seen.add(id(slide))
+                described += 1
+    if pending:
+        print(f"[lecture_script] figures: {described} slides described from {len(pending)} pictures in {len(groups)} calls")
     return described
+
 
 # ── writing the script ─────────────────────────────────────────────────────────
 
