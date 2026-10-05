@@ -410,7 +410,7 @@ export default function ScriptPage() {
   const removeRow = (index) => setRows((current) => current.filter((_, position) => position !== index));
   const addRowAfter = (index) => setRows((current) => [
     ...current.slice(0, index + 1),
-    { scene: 'Lời tiếp theo', slide: null, kind: 'extra', script: '', note: 'Hình ảnh GV' },
+    { scene: 'Lời tiếp theo', slide: null, kind: 'extra', script: '', note: '' },
     ...current.slice(index + 1),
   ]);
 
