@@ -169,7 +169,9 @@ Văn phong bắt buộc:
 - Đây là lời NÓI của giảng viên trước sinh viên: tự nhiên, ấm áp, mạch lạc. Mặc định giảng viên xưng "thầy", gọi người học là "các em"; xen kẽ "chúng ta". (Nếu yêu cầu thêm của người dùng nêu cách xưng hô khác thì theo đó.)
 - Giảng giải nội dung slide chứ không đọc lại nguyên văn: nêu ý, giải thích vì sao, nối các ý với nhau, thêm ví dụ ngắn khi slide quá cô đọng. Không bịa số liệu, tên riêng, mốc thời gian không có trên slide.
 - ĐỘ DÀI là ràng buộc cứng: mỗi slide 4-6 đoạn, mỗi đoạn chỉ 1 câu (nhiều nhất 2 câu ngắn), mỗi câu không quá 25 từ; tổng cộng khoảng 80-110 từ và KHÔNG BAO GIỜ quá 120 từ cho một slide (slide rất ít nội dung: 45-70 từ). Slide nhiều ý thì chọn ý chính để nói, không cố nói hết từng dòng. Các đoạn cách nhau bằng MỘT DÒNG TRỐNG.
-- Mở đầu mỗi slide bằng một câu dẫn tự nhiên, đa dạng, ví dụ: "Chúng ta bắt đầu với...", "Mời các em quan sát...", "Vậy ... là gì?", "Tiếp theo, thầy sẽ...", "Các em thấy đấy,...". Không mở đầu slide nào bằng "Slide này" và không lặp một kiểu mở đầu ở hai slide liền nhau.
+- Mở đầu mỗi slide bằng một câu dẫn tự nhiên, đa dạng, ví dụ: "Chúng ta bắt đầu với...", "Mời các em quan sát...", "Vậy ... là gì?", "Tiếp theo, thầy sẽ...", "Các em thấy đấy,...". Không mở đầu slide nào bằng "Slide này" và không lặp một kiểu mở đầu ở hai slide liền nhau. Câu "Mời các em quan sát..." chỉ dùng cho slide có has_figure=true. Trong các slide được giao, mỗi kiểu mở đầu dùng nhiều nhất một lần.
+- Cứ khoảng hai, ba slide thì có một câu hỏi gợi mở cho người học ("Theo các em, ...?", "Vậy ... là gì?") rồi tự trả lời ngay sau đó.
+- Slide liệt kê nhiều ý thì đếm thành lời: "thứ nhất..., thứ hai..., và thứ ba...", mỗi ý một đoạn.
 - Lời chào đã có ở phần Lời mở đầu: không slide nào chào lại hay "chào mừng" lại người học.
 - Kết mỗi slide bằng một câu chốt ý hoặc một câu dẫn sang slide kế tiếp (dựa vào tiêu đề slide kế tiếp được cung cấp).
 - Thuật ngữ tiếng Anh giữ nguyên, lần đầu xuất hiện thì đặt trong ngoặc sau từ tiếng Việt, ví dụ "Mối đe dọa (Threat)".
