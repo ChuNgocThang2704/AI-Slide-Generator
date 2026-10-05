@@ -1,0 +1,52 @@
+import apiClient from './apiClient';
+
+const unwrap = (response) => {
+  const body = response?.data;
+  if (!body) throw new Error('Không nhận được phản hồi từ máy chủ');
+  if (body.code && body.code !== 200) throw new Error(body.message || 'Yêu cầu thất bại');
+  return typeof body.data !== 'undefined' ? body.data : body;
+};
+
+const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+// Lecture script for an uploaded deck. Nothing is stored on the server: the page keeps the
+// script and the slide texts it was written from, and sends them back to rewrite or export.
+export const lectureScriptService = {
+  async start(file, prompt) {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('prompt', prompt || '');
+    return unwrap(await apiClient.post('/document/lecture-script', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    }));
+  },
+
+  async revise({ slides, rows, prompt, filename }) {
+    return unwrap(await apiClient.post('/document/lecture-script/revise', { slides, rows, prompt, filename }, { timeout: 60000 }));
+  },
+
+  /** Resolves with {script, slides} once the task is done; `onProgress` gets 0-100 on the way. */
+  async waitFor(taskId, onProgress, isCancelled = () => false) {
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      if (isCancelled()) throw new Error('cancelled');
+      const state = unwrap(await apiClient.get(`/document/lecture-script/status/${taskId}`, { timeout: 30000 }));
+      if (state.status === 'completed') return state.result;
+      if (state.status === 'error' || state.status === 'cancelled' || state.status === 'not_found') {
+        throw new Error(state.result?.message || 'Không tạo được kịch bản. Hãy thử lại.');
+      }
+      onProgress?.(Number(state.progress) || 0);
+      await wait(1500);
+    }
+    throw new Error('Quá thời gian chờ. Hãy thử lại.');
+  },
+
+  async exportXlsx({ title, sheet, durationMinutes, rows }) {
+    const response = await apiClient.post(
+      '/document/lecture-script/export',
+      { title, sheet, duration_minutes: durationMinutes, rows },
+      { responseType: 'blob', timeout: 60000 },
+    );
+    return response.data;
+  },
+};

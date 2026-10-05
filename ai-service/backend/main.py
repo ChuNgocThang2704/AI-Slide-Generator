@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from routes.api import initialize_api_services, router as api_router
+from routes.lecture_script import router as lecture_script_router
 
 
 @asynccontextmanager
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
     app.mount("/outputs", StaticFiles(directory=str(output_dir)), name="outputs")
 
     app.include_router(api_router)
+    app.include_router(lecture_script_router)
     return app
 
 
