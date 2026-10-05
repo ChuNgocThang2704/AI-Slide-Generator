@@ -76,13 +76,11 @@ export default function ScriptPage() {
   const [picked, setPicked] = useState([]);                 // files chosen, not yet started
   const [prompt, setPrompt] = useState('');
   const [dragging, setDragging] = useState(false);
-  const [autoEnglish, setAutoEnglish] = useState(true);      // translate each script into English as soon as it is written
   const [firstVideo, setFirstVideo] = useState(false);       // the first file opens the course: welcome, lecturer, course
   const [items, setItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [revisePrompt, setRevisePrompt] = useState('');
   const [exporting, setExporting] = useState(false);
-  const [withEnglish, setWithEnglish] = useState(true);       // the English column goes into the Excel when there is English
   // Saved sets: the list, and the one open in the workspace.
   const [sets, setSets] = useState([]);
   const [setsLoading, setSetsLoading] = useState(true);
@@ -97,7 +95,6 @@ export default function ScriptPage() {
   const sessionRef = useRef(0);         // bumped by "start over": answers of an older run are dropped
   const itemsRef = useRef([]);          // the latest items, for work that outlives a render
   const filesRef = useRef(new Map());   // id -> File, kept in memory so a failed file can be retried
-  const autoEnglishRef = useRef(true);
   const firstRef = useRef(new Set());   // ids of the file that opens the course
   const queueRef = useRef([]);          // ids waiting for a free slot
   const runningRef = useRef(0);
@@ -107,7 +104,6 @@ export default function ScriptPage() {
 
   useEffect(() => { promptRef.current = prompt; }, [prompt]);
   useEffect(() => { itemsRef.current = items; }, [items]);
-  useEffect(() => { autoEnglishRef.current = autoEnglish; }, [autoEnglish]);
   useEffect(() => () => { sessionRef.current += 1; }, []);
 
   const started = items.length > 0 || opening;
@@ -257,7 +253,7 @@ export default function ScriptPage() {
             missing: result.script.missing || [],
           });
           // The English subtitle lines follow right behind the Vietnamese script.
-          if (autoEnglishRef.current) translateItem(id, { rows: written, sheet });
+          translateItem(id, { rows: written, sheet });
         } catch (error) {
           if (sessionRef.current === session && error.message !== 'cancelled') {
             patchItem(id, { status: 'error', error: error.message || 'Không tạo được kịch bản' });
@@ -452,7 +448,7 @@ export default function ScriptPage() {
     setExporting(true);
     try {
       const blob = await lectureScriptService.exportXlsx(list.map((item) => ({
-        title: item.title, sheet: item.sheet, durationMinutes: estimatedMinutes(item.rows), rows: item.rows, withEnglish,
+        title: item.title, sheet: item.sheet, durationMinutes: estimatedMinutes(item.rows), rows: item.rows, withEnglish: true,
       })));
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -545,14 +541,7 @@ export default function ScriptPage() {
                 </button>
               ))}
             </div>
-            <label className="sp-check">
-              <input type="checkbox" checked={autoEnglish} onChange={(event) => setAutoEnglish(event.target.checked)} />
-              <span>
-                <strong>Dịch sang tiếng Anh</strong>
-                <small>Làm phụ đề, nằm cạnh lời thoại tiếng Việt.</small>
-              </span>
-            </label>
-            <label className="sp-check">
+            <label className="sp-switch">
               <input type="checkbox" checked={firstVideo} onChange={(event) => setFirstVideo(event.target.checked)} />
               <span>
                 <strong>File đầu là video mở đầu học phần</strong>
@@ -806,17 +795,11 @@ export default function ScriptPage() {
                   {!working && emptyRows > 0 && <><AlertTriangle size={14} /> Còn {emptyRows} phân cảnh chưa có lời thoại. </>}
                   {!working && emptyRows === 0 && (done.length > 1
                     ? `${done.length} sheet trong một file Excel.`
-                    : (anyEnglish && withEnglish
+                    : (anyEnglish
                       ? 'Xuất Excel khi đã kiểm tra xong.'
                       : 'Xuất Excel khi đã kiểm tra xong.'))}
                 </span>
                 <div className="sp-footer-actions">
-                  {anyEnglish && (
-                    <label className="sp-footer-check">
-                      <input type="checkbox" checked={withEnglish} onChange={(event) => setWithEnglish(event.target.checked)} />
-                      <span>Kèm cột tiếng Anh</span>
-                    </label>
-                  )}
                   {done.length > 1 && active?.status === 'done' && (
                     <button type="button" className="btn btn-ghost" disabled={exporting} onClick={() => exportXlsx([active])}>Chỉ sheet này</button>
                   )}
