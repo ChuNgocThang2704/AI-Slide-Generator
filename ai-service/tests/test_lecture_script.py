@@ -30,6 +30,9 @@ class _Extractor:
 
     async def _llm_completion_plain_text(self, messages, **kwargs):
         self.calls.append(kwargs.get("call_purpose"))
+        if kwargs.get("call_purpose") == "lecture_script_frame":
+            self.frame_prompt = messages[0]["content"]
+            self.frame_payload = json.loads(messages[1]["content"])
         payload = json.loads(messages[1]["content"])
         if kwargs.get("call_purpose") == "lecture_script_frame":
             return json.dumps({"title": "Mối đe dọa và Lỗ hổng", "intro": "Chào các em.\n\n" + LONG, "outro": LONG})
@@ -68,6 +71,16 @@ class LectureScriptTests(unittest.TestCase):
         self.assertEqual(script["missing"], [])
         self.assertTrue(script["rows"][1]["script"].startswith("Slide 2 mới."))
         self.assertNotIn("**", script["rows"][1]["script"])
+
+    def test_only_the_first_video_introduces_the_lecturer_and_the_course(self):
+        later = _Extractor()
+        asyncio.run(write_script(later, _slides(4)))
+        self.assertIn("không giới thiệu tên giảng viên", later.frame_prompt)
+        self.assertNotIn("cover_slide_text", later.frame_payload)
+        first = _Extractor()
+        asyncio.run(write_script(first, _slides(4), first_video=True))
+        self.assertIn("giới thiệu giảng viên và học phần", first.frame_prompt)
+        self.assertIn("cover_slide_text", first.frame_payload)
 
     def test_a_slide_the_model_skips_is_reported_and_left_for_the_user(self):
         script = asyncio.run(write_script(_Extractor(skip={3}), _slides(5)))

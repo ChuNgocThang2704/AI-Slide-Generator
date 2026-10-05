@@ -46,7 +46,7 @@ public class LectureScriptService {
         this.restTemplate.getMessageConverters().add(0, new StringHttpMessageConverter(StandardCharsets.UTF_8));
     }
 
-    public JsonNode start(MultipartFile file, String prompt) {
+    public JsonNode start(MultipartFile file, String prompt, boolean firstVideo) {
         if (file == null || file.isEmpty()) {
             throw new AppException(ErrorCode.INVALID_KEY, "Hãy chọn file slide (.pptx hoặc .pdf)");
         }
@@ -67,6 +67,7 @@ public class LectureScriptService {
             }
         });
         body.add("prompt", prompt == null ? "" : prompt);
+        body.add("first_video", firstVideo ? "true" : "false");
         return call("/api/lecture-script/generate", new HttpEntity<>(body, headers));
     }
 

@@ -212,3 +212,8 @@
   .sp-footer span { justify-content: center; }
   .sp-footer .btn { justify-content: center; }
 }
+
+.sp-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; margin-top: 4px; }
+.sp-check input { margin-top: 3px; accent-color: #6c63ff; flex: none; }
+.sp-check span { display: flex; flex-direction: column; gap: 2px; font-size: 0.88rem; color: rgba(255, 255, 255, 0.85); }
+.sp-check small { color: rgba(255, 255, 255, 0.45); font-size: 0.78rem; line-height: 1.45; }
