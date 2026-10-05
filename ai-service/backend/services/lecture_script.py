@@ -22,6 +22,11 @@ _PARALLEL_BATCHES = 3
 _SLIDE_TEXT_CHARS = 1400
 _COVER_WORDS = 40               # a first slide with no more words than this is the title slide
 _FIGURE_AREA = 0.15             # a picture this large (share of the slide) is a figure, not a logo or an icon
+_BACKGROUND_AREA = 0.85         # ... and one this large is the slide's background, not something to talk about
+_MAX_IMAGES_PER_SLIDE = 2       # the largest pictures of a slide are looked at
+_MAX_FIGURE_SLIDES = 40         # slides of one deck whose figures are looked at
+_FIGURE_SIDE = 768              # pictures are shrunk to this many pixels before the model sees them (cost)
+_PARALLEL_FIGURES = 3
 
 SCENE_INTRO = "Lời mở đầu"
 SCENE_OUTRO = "Lời kết"
@@ -68,6 +73,26 @@ def _figure_count(shape, slide_area: float) -> int:
     return 0
 
 
+def _picture_blobs(shape, slide_area: float) -> List[tuple]:
+    """[(share of the slide, image bytes)] of the figure-sized pictures in `shape` (groups included)."""
+    kind = getattr(shape, "shape_type", None)
+    if kind == _EMU_GROUP:
+        found: List[tuple] = []
+        for child in shape.shapes:
+            found.extend(_picture_blobs(child, slide_area))
+        return found
+    if kind != _EMU_PICTURE or not slide_area:
+        return []
+    area = float(getattr(shape, "width", 0) or 0) * float(getattr(shape, "height", 0) or 0)
+    share = area / slide_area
+    if not _FIGURE_AREA <= share <= _BACKGROUND_AREA:
+        return []
+    try:
+        return [(share, shape.image.blob)]
+    except Exception:
+        return []
+
+
 def read_pptx(data: bytes) -> List[Dict[str, Any]]:
     from pptx import Presentation
 
@@ -83,17 +108,22 @@ def read_pptx(data: bytes) -> List[Dict[str, Any]]:
             title = ""
         lines: List[str] = []
         figures = 0
+        pictures: List[tuple] = []
         for shape in slide.shapes:
             lines.extend(_shape_lines(shape))
             figures += _figure_count(shape, slide_area)
+            pictures.extend(_picture_blobs(shape, slide_area))
         if not title and lines:
             title = lines[0]
         notes = ""
         if slide.has_notes_slide and slide.notes_slide.notes_text_frame is not None:
             notes = _clean(slide.notes_slide.notes_text_frame.text)
+        pictures.sort(key=lambda item: item[0], reverse=True)
         slides.append({
             "number": number, "title": title[:200], "text": "\n".join(lines)[:_SLIDE_TEXT_CHARS],
             "notes": notes[:600], "has_figure": figures > 0,
+            # The pictures themselves are only carried until their figures have been described.
+            "images": [blob for _, blob in pictures[:_MAX_IMAGES_PER_SLIDE]],
         })
     return slides
 
@@ -108,16 +138,21 @@ def read_pdf(data: bytes) -> List[Dict[str, Any]]:
             lines = [line for line in lines if line]
             page_area = float(page.rect.width * page.rect.height) or 1.0
             has_figure = False
+            pictures = []
             for image in page.get_images(full=True):
                 try:
                     for rect in page.get_image_rects(image[0]):
-                        if rect.width * rect.height / page_area >= _FIGURE_AREA and rect.width * rect.height / page_area < 0.9:
+                        share = rect.width * rect.height / page_area
+                        if _FIGURE_AREA <= share <= _BACKGROUND_AREA:
                             has_figure = True
+                            pictures.append((share, document.extract_image(image[0]).get("image")))
                 except Exception:
                     continue
+            pictures = sorted((item for item in pictures if item[1]), key=lambda item: item[0], reverse=True)
             slides.append({
                 "number": number, "title": (lines[0] if lines else "")[:200],
                 "text": "\n".join(lines)[:_SLIDE_TEXT_CHARS], "notes": "", "has_figure": has_figure,
+                "images": [blob for _, blob in pictures[:_MAX_IMAGES_PER_SLIDE]],
             })
     return slides
 
@@ -161,6 +196,102 @@ def looks_vietnamese(slides: List[Dict[str, Any]]) -> bool:
     return marks >= max(3, len(sample) // 200)
 
 
+# ── looking at the pictures ────────────────────────────────────────────────────
+
+def shrink_image(blob: bytes) -> Optional[str]:
+    """A picture as a small JPEG data URL; the model's price grows with the pixels, not the file size."""
+    try:
+        import base64
+        from PIL import Image
+
+        with Image.open(io.BytesIO(blob)) as image:
+            image.load()
+            if image.mode in ("RGBA", "LA", "P"):
+                converted = image.convert("RGBA")
+                flat = Image.new("RGB", converted.size, (255, 255, 255))
+                flat.paste(converted, mask=converted.split()[-1])
+                image = flat
+            else:
+                image = image.convert("RGB")
+            image.thumbnail((_FIGURE_SIDE, _FIGURE_SIDE))
+            out = io.BytesIO()
+            image.save(out, format="JPEG", quality=82)
+        return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception as error:
+        print(f"[lecture_script] cannot read a picture: {error!r}")
+        return None
+
+
+_DECORATIVE = "TRANG TRI"
+
+
+def _fold(text: str) -> str:
+    import unicodedata
+    return "".join(ch for ch in unicodedata.normalize("NFD", str(text or "").upper().replace("Đ", "D")) if unicodedata.category(ch) != "Mn")
+
+
+async def describe_figures(extractor, slides: List[Dict[str, Any]], vietnamese: bool) -> int:
+    """Fills slide["figure"] with what the model sees in the pictures of each slide, then drops the pictures.
+
+    Decorations (a photo, a logo, a pattern) get no description: there is nothing to teach from them.
+    A failed call leaves the slide as it was, written from its text alone."""
+    cover = has_cover(slides)
+    work = [
+        slide for slide in slides
+        if slide.get("images") and not (cover and slide is slides[0])
+    ][:_MAX_FIGURE_SLIDES]
+    gate = asyncio.Semaphore(_PARALLEL_FIGURES)
+    model = getattr(extractor, "model_name", None) or None
+
+    async def look(slide: Dict[str, Any]) -> bool:
+        urls = [url for url in (shrink_image(blob) for blob in slide.get("images") or []) if url]
+        if not urls or not hasattr(extractor, "_llm_completion_plain_text"):
+            return False
+        if vietnamese:
+            ask = (
+                f"Đây là hình trong một slide bài giảng có tiêu đề \"{slide.get('title') or ''}\".\n"
+                f"Chữ trên slide: {str(slide.get('text') or '')[:500]}\n\n"
+                "Mô tả hình để giảng viên giảng cho người nghe không nhìn thấy hình: đó là loại hình gì (sơ đồ, biểu đồ, bảng, ảnh chụp màn hình, ảnh minh hoạ), "
+                "các thành phần chính, nhãn chữ đọc được, mũi tên hay quan hệ giữa chúng, và ý nghĩa của hình với bài. "
+                "Viết 2-4 câu tiếng Việt, chỉ nói điều thực sự nhìn thấy, không bịa. "
+                f"Nếu hình chỉ để trang trí (ảnh nền, logo, họa tiết, ảnh người không mang thông tin) thì trả lời đúng hai chữ: {_DECORATIVE}."
+            )
+        else:
+            ask = (
+                f"This is a picture from a lecture slide titled \"{slide.get('title') or ''}\".\n"
+                f"Text on the slide: {str(slide.get('text') or '')[:500]}\n\n"
+                "Describe it for a lecturer who will explain it to listeners who cannot see it: the kind of picture (diagram, chart, table, screenshot, illustration), "
+                "its main parts, readable labels, arrows or relations between them, and what it means for the lesson. "
+                "2-4 sentences, only what is really visible, nothing invented. "
+                f"If it is only decoration (a background, logo, pattern, a person with no information) answer exactly: {_DECORATIVE}."
+            )
+        content: List[Dict[str, Any]] = [{"type": "text", "text": ask}]
+        content.extend({"type": "image_url", "image_url": {"url": url}} for url in urls)
+        async with gate:
+            try:
+                text = await extractor._llm_completion_plain_text(
+                    [{"role": "user", "content": content}], max_tokens=420, temperature=0.2,
+                    call_purpose="lecture_script_figure", model_override=model,
+                )
+            except Exception as error:
+                print(f"[lecture_script] figure of slide {slide.get('number')} failed: {error!r}")
+                return False
+        text = " ".join(str(text or "").split())
+        if len(text) < 20 or _fold(text).startswith(_DECORATIVE) or _fold(text)[:20].startswith("TRANG TRI"):
+            return False
+        slide["figure"] = text[:700]
+        return True
+
+    try:
+        results = await asyncio.gather(*(look(slide) for slide in work))
+    finally:
+        for slide in slides:
+            slide.pop("images", None)       # never travels further: not into the task result, not into a saved set
+    described = sum(1 for ok in results if ok)
+    if work:
+        print(f"[lecture_script] figures: {described}/{len(work)} slides described")
+    return described
+
 # ── writing the script ─────────────────────────────────────────────────────────
 
 _STYLE_VI = """Bạn viết LỜI THOẠI cho giảng viên đọc khi quay video bài giảng (kịch bản dựng), dựa trên slide có sẵn.
@@ -178,7 +309,7 @@ Văn phong bắt buộc:
 - Công thức, ký hiệu phải viết thành lời để đọc được: "Tấn công bằng Mối đe dọa cộng với Lỗ hổng", "K1 bằng K2".
 - Danh sách trên slide được nói thành câu: "thứ nhất là..., thứ hai..., và cuối cùng...".
 - Chỉ văn xuôi thuần: không gạch đầu dòng, không markdown, không emoji, không ghi chú trong ngoặc vuông, không viết "(Slide 3)".
-- Slide chỉ có hình/sơ đồ mà ít chữ: mời người học quan sát hình và mô tả điều hình thể hiện theo tiêu đề; không tả chi tiết bạn không nhìn thấy.
+- Slide có hình/sơ đồ: nếu có "figure_description" (mô tả hình do AI đã xem) thì giảng giải đúng nội dung hình theo mô tả đó ("Ở sơ đồ này, ..."), nêu các thành phần và quan hệ chính để người nghe hiểu hình mà không cần nhìn; không thêm chi tiết ngoài mô tả. Không có mô tả mà slide ít chữ: mời người học quan sát hình theo tiêu đề, không tả chi tiết bạn không biết.
 
 Ví dụ lời thoại đúng văn phong (chỉ để học giọng văn, không chép nội dung):
 ---
@@ -216,7 +347,7 @@ Required style:
 - Close each slide with a takeaway or a bridge to the next slide (its title is given).
 - Say formulas and symbols in words. Turn lists into sentences ("first..., second..., and finally...").
 - Plain prose only: no bullets, no markdown, no emoji, no bracketed stage directions.
-- For a slide that is mostly a figure: invite the learners to look at it and describe what it shows according to the title; do not describe details you cannot see."""
+- For a slide with a figure: when "figure_description" is given (what the AI saw in the picture), explain the figure from it ("In this diagram, ..."), naming its parts and relations so a listener understands it without seeing it; add nothing beyond the description. Without a description, on a slide with little text: invite the learners to look at the figure according to the title and do not describe details you do not know."""
 
 
 def _style(vietnamese: bool) -> str:
@@ -277,6 +408,7 @@ async def _write_batch(
             {
                 "slide": slide["number"], "title": slide.get("title") or "", "text_on_slide": slide.get("text") or "",
                 "presenter_notes": slide.get("notes") or "", "has_figure": bool(slide.get("has_figure")),
+                **({"figure_description": slide["figure"]} if slide.get("figure") else {}),
                 **({"current_script": previous[slide["number"]]} if previous and previous.get(slide["number"]) else {}),
             }
             for slide in batch
@@ -459,6 +591,7 @@ async def write_script(
     """The whole script for `slides`. With `previous_rows`, an existing script is rewritten to
     follow `prompt` instead of being written from nothing."""
     vietnamese = looks_vietnamese(slides)
+    figures = await describe_figures(extractor, slides, vietnamese)
     deck_title = deck_title_of(slides, filename)
     outline = _outline(slides)
     body = slides[1:] if has_cover(slides) else slides
@@ -519,6 +652,7 @@ async def write_script(
         "title": frame.get("title") or deck_title,
         "language": "vi" if vietnamese else "en",
         "slide_count": len(slides),
+        "figures_described": figures,
         "duration_minutes": estimated_minutes(rows),
         "word_count": sum(word_count(row["script"]) for row in rows),
         "rows": rows,

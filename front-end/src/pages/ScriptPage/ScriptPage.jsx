@@ -767,6 +767,9 @@ export default function ScriptPage() {
                       <div>
                         <input className="sp-scene" value={row.scene} maxLength={60} aria-label="Phân cảnh" onChange={(event) => updateRow(index, { scene: event.target.value })} />
                         <small className={countWords(row.script) ? '' : 'warn'}>{countWords(row.script) ? `${countWords(row.script)} từ` : 'Chưa có lời thoại'}</small>
+                        {row.kind === 'slide' && active.slides?.find((slide) => slide.number === row.slide)?.figure && (
+                          <small className="fig" title={active.slides.find((slide) => slide.number === row.slide).figure}>Đã xem hình trong slide</small>
+                        )}
                       </div>
                       <div>
                         <ScriptCell value={row.script} label={`Lời thoại ${row.scene}`} onChange={(value) => updateRow(index, { script: value })} />
