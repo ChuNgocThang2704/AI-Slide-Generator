@@ -144,7 +144,7 @@ async def revise(request: ReviseRequest):
         {
             "number": int(slide.get("number") or index + 1), "title": str(slide.get("title") or "")[:200],
             "text": str(slide.get("text") or "")[:1400], "notes": str(slide.get("notes") or "")[:600],
-            "has_figure": bool(slide.get("has_figure")),
+            "has_figure": bool(slide.get("has_figure")), "figure": str(slide.get("figure") or "")[:700],
         }
         for index, slide in enumerate(request.slides) if isinstance(slide, dict)
     ]

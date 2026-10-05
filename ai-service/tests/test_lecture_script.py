@@ -4,6 +4,7 @@ import json
 import unittest
 
 from services.lecture_script import (
+    describe_figures, read_pptx, shrink_image,
     translate_scripts,
     NOTE_PRESENTER, SCENE_INTRO, SCENE_OUTRO, assemble_rows, estimated_minutes, has_cover, tidy_script, write_script,
 )
@@ -109,6 +110,109 @@ class LectureScriptTests(unittest.TestCase):
         script = asyncio.run(write_script(extractor, slides))
         self.assertEqual(script["missing"], ["Slide 4"])
         self.assertEqual(script["rows"][3]["script"], "")
+
+
+def _png(width=1600, height=1000, color=(200, 30, 30)):
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class _Vision:
+    """Answers the figure calls; `answers` maps a slide title to the reply; records what it was sent."""
+
+    model_name = "gateway-model"
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.sent = []
+
+    async def _llm_completion_plain_text(self, messages, **kwargs):
+        content = messages[0]["content"]
+        self.sent.append({"kwargs": kwargs, "images": [part for part in content if part["type"] == "image_url"], "text": content[0]["text"]})
+        for title, reply in self.answers.items():
+            if f'"{title}"' in content[0]["text"]:
+                if isinstance(reply, Exception):
+                    raise reply
+                return reply
+        return "TRANG TRÍ"
+
+
+class FigureTests(unittest.TestCase):
+    def test_big_pictures_are_read_from_a_pptx_and_icons_and_backgrounds_are_not(self):
+        from pptx import Presentation
+        from pptx.util import Emu
+
+        deck = Presentation()
+        deck.slide_width, deck.slide_height = Emu(9144000), Emu(5143500)
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        png = _png(400, 300)
+        slide.shapes.add_picture(io.BytesIO(png), Emu(500000), Emu(500000), Emu(4500000), Emu(3000000))   # a figure
+        slide.shapes.add_picture(io.BytesIO(png), Emu(100000), Emu(100000), Emu(400000), Emu(400000))     # an icon
+        slide.shapes.add_picture(io.BytesIO(png), 0, 0, deck.slide_width, deck.slide_height)               # a background
+        out = io.BytesIO()
+        deck.save(out)
+        slides = read_pptx(out.getvalue())
+        self.assertEqual(len(slides[0]["images"]), 1)
+        self.assertTrue(slides[0]["has_figure"])
+
+    def test_a_picture_is_shrunk_before_the_model_sees_it(self):
+        import base64
+        from PIL import Image
+
+        url = shrink_image(_png(3000, 2000))
+        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
+        shrunk = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+        self.assertLessEqual(max(shrunk.size), 768)
+        self.assertIsNone(shrink_image(b"not an image"))
+
+    def test_described_figures_reach_the_slide_and_the_pictures_are_dropped(self):
+        slides = _slides(4)
+        for slide in slides[1:]:
+            slide["images"] = [_png()]
+        vision = _Vision({"Mục 2": "Sơ đồ ba khối nối nhau bằng mũi tên: mối đe dọa khai thác lỗ hổng dẫn tới tấn công.", "Mục 3": "TRANG TRÍ", "Mục 4": RuntimeError("model down")})
+        described = asyncio.run(describe_figures(vision, slides, True))
+        self.assertEqual(described, 1)
+        self.assertIn("mối đe dọa khai thác lỗ hổng", slides[1]["figure"])
+        self.assertNotIn("figure", slides[2])        # a decoration
+        self.assertNotIn("figure", slides[3])        # a failed call: written from the text alone
+        self.assertTrue(all("images" not in slide for slide in slides))
+        self.assertEqual(vision.sent[0]["kwargs"]["model_override"], "gateway-model")   # never the self-hosted primary host
+        self.assertTrue(vision.sent[0]["images"][0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+
+    def test_the_title_slide_is_not_looked_at(self):
+        slides = _slides(3)
+        for slide in slides:
+            slide["images"] = [_png()]
+        vision = _Vision({})
+        asyncio.run(describe_figures(vision, slides, True))
+        self.assertEqual(len(vision.sent), 2)
+
+    def test_the_description_is_given_to_the_script_writer(self):
+        slides = _slides(3)
+        slides[1]["images"] = [_png()]
+        seen = {}
+
+        class Both(_Extractor, _Vision):
+            def __init__(self):
+                _Extractor.__init__(self)
+                _Vision.__init__(self, {"Mục 2": "Sơ đồ ba khối nối bằng mũi tên, đủ dài để hợp lệ."})
+
+            async def _llm_completion_plain_text(self, messages, **kwargs):
+                if isinstance(messages[0]["content"], list):
+                    return await _Vision._llm_completion_plain_text(self, messages, **kwargs)
+                if kwargs.get("call_purpose") == "lecture_script_slides":
+                    seen["payload"] = json.loads(messages[1]["content"])
+                return await _Extractor._llm_completion_plain_text(self, messages, **kwargs)
+
+        script = asyncio.run(write_script(Both(), slides))
+        self.assertEqual(script["figures_described"], 1)
+        first = seen["payload"]["slides"][0]
+        self.assertEqual(first["figure_description"], "Sơ đồ ba khối nối bằng mũi tên, đủ dài để hợp lệ.")
+        self.assertNotIn("figure_description", seen["payload"]["slides"][1])
+        self.assertEqual(slides[1]["figure"], first["figure_description"])      # kept on the slide, for rewriting later
 
 
 class _Translator:
