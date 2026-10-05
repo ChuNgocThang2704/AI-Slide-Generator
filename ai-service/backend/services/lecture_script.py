@@ -27,6 +27,7 @@ _MAX_IMAGES_PER_SLIDE = 2       # the largest pictures of a slide are looked at
 _MAX_FIGURE_SLIDES = 40         # slides of one deck whose figures are looked at
 _FIGURE_SIDE = 768              # pictures are shrunk to this many pixels before the model sees them (cost)
 _PARALLEL_FIGURES = 3
+_TEMPLATE_REPEATS = 3           # a picture on this many slides is part of the template
 
 SCENE_INTRO = "Lời mở đầu"
 SCENE_OUTRO = "Lời kết"
@@ -58,7 +59,34 @@ def _shape_lines(shape) -> List[str]:
             cells = [_clean(cell.text) for cell in row.cells]
             if any(cells):
                 lines.append(" | ".join(cells))
+    if getattr(shape, "has_chart", False) and shape.has_chart:
+        text = _chart_text(shape.chart)
+        if text:
+            lines.append(text)
     return lines
+
+
+def _chart_text(chart) -> str:
+    """A PowerPoint chart as one line of words: its kind, title, and every series with its values."""
+    try:
+        kind = str(chart.chart_type).split(".")[-1].split(" ")[0].replace("_", " ").lower()
+        title = ""
+        if chart.has_title and chart.chart_title.has_text_frame:
+            title = _clean(chart.chart_title.text_frame.text)
+        plot = chart.plots[0]
+        categories = [_clean(label) for label in plot.categories]
+        parts = []
+        for series in list(plot.series)[:6]:
+            values = list(series.values)[:24]
+            pairs = "; ".join(
+                f"{categories[i] if i < len(categories) else i + 1} = {round(v, 4) if isinstance(v, float) else v}"
+                for i, v in enumerate(values) if v is not None
+            )
+            parts.append(f"{_clean(series.name)}: {pairs}" if series.name else pairs)
+        head = f"[Biểu đồ {kind}" + (f' "{title}"' if title else "") + "]"
+        return (head + " " + " | ".join(parts))[:700]
+    except Exception:
+        return ""
 
 
 def _figure_count(shape, slide_area: float) -> int:
@@ -230,12 +258,32 @@ def _fold(text: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFD", str(text or "").upper().replace("Đ", "D")) if unicodedata.category(ch) != "Mn")
 
 
+def _drop_template_pictures(slides: List[Dict[str, Any]]) -> int:
+    """A picture that sits on three or more slides of the deck (a logo, a header band) belongs to the
+    template, not to the lesson: it is removed from every slide. Returns how many were removed."""
+    import hashlib
+
+    seen: Dict[str, int] = {}
+    for slide in slides:
+        for digest in {hashlib.sha1(blob).hexdigest() for blob in slide.get("images") or []}:
+            seen[digest] = seen.get(digest, 0) + 1
+    repeated = {digest for digest, count in seen.items() if count >= _TEMPLATE_REPEATS}
+    removed = 0
+    for slide in slides:
+        kept = [blob for blob in slide.get("images") or [] if hashlib.sha1(blob).hexdigest() not in repeated]
+        removed += len(slide.get("images") or []) - len(kept)
+        if "images" in slide:
+            slide["images"] = kept
+    return removed
+
+
 async def describe_figures(extractor, slides: List[Dict[str, Any]], vietnamese: bool) -> int:
     """Fills slide["figure"] with what the model sees in the pictures of each slide, then drops the pictures.
 
     Decorations (a photo, a logo, a pattern) get no description: there is nothing to teach from them.
     A failed call leaves the slide as it was, written from its text alone."""
     cover = has_cover(slides)
+    _drop_template_pictures(slides)
     work = [
         slide for slide in slides
         if slide.get("images") and not (cover and slide is slides[0])
@@ -249,20 +297,20 @@ async def describe_figures(extractor, slides: List[Dict[str, Any]], vietnamese: 
             return False
         if vietnamese:
             ask = (
-                f"Đây là hình trong một slide bài giảng có tiêu đề \"{slide.get('title') or ''}\".\n"
-                f"Chữ trên slide: {str(slide.get('text') or '')[:500]}\n\n"
+                f"Đây là hình trong một slide bài giảng có tiêu đề \"{slide.get('title') or ''}\".\n\n"
                 "Mô tả hình để giảng viên giảng cho người nghe không nhìn thấy hình: đó là loại hình gì (sơ đồ, biểu đồ, bảng, ảnh chụp màn hình, ảnh minh hoạ), "
-                "các thành phần chính, nhãn chữ đọc được, mũi tên hay quan hệ giữa chúng, và ý nghĩa của hình với bài. "
-                "Viết 2-4 câu tiếng Việt, chỉ nói điều thực sự nhìn thấy, không bịa. "
+                "các thành phần chính, nhãn chữ đọc được, mũi tên hay quan hệ giữa chúng. "
+                "Viết 2-4 câu tiếng Việt, CHỈ tả điều thực sự nhìn thấy trong hình: không đoán tên một thành phần nếu hình không ghi, "
+                "không suy ra từ tiêu đề; chỗ nào không có chữ thì nói là không có chữ. "
                 f"Nếu hình chỉ để trang trí (ảnh nền, logo, họa tiết, ảnh người không mang thông tin) thì trả lời đúng hai chữ: {_DECORATIVE}."
             )
         else:
             ask = (
-                f"This is a picture from a lecture slide titled \"{slide.get('title') or ''}\".\n"
-                f"Text on the slide: {str(slide.get('text') or '')[:500]}\n\n"
+                f"This is a picture from a lecture slide titled \"{slide.get('title') or ''}\".\n\n"
                 "Describe it for a lecturer who will explain it to listeners who cannot see it: the kind of picture (diagram, chart, table, screenshot, illustration), "
-                "its main parts, readable labels, arrows or relations between them, and what it means for the lesson. "
-                "2-4 sentences, only what is really visible, nothing invented. "
+                "its main parts, readable labels, arrows or relations between them. "
+                "2-4 sentences, ONLY what is really visible: do not guess the name of a part the picture does not label, do not infer from the title, "
+                "and say so where there is no text. "
                 f"If it is only decoration (a background, logo, pattern, a person with no information) answer exactly: {_DECORATIVE}."
             )
         content: List[Dict[str, Any]] = [{"type": "text", "text": ask}]
@@ -586,12 +634,17 @@ Progress = Callable[[int], Awaitable[None]]
 async def write_script(
     extractor, slides: List[Dict[str, Any]], *, prompt: str = "", filename: str = "",
     previous_rows: Optional[List[Dict[str, Any]]] = None, on_progress: Optional[Progress] = None,
-    first_video: bool = False,
+    first_video: bool = False, look_at_figures: bool = True,
 ) -> Dict[str, Any]:
     """The whole script for `slides`. With `previous_rows`, an existing script is rewritten to
     follow `prompt` instead of being written from nothing."""
     vietnamese = looks_vietnamese(slides)
-    figures = await describe_figures(extractor, slides, vietnamese)
+    if look_at_figures:
+        figures = await describe_figures(extractor, slides, vietnamese)
+    else:
+        figures = 0
+        for slide in slides:
+            slide.pop("images", None)
     deck_title = deck_title_of(slides, filename)
     outline = _outline(slides)
     body = slides[1:] if has_cover(slides) else slides

@@ -12,11 +12,12 @@ const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 // Lecture script for an uploaded deck. Nothing is stored on the server: the page keeps the
 // script and the slide texts it was written from, and sends them back to rewrite or export.
 export const lectureScriptService = {
-  async start(file, prompt, firstVideo = false) {
+  async start(file, prompt, firstVideo = false, figures = true) {
     const form = new FormData();
     form.append('file', file);
     form.append('prompt', prompt || '');
     form.append('firstVideo', firstVideo ? 'true' : 'false');
+    form.append('figures', figures ? 'true' : 'false');
     return unwrap(await apiClient.post('/document/lecture-script', form, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,

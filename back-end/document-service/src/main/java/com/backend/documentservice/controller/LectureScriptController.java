@@ -41,8 +41,9 @@ public class LectureScriptController {
     public ApiResponse<JsonNode> start(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "prompt", required = false) String prompt,
-            @RequestParam(value = "firstVideo", required = false, defaultValue = "false") boolean firstVideo) {
-        return ApiResponse.<JsonNode>builder().data(lectureScriptService.start(file, prompt, firstVideo)).build();
+            @RequestParam(value = "firstVideo", required = false, defaultValue = "false") boolean firstVideo,
+            @RequestParam(value = "figures", required = false, defaultValue = "true") boolean figures) {
+        return ApiResponse.<JsonNode>builder().data(lectureScriptService.start(file, prompt, firstVideo, figures)).build();
     }
 
     @PostMapping("/revise")
