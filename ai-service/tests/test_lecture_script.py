@@ -88,6 +88,15 @@ class LectureScriptTests(unittest.TestCase):
         self.assertEqual(script["missing"], [])
 
 
+    def test_a_slide_without_words_gets_no_invented_script(self):
+        slides = _slides(5)
+        slides[3]["text"] = ""
+        extractor = _Extractor()
+        script = asyncio.run(write_script(extractor, slides))
+        self.assertEqual(script["missing"], ["Slide 4"])
+        self.assertEqual(script["rows"][3]["script"], "")
+
+
 class LectureScriptWorkbookTests(unittest.TestCase):
     def test_workbook_has_the_layout_of_a_production_script(self):
         try:
