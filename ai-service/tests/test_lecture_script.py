@@ -48,7 +48,7 @@ class LectureScriptTests(unittest.TestCase):
         self.assertTrue(has_cover(slides))
         rows = assemble_rows(slides, {2: "a", 3: "b", 4: "c"}, {"intro": "i", "outro": "o"})
         self.assertEqual([row["scene"] for row in rows], [SCENE_INTRO, "Slide 2", "Slide 3", "Slide 4", SCENE_OUTRO])
-        self.assertEqual([row["note"] for row in rows], [NOTE_PRESENTER, "", "Hình 3", "", NOTE_PRESENTER])
+        self.assertEqual([row["note"] for row in rows], ["", "", "", "", ""])  # left for the video team
 
     def test_a_first_slide_with_real_content_keeps_its_own_scene(self):
         slides = _slides(cover=False)

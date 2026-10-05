@@ -25,7 +25,7 @@ _FIGURE_AREA = 0.15             # a picture this large (share of the slide) is a
 
 SCENE_INTRO = "Lời mở đầu"
 SCENE_OUTRO = "Lời kết"
-NOTE_PRESENTER = "Hình ảnh GV"
+NOTE_PRESENTER = "Hình ảnh GV"     # not filled in by the AI: the editing notes column is left to the video team
 
 _EMU_PICTURE = 13
 _EMU_GROUP = 6
@@ -168,7 +168,7 @@ _STYLE_VI = """Bạn viết LỜI THOẠI cho giảng viên đọc khi quay vide
 Văn phong bắt buộc:
 - Đây là lời NÓI của giảng viên trước sinh viên: tự nhiên, ấm áp, mạch lạc. Mặc định giảng viên xưng "thầy", gọi người học là "các em"; xen kẽ "chúng ta". (Nếu yêu cầu thêm của người dùng nêu cách xưng hô khác thì theo đó.)
 - Giảng giải nội dung slide chứ không đọc lại nguyên văn: nêu ý, giải thích vì sao, nối các ý với nhau, thêm ví dụ ngắn khi slide quá cô đọng. Không bịa số liệu, tên riêng, mốc thời gian không có trên slide.
-- ĐỘ DÀI là ràng buộc cứng: mỗi slide 4-6 đoạn, mỗi đoạn chỉ 1 câu (nhiều nhất 2 câu ngắn), mỗi câu không quá 25 từ; tổng cộng khoảng 80-110 từ và KHÔNG BAO GIỜ quá 120 từ cho một slide (slide rất ít nội dung: 45-70 từ). Slide nhiều ý thì chọn ý chính để nói, không cố nói hết từng dòng. Các đoạn cách nhau bằng MỘT DÒNG TRỐNG.
+- ĐỘ DÀI: mỗi slide 5-7 đoạn, mỗi đoạn 1-2 câu, mỗi câu không quá 28 từ; tổng cộng khoảng 105-130 từ, KHÔNG BAO GIỜ quá 150 từ (slide rất ít nội dung: 60-90 từ). Giảng giải đủ ý: nói rõ khái niệm, vì sao nó quan trọng, một ví dụ hoặc hình ảnh so sánh ngắn khi slide có nhiều thuật ngữ. Các đoạn cách nhau bằng MỘT DÒNG TRỐNG.
 - Mở đầu mỗi slide bằng một câu dẫn tự nhiên, đa dạng, ví dụ: "Chúng ta bắt đầu với...", "Mời các em quan sát...", "Vậy ... là gì?", "Tiếp theo, thầy sẽ...", "Các em thấy đấy,...". Không mở đầu slide nào bằng "Slide này" và không lặp một kiểu mở đầu ở hai slide liền nhau. Câu "Mời các em quan sát..." chỉ dùng cho slide có has_figure=true. Trong các slide được giao, mỗi kiểu mở đầu dùng nhiều nhất một lần.
 - Cứ khoảng hai, ba slide thì có một câu hỏi gợi mở cho người học ("Theo các em, ...?", "Vậy ... là gì?") rồi tự trả lời ngay sau đó.
 - Slide liệt kê nhiều ý thì đếm thành lời: "thứ nhất..., thứ hai..., và thứ ba...", mỗi ý một đoạn.
@@ -210,7 +210,7 @@ _STYLE_EN = """You write the SPOKEN SCRIPT a lecturer reads when recording a lec
 Required style:
 - It is the lecturer speaking to students: natural, warm, clear. Use "I" for the lecturer, "you" for the learners and "we" together (unless the user's extra request asks for something else).
 - Explain the slide rather than read it out: state the point, say why it matters, connect the ideas, add a short example when the slide is terse. Never invent figures, names or dates that are not on the slide.
-- LENGTH is a hard limit: 4-6 paragraphs per slide, one sentence each (two short ones at most), no sentence over 25 words; about 80-110 words in total and NEVER more than 120 for one slide (45-70 for a sparse slide). On a dense slide speak to the main points instead of every line. Paragraphs are separated by ONE BLANK LINE.
+- LENGTH: 5-7 paragraphs per slide, 1-2 sentences each, no sentence over 28 words; about 105-130 words in total and NEVER more than 150 (60-90 for a sparse slide). Explain enough: the concept, why it matters, and a short example or comparison when the slide has many terms. Paragraphs are separated by ONE BLANK LINE.
 - Open each slide with a natural, varied lead-in ("Let's start with...", "Take a look at...", "So what is...?"). Never open with "This slide" and never use the same opener on two slides in a row.
 - The greeting belongs to the opening scene: no slide greets or welcomes the learners again.
 - Close each slide with a takeaway or a bridge to the next slide (its title is given).
@@ -408,15 +408,15 @@ def deck_title_of(slides: List[Dict[str, Any]], filename: str = "") -> str:
 def assemble_rows(slides: List[Dict[str, Any]], scripts: Dict[int, str], frame: Dict[str, str]) -> List[Dict[str, Any]]:
     """Rows in the order the video is cut: opening, one row per slide, closing."""
     rows: List[Dict[str, Any]] = [
-        {"scene": SCENE_INTRO, "slide": 1 if has_cover(slides) else None, "script": frame.get("intro", ""), "note": NOTE_PRESENTER}
+        {"scene": SCENE_INTRO, "slide": 1 if has_cover(slides) else None, "script": frame.get("intro", ""), "note": ""}
     ]
     for slide in slides[1:] if has_cover(slides) else slides:
         number = slide["number"]
         rows.append({
             "scene": f"Slide {number}", "slide": number, "script": scripts.get(number, ""),
-            "note": f"Hình {number}" if slide.get("has_figure") else "",
+            "note": "",
         })
-    rows.append({"scene": SCENE_OUTRO, "slide": None, "script": frame.get("outro", ""), "note": NOTE_PRESENTER})
+    rows.append({"scene": SCENE_OUTRO, "slide": None, "script": frame.get("outro", ""), "note": ""})
     return rows
 
 
