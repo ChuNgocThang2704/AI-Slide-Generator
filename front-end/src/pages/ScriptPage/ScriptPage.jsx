@@ -76,6 +76,7 @@ export default function ScriptPage() {
   const [picked, setPicked] = useState([]);                 // files chosen, not yet started
   const [prompt, setPrompt] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [autoEnglish, setAutoEnglish] = useState(true);      // translate each script into English as soon as it is written
   const [firstVideo, setFirstVideo] = useState(false);       // the first file opens the course: welcome, lecturer, course
   const [items, setItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -96,6 +97,7 @@ export default function ScriptPage() {
   const sessionRef = useRef(0);         // bumped by "start over": answers of an older run are dropped
   const itemsRef = useRef([]);          // the latest items, for work that outlives a render
   const filesRef = useRef(new Map());   // id -> File, kept in memory so a failed file can be retried
+  const autoEnglishRef = useRef(true);
   const firstRef = useRef(new Set());   // ids of the file that opens the course
   const queueRef = useRef([]);          // ids waiting for a free slot
   const runningRef = useRef(0);
@@ -105,6 +107,7 @@ export default function ScriptPage() {
 
   useEffect(() => { promptRef.current = prompt; }, [prompt]);
   useEffect(() => { itemsRef.current = items; }, [items]);
+  useEffect(() => { autoEnglishRef.current = autoEnglish; }, [autoEnglish]);
   useEffect(() => () => { sessionRef.current += 1; }, []);
 
   const started = items.length > 0 || opening;
@@ -245,12 +248,16 @@ export default function ScriptPage() {
             () => sessionRef.current !== session,
           );
           if (sessionRef.current !== session) return;
+          const written = withKinds(result.script.rows);
+          const sheet = sheetNameFromFile(file.name);
           patchItem(id, {
             status: 'done', progress: 100, slides: result.slides || [],
-            title: result.script.title || sheetNameFromFile(file.name),
-            rows: withKinds(result.script.rows),
+            title: result.script.title || sheet,
+            rows: written,
             missing: result.script.missing || [],
           });
+          // The English subtitle lines follow right behind the Vietnamese script.
+          if (autoEnglishRef.current) translateItem(id, { rows: written, sheet });
         } catch (error) {
           if (sessionRef.current === session && error.message !== 'cancelled') {
             patchItem(id, { status: 'error', error: error.message || 'Không tạo được kịch bản' });
@@ -391,9 +398,11 @@ export default function ScriptPage() {
   };
 
   // English subtitles: the Vietnamese rows that have none (or changed since) are translated paragraph by paragraph.
-  const translateItem = async (id) => {
-    const target = itemsRef.current.find((item) => item.id === id);
-    if (!target || target.status !== 'done' || target.translating || target.revising) return 0;
+  // `fresh` is for a script that was only just written: the items ref has not caught up with it yet.
+  async function translateItem(id, fresh) {
+    const target = fresh ? { rows: fresh.rows, sheet: fresh.sheet }
+      : itemsRef.current.find((item) => item.id === id && item.status === 'done' && !item.translating && !item.revising);
+    if (!target) return 0;
     const needed = rowsToTranslate(target.rows);
     if (!needed.length) return 0;
     const session = sessionRef.current;
@@ -419,7 +428,7 @@ export default function ScriptPage() {
       if (error.message !== 'cancelled') addToast(error.message || 'Không dịch được', 'error');
       return 0;
     }
-  };
+  }
 
   const translateActive = async () => {
     if (!active) return;
@@ -529,6 +538,13 @@ export default function ScriptPage() {
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="Ví dụ: Môn An toàn và Bảo mật HTTT, video thuộc Chương 2. Giảng viên xưng thầy, giọng gần gũi, có câu hỏi gợi mở cho sinh viên."
             />
+            <label className="sp-check">
+              <input type="checkbox" checked={autoEnglish} onChange={(event) => setAutoEnglish(event.target.checked)} />
+              <span>
+                <strong>Dịch luôn sang tiếng Anh (làm phụ đề)</strong>
+                <small>Mỗi kịch bản có thêm lời thoại tiếng Anh dịch từ tiếng Việt, đối chiếu từng đoạn. Cột tiếng Anh nằm ở cột D trong file Excel; bỏ tick thì dịch sau bằng nút trong từng kịch bản.</small>
+              </span>
+            </label>
             <label className="sp-check">
               <input type="checkbox" checked={firstVideo} onChange={(event) => setFirstVideo(event.target.checked)} />
               <span>
