@@ -156,7 +156,7 @@
 
 .sp-table { padding: 0; overflow: hidden; transition: opacity .2s; }
 .sp-table.dim { opacity: .5; pointer-events: none; }
-.sp-row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 170px 40px; gap: 12px; padding: 14px 16px; border-top: 1px solid rgba(255, 255, 255, 0.07); align-items: start; }
+.sp-row { display: grid; grid-template-columns: 140px minmax(0, 1fr) minmax(0, 1fr) 140px 40px; gap: 12px; padding: 14px 16px; border-top: 1px solid rgba(255, 255, 255, 0.07); align-items: start; }
 .sp-row.sp-head {
   border-top: 0; padding: 12px 16px; background: #003366; color: #fff;
   font: 700 0.76rem/1 'Be Vietnam Pro', sans-serif; letter-spacing: .04em; text-align: center;
@@ -205,7 +205,7 @@
   .sp-revise .btn { width: 100%; justify-content: center; }
   .sp-row { grid-template-columns: 1fr 40px; }
   .sp-row.sp-head { display: none; }
-  .sp-row > div:nth-child(2), .sp-row > div:nth-child(3) { grid-column: 1; }
+  .sp-row > div:not(.sp-rowtools) { grid-column: 1; }
   .sp-row > .sp-rowtools { grid-column: 2; grid-row: 1; flex-direction: row; justify-self: end; }
   .sp-row { grid-template-columns: minmax(0, 1fr) auto; }
   .sp-footer { flex-direction: column; align-items: stretch; text-align: center; }
@@ -226,9 +226,6 @@
 .sp-en-text small { color: rgba(255, 255, 255, 0.5); font-size: 0.8rem; line-height: 1.45; }
 .sp-en-actions { display: flex; gap: 8px; flex: none; }
 .sp-en-actions .btn { white-space: nowrap; }
-.sp-en-row { margin-top: 8px; }
-.sp-en-row > span { display: block; margin: 0 0 4px 2px; font: 700 0.68rem/1 Inter, sans-serif; letter-spacing: .06em; color: #8fd0ff; }
-.sp-en-row > span em { font-style: normal; font-weight: 600; letter-spacing: 0; color: #fbbf24; }
 .sp-script-en { background: rgba(56, 160, 255, 0.07); border-color: rgba(56, 160, 255, 0.22); min-height: 52px; }
 .sp-script-en:focus { border-color: #5db4ff; background: rgba(56, 160, 255, 0.1); }
 .sp-footer-check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 0.84rem; color: rgba(255, 255, 255, 0.7); white-space: nowrap; }
@@ -239,3 +236,6 @@
   .sp-en-actions { width: 100%; flex-wrap: wrap; }
   .sp-en-actions .btn { flex: 1; justify-content: center; }
 }
+
+.sp-script-en::placeholder { color: rgba(143, 208, 255, 0.35); }
+.sp-row.sp-head > div:nth-child(3) { background: rgba(56, 160, 255, 0.18); border-radius: 6px; padding: 5px 0; margin: -5px 0; }

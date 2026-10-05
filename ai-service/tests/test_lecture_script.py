@@ -159,9 +159,11 @@ class LectureScriptWorkbookTests(unittest.TestCase):
             {"scene": "Slide 2", "script": "Một.", "note": "", "en": "One."},
             {"scene": "Slide 3", "script": "Hai.", "note": ""},
         ]}))).active
-        self.assertEqual([both[f"{c}4"].value for c in "ABCD"], ["PHÂN CẢNH", "LỜI THOẠI", "LƯU Ý DỰNG", "LỜI THOẠI (ENGLISH)"])
-        self.assertEqual(both["D5"].value, "One.")
-        self.assertIsNone(both["D6"].value)
+        self.assertEqual([both[f"{c}4"].value for c in "ABCD"], ["PHÂN CẢNH", "LỜI THOẠI", "LỜI THOẠI (ENGLISH)", "LƯU Ý DỰNG"])
+        self.assertEqual(both["B5"].value, "Một.")
+        self.assertEqual(both["C5"].value, "One.")
+        self.assertIsNone(both["C6"].value)
+        self.assertEqual(both["D5"].value, None)
         self.assertEqual({str(c) for c in both.merged_cells.ranges}, {"A1:D1", "A2:D2"})
 
     def test_workbook_has_the_layout_of_a_production_script(self):
