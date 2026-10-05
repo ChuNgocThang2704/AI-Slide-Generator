@@ -331,15 +331,30 @@ async def _write_batch(
 
 async def _write_frame(
     extractor, deck_title: str, outline: str, prompt: str, vietnamese: bool,
-    previous: Optional[Dict[str, str]] = None,
+    previous: Optional[Dict[str, str]] = None, full_intro: bool = False, cover_text: str = "",
 ) -> Dict[str, str]:
-    """The two on-camera scenes: the opening before slide 2 and the closing after the last slide."""
+    """The two on-camera scenes: the opening before slide 2 and the closing after the last slide.
+
+    Only the first video of a course opens by welcoming the learners and introducing the lecturer and
+    the course; every other video opens with a short greeting and what this part is about."""
     if vietnamese:
+        if full_intro:
+            intro_spec = (
+                "- \"intro\" (Lời mở đầu, 70-110 từ, 4-6 đoạn ngắn cách nhau bằng dòng trống): chào mừng người học, "
+                "giới thiệu giảng viên và học phần/môn học (CHỈ những gì có ghi trên slide bìa trong \"cover_slide_text\"), "
+                "nói ngắn gọn bài này sẽ giúp họ hiểu điều gì, mời vào nội dung. Kiểu: \"Chào các em.\\n\\nChào mừng các em đến với môn học...\".\n"
+            )
+        else:
+            intro_spec = (
+                "- \"intro\" (Lời mở đầu, 30-55 từ, 2-3 đoạn ngắn cách nhau bằng dòng trống): chỉ chào ngắn rồi nói phần này học gì "
+                "(theo tiêu đề và dàn ý), mời vào nội dung. TUYỆT ĐỐI không chào mừng dài dòng, không giới thiệu tên giảng viên, "
+                "tên trường hay tên học phần (đã giới thiệu ở video đầu tiên). "
+                "Kiểu: \"Chào các em.\\n\\nTrong video này, chúng ta sẽ tìm hiểu về...\\n\\nCác em hãy cùng thầy đi vào nội dung chi tiết nhé.\".\n"
+            )
         task = (
             "Viết hai đoạn giảng viên nói trước ống kính (không có slide):\n"
-            "- \"intro\" (Lời mở đầu, 45-90 từ, 3-5 đoạn ngắn cách nhau bằng dòng trống): chào người học, nêu tên bài/chương theo tiêu đề bài, "
-            "nói ngắn gọn bài này giúp họ hiểu điều gì, mời vào nội dung. Kiểu: \"Chào các em.\\n\\nChào mừng các em quay trở lại với...\".\n"
-            "- \"outro\" (Lời kết, 30-55 từ, MỘT đoạn): tóm lại vừa học xong phần gì, hẹn nội dung tiếp theo, chào. "
+            + intro_spec
+            + "- \"outro\" (Lời kết, 30-55 từ, MỘT đoạn): tóm lại vừa học xong phần gì, hẹn nội dung tiếp theo, chào. "
             "Kiểu: \"Vậy là chúng ta đã hoàn thành phần ... Xin chào và hẹn gặp lại các em.\"\n"
             "Không bịa tên giảng viên, tên trường hay tên môn học nếu slide không ghi."
         )
@@ -349,16 +364,29 @@ async def _write_frame(
         )
         shape = "Trả về DUY NHẤT JSON: {\"title\":\"...\",\"intro\":\"...\",\"outro\":\"...\"}"
     else:
+        if full_intro:
+            intro_spec = (
+                "- \"intro\" (70-110 words, 4-6 short paragraphs separated by a blank line): welcome the learners, introduce the lecturer "
+                "and the course (ONLY what the title slide in \"cover_slide_text\" says), say briefly what they will understand after it, "
+                "lead into the content.\n"
+            )
+        else:
+            intro_spec = (
+                "- \"intro\" (30-55 words, 2-3 short paragraphs separated by a blank line): a short greeting, then what this part covers "
+                "(from the title and outline), then lead into the content. Do NOT give a long welcome and do NOT introduce the lecturer, "
+                "school or course (the first video did that).\n"
+            )
         task = (
             "Write the two scenes the lecturer speaks on camera (no slide):\n"
-            "- \"intro\" (45-90 words, 3-5 short paragraphs separated by a blank line): greet the learners, name the lecture from its title, "
-            "say briefly what they will understand after it, lead into the content.\n"
-            "- \"outro\" (30-55 words, ONE paragraph): sum up what was covered, point to what comes next, say goodbye.\n"
+            + intro_spec
+            + "- \"outro\" (30-55 words, ONE paragraph): sum up what was covered, point to what comes next, say goodbye.\n"
             "Do not invent a lecturer, school or course name that the slides do not give."
         )
         task += "\n- \"title\": a short name for this lecture (at most 14 words) built from the main topics of the outline."
         shape = "Return ONLY JSON: {\"title\":\"...\",\"intro\":\"...\",\"outro\":\"...\"}"
     payload: Dict[str, Any] = {"deck_title": deck_title, "outline": outline}
+    if full_intro and cover_text:
+        payload["cover_slide_text"] = cover_text[:600]
     if previous:
         payload["current"] = previous
         task += ("\nĐã có bản hiện tại trong \"current\": viết lại theo yêu cầu thêm của người dùng." if vietnamese
@@ -426,6 +454,7 @@ Progress = Callable[[int], Awaitable[None]]
 async def write_script(
     extractor, slides: List[Dict[str, Any]], *, prompt: str = "", filename: str = "",
     previous_rows: Optional[List[Dict[str, Any]]] = None, on_progress: Optional[Progress] = None,
+    first_video: bool = False,
 ) -> Dict[str, Any]:
     """The whole script for `slides`. With `previous_rows`, an existing script is rewritten to
     follow `prompt` instead of being written from nothing."""
@@ -465,7 +494,10 @@ async def write_script(
         return result
 
     frame_task = asyncio.create_task(
-        _write_frame(extractor, deck_title, outline, prompt, vietnamese, previous_frame or None)
+        _write_frame(
+            extractor, deck_title, outline, prompt, vietnamese, previous_frame or None,
+            full_intro=first_video, cover_text=str(slides[0].get("text") or "") if has_cover(slides) else "",
+        )
     )
     results = await asyncio.gather(*(run(index, batch) for index, batch in enumerate(batches)))
     scripts: Dict[int, str] = {}

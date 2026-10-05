@@ -49,7 +49,9 @@ class ExportRequest(ExportSheet):
     sheets: List[ExportSheet] = Field(default_factory=list)
 
 
-def _start(task_id: str, slides: List[Dict[str, Any]], prompt: str, filename: str, previous_rows=None) -> None:
+def _start(
+    task_id: str, slides: List[Dict[str, Any]], prompt: str, filename: str, previous_rows=None, first_video: bool = False,
+) -> None:
     async def run() -> None:
         queue = core.redis_queue
 
@@ -61,7 +63,7 @@ def _start(task_id: str, slides: List[Dict[str, Any]], prompt: str, filename: st
             extractor = core._new_task_content_extractor(task_id)
             script = await write_script(
                 extractor, slides, prompt=prompt, filename=filename,
-                previous_rows=previous_rows, on_progress=progress,
+                previous_rows=previous_rows, on_progress=progress, first_video=first_video,
             )
             await queue.update_task_status(task_id, "completed", progress=100, result={"script": script, "slides": slides})
         except Exception as error:
@@ -75,7 +77,7 @@ def _start(task_id: str, slides: List[Dict[str, Any]], prompt: str, filename: st
 
 
 @router.post("/generate")
-async def generate(file: UploadFile = File(...), prompt: str = Form("")):
+async def generate(file: UploadFile = File(...), prompt: str = Form(""), first_video: str = Form("false")):
     """Read the deck and start writing its script; poll /api/status/{task_id} for the result."""
     data = await file.read()
     if not data:
@@ -91,7 +93,7 @@ async def generate(file: UploadFile = File(...), prompt: str = Form("")):
         raise HTTPException(status_code=400, detail="Không đọc được file. Hãy dùng file .pptx hoặc .pdf không bị khoá.")
     task_id = str(uuid.uuid4())
     await core.redis_queue.update_task_status(task_id, "processing", progress=3)
-    _start(task_id, slides, prompt, file.filename or "")
+    _start(task_id, slides, prompt, file.filename or "", first_video=str(first_video).strip().lower() in {"1", "true", "yes", "on"})
     return {"task_id": task_id, "slide_count": len(slides)}
 
 

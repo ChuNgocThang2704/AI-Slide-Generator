@@ -76,6 +76,7 @@ export default function ScriptPage() {
   const [picked, setPicked] = useState([]);                 // files chosen, not yet started
   const [prompt, setPrompt] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [firstVideo, setFirstVideo] = useState(false);       // the first file opens the course: welcome, lecturer, course
   const [items, setItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [revisePrompt, setRevisePrompt] = useState('');
@@ -93,6 +94,7 @@ export default function ScriptPage() {
   const savingRef = useRef(false);
   const sessionRef = useRef(0);         // bumped by "start over": answers of an older run are dropped
   const filesRef = useRef(new Map());   // id -> File, kept in memory so a failed file can be retried
+  const firstRef = useRef(new Set());   // ids of the file that opens the course
   const queueRef = useRef([]);          // ids waiting for a free slot
   const runningRef = useRef(0);
   const promptRef = useRef(prompt);
@@ -232,7 +234,7 @@ export default function ScriptPage() {
       patchItem(id, { status: 'writing', progress: 3, error: '' });
       (async () => {
         try {
-          const { task_id: taskId } = await lectureScriptService.start(file, promptRef.current);
+          const { task_id: taskId } = await lectureScriptService.start(file, promptRef.current, firstRef.current.has(id));
           const result = await lectureScriptService.waitFor(
             taskId,
             (value) => { if (sessionRef.current === session) patchItem(id, { progress: value }); },
@@ -259,10 +261,11 @@ export default function ScriptPage() {
     }
   }
 
-  const enqueue = (files) => {
-    const fresh = files.map((file) => {
+  const enqueue = (files, opensCourse = false) => {
+    const fresh = files.map((file, index) => {
       const id = newId();
       filesRef.current.set(id, file);
+      if (opensCourse && index === 0) firstRef.current.add(id);
       return { id, fileName: file.name, sheet: sheetNameFromFile(file.name), status: 'queued', progress: 0, error: '', title: '', rows: [], slides: [], canRetry: true };
     });
     if (!fresh.length) return;
@@ -274,7 +277,7 @@ export default function ScriptPage() {
 
   const startAll = () => {
     if (!picked.length) return;
-    enqueue(picked);
+    enqueue(picked, firstVideo);
     setPicked([]);
   };
 
@@ -313,6 +316,7 @@ export default function ScriptPage() {
     runningRef.current = 0;
     savingRef.current = false;
     filesRef.current.clear();
+    firstRef.current.clear();
     setIdRef.current = null;
     rememberSetId(null);
     setSetName('');
@@ -473,6 +477,13 @@ export default function ScriptPage() {
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="Ví dụ: Môn An toàn và Bảo mật HTTT, video thuộc Chương 2. Giảng viên xưng thầy, giọng gần gũi, có câu hỏi gợi mở cho sinh viên."
             />
+            <label className="sp-check">
+              <input type="checkbox" checked={firstVideo} onChange={(event) => setFirstVideo(event.target.checked)} />
+              <span>
+                <strong>File đầu tiên là video mở đầu học phần</strong>
+                <small>Chỉ video này chào mừng, giới thiệu giảng viên và học phần (theo slide bìa). Các video còn lại chỉ chào ngắn rồi nói phần này học gì.</small>
+              </span>
+            </label>
             <div className="sp-hints">
               {PROMPT_HINTS.map((hint) => (
                 <button key={hint} type="button" onClick={() => setPrompt((current) => (current.trim() ? `${current.trim()}. ${hint}` : hint))}>
