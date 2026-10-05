@@ -18,10 +18,10 @@ const PARALLEL_FILES = 2;       // files written at the same time; the rest wait
 const OPEN_SET_KEY = 'lecgen:lecture-script-open-set';
 const SAVE_DELAY_MS = 1200;
 const PROMPT_HINTS = [
-  'Giảng viên là nữ, xưng "cô" và gọi "các em"',
-  'Đây là môn …, video thuộc Chương …',
-  'Mỗi slide nói ngắn hơn, khoảng 60 từ',
-  'Thêm ví dụ thực tế gần gũi với sinh viên',
+  'Giảng viên nữ, xưng "cô"',
+  'Môn …, Chương …',
+  'Mỗi slide ngắn hơn (khoảng 60 từ)',
+  'Thêm ví dụ thực tế',
 ];
 
 // What a row is, whatever the user renames it to: the opening, the closing, one slide, or a scene they added.
@@ -488,7 +488,7 @@ export default function ScriptPage() {
         <header className="sp-header">
           <div>
             <h1 className="sp-title"><Clapperboard size={26} /> Kịch bản <span className="gradient-text">bài giảng</span></h1>
-            <p className="sp-desc">Tải slide có sẵn lên (một hoặc nhiều file), AI viết lời thoại cho từng slide. Bạn xem và sửa trước, ưng rồi mới xuất file Excel.</p>
+            <p className="sp-desc">Tải slide lên, AI viết lời thoại cho từng slide. Xem và sửa xong thì xuất Excel.</p>
           </div>
           {started && !opening && (
             <button type="button" className="btn btn-ghost btn-sm" onClick={backToList}>
@@ -516,7 +516,7 @@ export default function ScriptPage() {
               <input ref={inputRef} type="file" accept=".pptx,.pdf" multiple hidden onChange={(event) => { choose(event.target.files); event.target.value = ''; }} />
               <FileUp size={30} />
               <strong>{picked.length ? 'Kéo thả hoặc bấm để thêm file' : 'Kéo thả hoặc bấm để chọn file slide'}</strong>
-              <span>.pptx hoặc .pdf · chọn được nhiều file cùng lúc (tối đa {MAX_FILES}) · mỗi file tối đa 50 MB, 80 slide</span>
+              <span>.pptx hoặc .pdf, tối đa {MAX_FILES} file mỗi lần</span>
             </div>
 
             {picked.length > 0 && (
@@ -531,7 +531,7 @@ export default function ScriptPage() {
               </ul>
             )}
 
-            <label className="sp-label" htmlFor="sp-prompt">Mô tả thêm <em>(không bắt buộc{picked.length > 1 ? ', dùng chung cho mọi file' : ''})</em></label>
+            <label className="sp-label" htmlFor="sp-prompt">Mô tả thêm <em>(không bắt buộc)</em></label>
             <textarea
               id="sp-prompt"
               className="sp-prompt"
@@ -539,29 +539,8 @@ export default function ScriptPage() {
               maxLength={1500}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="Ví dụ: Môn An toàn và Bảo mật HTTT, video thuộc Chương 2. Giảng viên xưng thầy, giọng gần gũi, có câu hỏi gợi mở cho sinh viên."
+              placeholder="Môn học, chương, cách xưng hô…"
             />
-            <label className="sp-check">
-              <input type="checkbox" checked={lookAtFigures} onChange={(event) => setLookAtFigures(event.target.checked)} />
-              <span>
-                <strong>AI xem hình trong slide để giảng đúng nội dung hình</strong>
-                <small>Chỉ sơ đồ, biểu đồ, bảng, ảnh chụp màn hình được mô tả rồi đưa vào lời thoại; ảnh nền, logo, biểu tượng trang trí tự bị bỏ qua. Tốn thêm khoảng 1.500 token mỗi ảnh nội dung; bỏ tick nếu chỉ cần giảng theo chữ.</small>
-              </span>
-            </label>
-            <label className="sp-check">
-              <input type="checkbox" checked={autoEnglish} onChange={(event) => setAutoEnglish(event.target.checked)} />
-              <span>
-                <strong>Dịch luôn sang tiếng Anh (làm phụ đề)</strong>
-                <small>Mỗi kịch bản có thêm lời thoại tiếng Anh dịch từ tiếng Việt, đối chiếu từng đoạn. Cột tiếng Anh nằm ở cột D trong file Excel; bỏ tick thì dịch sau bằng nút trong từng kịch bản.</small>
-              </span>
-            </label>
-            <label className="sp-check">
-              <input type="checkbox" checked={firstVideo} onChange={(event) => setFirstVideo(event.target.checked)} />
-              <span>
-                <strong>File đầu tiên là video mở đầu học phần</strong>
-                <small>Chỉ video này chào mừng, giới thiệu giảng viên và học phần (theo slide bìa). Các video còn lại chỉ chào ngắn rồi nói phần này học gì.</small>
-              </span>
-            </label>
             <div className="sp-hints">
               {PROMPT_HINTS.map((hint) => (
                 <button key={hint} type="button" onClick={() => setPrompt((current) => (current.trim() ? `${current.trim()}. ${hint}` : hint))}>
@@ -569,11 +548,32 @@ export default function ScriptPage() {
                 </button>
               ))}
             </div>
+            <label className="sp-check">
+              <input type="checkbox" checked={lookAtFigures} onChange={(event) => setLookAtFigures(event.target.checked)} />
+              <span>
+                <strong>Xem hình trong slide</strong>
+                <small>Giảng theo sơ đồ, biểu đồ. Ảnh trang trí được bỏ qua.</small>
+              </span>
+            </label>
+            <label className="sp-check">
+              <input type="checkbox" checked={autoEnglish} onChange={(event) => setAutoEnglish(event.target.checked)} />
+              <span>
+                <strong>Dịch sang tiếng Anh</strong>
+                <small>Làm phụ đề, nằm cạnh lời thoại tiếng Việt.</small>
+              </span>
+            </label>
+            <label className="sp-check">
+              <input type="checkbox" checked={firstVideo} onChange={(event) => setFirstVideo(event.target.checked)} />
+              <span>
+                <strong>File đầu là video mở đầu học phần</strong>
+                <small>Chỉ video này giới thiệu giảng viên và học phần.</small>
+              </span>
+            </label>
 
             <button type="button" className="btn btn-primary btn-lg sp-go" disabled={!picked.length} onClick={startAll}>
               <Sparkles size={18} /> {picked.length > 1 ? `Tạo kịch bản cho ${picked.length} file` : 'Tạo kịch bản'}
             </button>
-            <p className="sp-note">Mặc định theo văn phong bài giảng video: giảng viên xưng “thầy”, gọi “các em”, mỗi slide khoảng 80–110 từ. Nhiều file được viết song song, mỗi file thành một sheet trong cùng một file Excel. File slide không được lưu lại; kịch bản và phần chữ đọc từ slide được lưu vào tài khoản của bạn để mở lại sau.</p>
+            <p className="sp-note">Mặc định xưng “thầy”, gọi “các em”. File slide không được lưu, chỉ lưu kịch bản.</p>
           </section>
         )}
 
@@ -590,7 +590,7 @@ export default function ScriptPage() {
             </div>
             {setsLoading && <p className="sp-sets-empty"><Loader2 size={16} className="spin" /> Đang tải…</p>}
             {!setsLoading && sets.length === 0 && (
-              <p className="sp-sets-empty">Chưa có bộ nào. Kịch bản bạn tạo sẽ tự lưu ở đây để mở lại, sửa tiếp hoặc xuất Excel lần nữa.</p>
+              <p className="sp-sets-empty">Chưa có bộ nào. Kịch bản tạo xong sẽ tự lưu ở đây.</p>
             )}
             {!setsLoading && sets.length > 0 && shownSets.length === 0 && <p className="sp-sets-empty">Không có bộ nào khớp “{search}”.</p>}
             {!setsLoading && shownSets.length > 0 && (
@@ -673,9 +673,9 @@ export default function ScriptPage() {
                   <>
                     <Loader2 size={28} className="spin" />
                     <strong>{active.fileName}</strong>
-                    <p>{active.status === 'queued' ? 'Đang chờ tới lượt (mỗi lúc viết 2 file)…' : `Đang viết kịch bản… ${active.progress}%`}</p>
+                    <p>{active.status === 'queued' ? 'Đang chờ tới lượt…' : `Đang viết kịch bản… ${active.progress}%`}</p>
                     <div className="sp-bar"><i style={{ width: `${Math.max(4, active.progress)}%` }} /></div>
-                    {done.length > 0 && <small>Bạn có thể mở các file đã xong ở thanh phía trên trong lúc chờ.</small>}
+                    {done.length > 0 && <small>File đã xong mở được ở thanh phía trên.</small>}
                   </>
                 )}
               </section>
@@ -717,7 +717,7 @@ export default function ScriptPage() {
                 </section>
 
                 {active.missing?.length > 0 && rows.some((row) => !String(row.script || '').trim()) && (
-                  <p className="sp-missing"><AlertTriangle size={14} /> Chưa viết được {active.missing.join(', ')} (slide không có chữ để đọc). Bạn tự điền hoặc xoá phân cảnh đó.</p>
+                  <p className="sp-missing"><AlertTriangle size={14} /> Chưa có lời thoại cho {active.missing.join(', ')} (slide không có chữ). Tự điền hoặc xoá dòng đó.</p>
                 )}
 
                 <section className="sp-card sp-revise">
@@ -728,7 +728,7 @@ export default function ScriptPage() {
                     disabled={active.revising}
                     onChange={(event) => setRevisePrompt(event.target.value)}
                     onKeyDown={(event) => { if (event.key === 'Enter') reviseActive(); }}
-                    placeholder={`Muốn chỉnh gì ở “${active.sheet}”? Ví dụ: viết ngắn hơn, thêm ví dụ thực tế, đổi xưng hô thành cô – các bạn…`}
+                    placeholder={`Cần chỉnh gì ở “${active.sheet}”? Ví dụ: ngắn hơn, thêm ví dụ, đổi xưng hô`}
                     aria-label="Yêu cầu chỉnh sửa kịch bản"
                   />
                   <button type="button" className="btn btn-secondary btn-sm" disabled={!revisePrompt.trim() || active.revising} onClick={reviseActive}>
@@ -745,9 +745,9 @@ export default function ScriptPage() {
                       <div className="sp-en-text">
                         <strong>Lời thoại tiếng Anh (phụ đề)</strong>
                         <small>
-                          {status.translated === 0 && 'Dịch từ lời thoại tiếng Việt, từng đoạn đối chiếu với đoạn tiếng Việt. Xuất Excel sẽ có thêm cột tiếng Anh.'}
-                          {status.translated > 0 && need === 0 && `Đã dịch đủ ${status.translated} dòng. Bạn vẫn sửa được từng câu tiếng Anh bên dưới.`}
-                          {status.translated > 0 && need > 0 && `Đã dịch ${status.translated} dòng${status.stale ? ` · ${status.stale} dòng đã sửa tiếng Việt nên cần dịch lại` : ''}${status.missing ? ` · ${status.missing} dòng chưa dịch` : ''}.`}
+                          {status.translated === 0 && 'Chưa dịch. Bản dịch khớp từng đoạn với tiếng Việt.'}
+                          {status.translated > 0 && need === 0 && `Đã dịch ${status.translated} dòng. Sửa trực tiếp ở cột English.`}
+                          {status.translated > 0 && need > 0 && `Đã dịch ${status.translated} dòng${status.stale ? ` · ${status.stale} dòng cần dịch lại` : ''}${status.missing ? ` · ${status.missing} dòng chưa dịch` : ''}.`}
                         </small>
                       </div>
                       <div className="sp-en-actions">
@@ -815,10 +815,10 @@ export default function ScriptPage() {
                   {working && <><Loader2 size={14} className="spin" /> Đã xong {done.length}/{items.length} file. </>}
                   {!working && emptyRows > 0 && <><AlertTriangle size={14} /> Còn {emptyRows} phân cảnh chưa có lời thoại. </>}
                   {!working && emptyRows === 0 && (done.length > 1
-                    ? `Kiểm tra xong thì xuất: một file Excel gồm ${done.length} sheet, mỗi file slide một sheet.`
+                    ? `${done.length} sheet trong một file Excel.`
                     : (anyEnglish && withEnglish
-                      ? 'Kiểm tra xong thì xuất file. File Excel có các cột như trên: phân cảnh, lời thoại, lời thoại tiếng Anh, lưu ý dựng.'
-                      : 'Kiểm tra xong thì xuất file. File Excel có 3 cột như trên, đúng mẫu kịch bản dựng.'))}
+                      ? 'Xuất Excel khi đã kiểm tra xong.'
+                      : 'Xuất Excel khi đã kiểm tra xong.'))}
                 </span>
                 <div className="sp-footer-actions">
                   {anyEnglish && (
