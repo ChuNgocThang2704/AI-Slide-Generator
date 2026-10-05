@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, Check, Clapperboard, Download, FileUp, Loader2, Plus, RefreshCw, RotateCw, Sparkles, Trash2, Wand2, X,
+  AlertTriangle, ArrowLeft, Check, Clapperboard, Cloud, CloudOff, Download, FileUp, FolderOpen, Loader2, Plus, RotateCw,
+  Search, Sparkles, Trash2, Wand2, X,
 } from 'lucide-react';
 import { useUIStore } from '../../store';
+import { confirmDialog } from '../../services/dialogService';
 import { lectureScriptService } from '../../services/lectureScriptService';
 import {
-  byFileName, countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName, sheetNameFromFile, totalWords,
+  byFileName, countWords, estimatedMinutes, firstShownNumber, renumberRows, safeFileName, sheetNameFromFile,
+  suggestedSetName, totalWords,
 } from '../../utils/lectureScript';
 import './ScriptPage.css';
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_FILES = 20;
 const PARALLEL_FILES = 2;       // files written at the same time; the rest wait their turn
-const DRAFT_KEY = 'lecgen:lecture-script-draft';
+const OPEN_SET_KEY = 'lecgen:lecture-script-open-set';
+const SAVE_DELAY_MS = 1200;
 const PROMPT_HINTS = [
   'Giảng viên là nữ, xưng "cô" và gọi "các em"',
   'Đây là môn …, video thuộc Chương …',
@@ -32,17 +36,28 @@ const withKinds = (rows) => (rows || []).map((row) => ({ ...row, kind: kindOf(ro
 const keyOf = (row) => (row.kind === 'slide' ? `slide-${row.slide}` : row.kind);
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-// Only finished scripts are kept across a reload: a file still being read cannot be resumed.
-const readDraft = () => {
+// The set being worked on is reopened after a reload of the tab.
+const rememberedSetId = () => {
   try {
-    const draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || 'null');
-    const items = Array.isArray(draft?.items) ? draft.items.filter((item) => item?.status === 'done' && item.rows?.length) : [];
-    return items.length
-      ? { items: items.map((item) => ({ ...item, canRetry: false, rows: withKinds(item.rows) })), prompt: draft.prompt || '' }
-      : null;
+    return sessionStorage.getItem(OPEN_SET_KEY) || null;
   } catch {
     return null;
   }
+};
+const rememberSetId = (id) => {
+  try {
+    if (id) sessionStorage.setItem(OPEN_SET_KEY, id);
+    else sessionStorage.removeItem(OPEN_SET_KEY);
+  } catch {
+    // storage is a convenience only
+  }
+};
+const savedItems = (items) => items.map(({ id, fileName, sheet, title, rows, slides, missing }) => ({
+  id, fileName, sheet, title, rows, slides, missing: missing || [],
+}));
+const formatDate = (value) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' });
 };
 
 function ScriptCell({ value, onChange, label }) {
@@ -58,14 +73,24 @@ function ScriptCell({ value, onChange, label }) {
 
 export default function ScriptPage() {
   const { addToast } = useUIStore();
-  const [initialDraft] = useState(readDraft);
   const [picked, setPicked] = useState([]);                 // files chosen, not yet started
-  const [prompt, setPrompt] = useState(initialDraft?.prompt || '');
+  const [prompt, setPrompt] = useState('');
   const [dragging, setDragging] = useState(false);
-  const [items, setItems] = useState(initialDraft?.items || []);
-  const [activeId, setActiveId] = useState(initialDraft?.items?.[0]?.id || null);
+  const [items, setItems] = useState([]);
+  const [activeId, setActiveId] = useState(null);
   const [revisePrompt, setRevisePrompt] = useState('');
   const [exporting, setExporting] = useState(false);
+  // Saved sets: the list, and the one open in the workspace.
+  const [sets, setSets] = useState([]);
+  const [setsLoading, setSetsLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [opening, setOpening] = useState(() => Boolean(rememberedSetId()));
+  const [setName, setSetName] = useState('');
+  const [savedText, setSavedText] = useState('');           // what the server holds, as sent
+  const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const setIdRef = useRef(null);
+  const savingRef = useRef(false);
   const sessionRef = useRef(0);         // bumped by "start over": answers of an older run are dropped
   const filesRef = useRef(new Map());   // id -> File, kept in memory so a failed file can be retried
   const queueRef = useRef([]);          // ids waiting for a free slot
@@ -77,7 +102,7 @@ export default function ScriptPage() {
   useEffect(() => { promptRef.current = prompt; }, [prompt]);
   useEffect(() => () => { sessionRef.current += 1; }, []);
 
-  const started = items.length > 0;
+  const started = items.length > 0 || opening;
   const active = items.find((item) => item.id === activeId) || items[0] || null;
   const done = useMemo(() => items.filter((item) => item.status === 'done'), [items]);
   const working = items.some((item) => item.status === 'queued' || item.status === 'writing' || item.revising);
@@ -87,15 +112,89 @@ export default function ScriptPage() {
   const firstNumber = useMemo(() => firstShownNumber(rows), [rows]);
   const emptyRows = done.reduce((sum, item) => sum + item.rows.filter((row) => !String(row.script || '').trim()).length, 0);
 
-  // Reviewed scripts survive an accidental reload of the tab.
-  useEffect(() => {
+  // What is kept on the server: the finished scripts only (a file still being read cannot be resumed).
+  const payload = useMemo(() => (done.length
+    ? { name: setName.trim() || suggestedSetName(done), prompt, items: savedItems(done) }
+    : null), [done, setName, prompt]);
+  const payloadText = useMemo(() => (payload ? JSON.stringify(payload) : ''), [payload]);
+  const unsaved = Boolean(payloadText) && payloadText !== savedText;
+
+  const refreshSets = useCallback(async () => {
     try {
-      if (done.length) sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ items: done.map((item) => ({ ...item, revising: false })), prompt }));
-      else sessionStorage.removeItem(DRAFT_KEY);
+      setSets(await lectureScriptService.listSets());
     } catch {
-      // storage is a convenience only (several long decks may not fit)
+      // the list is not worth an error toast on its own; opening or saving will report a real problem
+    } finally {
+      setSetsLoading(false);
     }
-  }, [done, prompt]);
+  }, []);
+
+  const saveNow = useCallback(async (body, text) => {
+    if (savingRef.current) return false;
+    const session = sessionRef.current;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const row = await lectureScriptService.saveSet(setIdRef.current, body);
+      if (sessionRef.current !== session) return true;
+      setIdRef.current = row.id;
+      rememberSetId(row.id);
+      setSavedText(text);
+      setSaveFailed(false);
+      return true;
+    } catch {
+      if (sessionRef.current === session) setSaveFailed(true);
+      return false;
+    } finally {
+      savingRef.current = false;
+      if (sessionRef.current === session) setSaving(false);
+    }
+  }, []);
+
+  // Changes are saved by themselves a moment after the last one.
+  useEffect(() => {
+    if (!unsaved || saving) return undefined;
+    const timer = setTimeout(() => { saveNow(payload, payloadText); }, SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [unsaved, saving, payload, payloadText, saveNow]);
+
+  const openSet = useCallback(async (id) => {
+    // (The caller shows the "opening" state: on mount it is already on.)
+    const session = sessionRef.current;
+    try {
+      const set = await lectureScriptService.getSet(id);
+      if (sessionRef.current !== session) return;
+      const opened = (set.items || []).filter((item) => item?.rows?.length).map((item) => ({
+        ...item, status: 'done', progress: 100, error: '', canRetry: false, revising: false, rows: withKinds(item.rows),
+      }));
+      setIdRef.current = set.id;
+      rememberSetId(set.id);
+      setSetName(set.name || '');
+      setPrompt(set.prompt || '');
+      setItems(opened);
+      setActiveId(opened[0]?.id || null);
+      // What was just loaded is what the server holds: opening a set must not save it again.
+      setSavedText(JSON.stringify({ name: set.name || suggestedSetName(opened), prompt: set.prompt || '', items: savedItems(opened) }));
+      setSaveFailed(false);
+    } catch (error) {
+      if (sessionRef.current !== session) return;
+      rememberSetId(null);
+      addToast(error.message || 'Không mở được bộ kịch bản', 'error');
+      refreshSets();
+    } finally {
+      if (sessionRef.current === session) setOpening(false);
+    }
+  }, [addToast, refreshSets]);
+
+  // On arrival: the set that was open before a reload comes back, otherwise the list is shown.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const remembered = rememberedSetId();
+      if (remembered) openSet(remembered);
+      else refreshSets();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [openSet, refreshSets]);
 
   const patchItem = useCallback((id, patch) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...(typeof patch === 'function' ? patch(item) : patch) } : item)));
@@ -202,16 +301,50 @@ export default function ScriptPage() {
     if (id === active?.id) setActiveId(next[0]?.id || null);
   };
 
-  const startOver = () => {
+  const backToList = async () => {
+    if (working && !(await confirmDialog({
+      title: 'Về danh sách',
+      message: 'Còn file đang viết dở. Về danh sách bây giờ thì các file đó bị bỏ; các file đã xong vẫn được lưu.',
+      confirmLabel: 'Về danh sách',
+    }))) return;
+    if (unsaved) await saveNow(payload, payloadText);
     sessionRef.current += 1;
     queueRef.current = [];
     runningRef.current = 0;
+    savingRef.current = false;
     filesRef.current.clear();
+    setIdRef.current = null;
+    rememberSetId(null);
+    setSetName('');
+    setSavedText('');
+    setSaving(false);
+    setSaveFailed(false);
     setItems([]);
     setActiveId(null);
     setPicked([]);
+    setPrompt('');
     setRevisePrompt('');
+    setSetsLoading(true);
+    refreshSets();
   };
+
+  const deleteSet = async (set) => {
+    if (!(await confirmDialog({
+      title: 'Xoá bộ kịch bản',
+      message: `Xoá “${set.name}” (${set.itemCount} kịch bản)? Không khôi phục lại được.`,
+      confirmLabel: 'Xoá',
+      danger: true,
+    }))) return;
+    try {
+      await lectureScriptService.deleteSet(set.id);
+      setSets((current) => current.filter((item) => item.id !== set.id));
+      addToast('Đã xoá bộ kịch bản', 'success');
+    } catch (error) {
+      addToast(error.message || 'Không xoá được', 'error');
+    }
+  };
+
+  const shownSets = sets.filter((set) => set.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   const reviseActive = async () => {
     const target = active;
@@ -259,7 +392,7 @@ export default function ScriptPage() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = safeFileName(list.length === 1 ? list[0].title : `${list.length} video`);
+      link.download = safeFileName(list.length === 1 ? list[0].title : (setName.trim() || suggestedSetName(list)));
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -289,12 +422,16 @@ export default function ScriptPage() {
             <h1 className="sp-title"><Clapperboard size={26} /> Kịch bản <span className="gradient-text">bài giảng</span></h1>
             <p className="sp-desc">Tải slide có sẵn lên (một hoặc nhiều file), AI viết lời thoại cho từng slide. Bạn xem và sửa trước, ưng rồi mới xuất file Excel.</p>
           </div>
-          {started && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={startOver}>
-              <RefreshCw size={14} /> Làm lại từ đầu
+          {started && !opening && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={backToList}>
+              <ArrowLeft size={14} /> Danh sách kịch bản
             </button>
           )}
         </header>
+
+        {opening && (
+          <section className="sp-card sp-wait"><Loader2 size={28} className="spin" /><p>Đang mở bộ kịch bản…</p></section>
+        )}
 
         {!started && (
           <section className="sp-card sp-upload">
@@ -347,12 +484,65 @@ export default function ScriptPage() {
             <button type="button" className="btn btn-primary btn-lg sp-go" disabled={!picked.length} onClick={startAll}>
               <Sparkles size={18} /> {picked.length > 1 ? `Tạo kịch bản cho ${picked.length} file` : 'Tạo kịch bản'}
             </button>
-            <p className="sp-note">Mặc định theo văn phong bài giảng video: giảng viên xưng “thầy”, gọi “các em”, mỗi slide khoảng 80–110 từ. Nhiều file được viết song song, mỗi file thành một sheet trong cùng một file Excel. File chỉ được đọc để viết kịch bản, không lưu lại.</p>
+            <p className="sp-note">Mặc định theo văn phong bài giảng video: giảng viên xưng “thầy”, gọi “các em”, mỗi slide khoảng 80–110 từ. Nhiều file được viết song song, mỗi file thành một sheet trong cùng một file Excel. File slide không được lưu lại; kịch bản và phần chữ đọc từ slide được lưu vào tài khoản của bạn để mở lại sau.</p>
           </section>
         )}
 
-        {started && (
+        {!started && (
+          <section className="sp-card sp-sets">
+            <div className="sp-sets-head">
+              <h2><FolderOpen size={18} /> Bộ kịch bản đã lưu {sets.length > 0 && <small>{sets.length}</small>}</h2>
+              {sets.length > 4 && (
+                <label className="sp-search">
+                  <Search size={14} />
+                  <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm theo tên…" aria-label="Tìm bộ kịch bản" />
+                </label>
+              )}
+            </div>
+            {setsLoading && <p className="sp-sets-empty"><Loader2 size={16} className="spin" /> Đang tải…</p>}
+            {!setsLoading && sets.length === 0 && (
+              <p className="sp-sets-empty">Chưa có bộ nào. Kịch bản bạn tạo sẽ tự lưu ở đây để mở lại, sửa tiếp hoặc xuất Excel lần nữa.</p>
+            )}
+            {!setsLoading && sets.length > 0 && shownSets.length === 0 && <p className="sp-sets-empty">Không có bộ nào khớp “{search}”.</p>}
+            {!setsLoading && shownSets.length > 0 && (
+              <ul className="sp-setlist">
+                {shownSets.map((set) => (
+                  <li key={set.id}>
+                    <button type="button" className="sp-set" onClick={() => { setOpening(true); openSet(set.id); }} title="Mở bộ này">
+                      <strong>{set.name}</strong>
+                      <span>{set.itemCount} kịch bản · ≈ {set.totalMinutes} phút · {Number(set.totalWords || 0).toLocaleString('vi-VN')} từ</span>
+                      <small>Sửa lần cuối {formatDate(set.updatedAt)}</small>
+                    </button>
+                    <button type="button" className="sp-set-del" title="Xoá bộ này" onClick={() => deleteSet(set)}><Trash2 size={15} /></button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {started && !opening && (
           <>
+            <section className="sp-setbar">
+              <label htmlFor="sp-setname">Tên bộ</label>
+              <input
+                id="sp-setname"
+                value={setName}
+                maxLength={200}
+                placeholder={done.length ? suggestedSetName(done) : 'Ví dụ: Chương 2'}
+                onChange={(event) => setSetName(event.target.value)}
+              />
+              <span className={`sp-save${saveFailed ? ' failed' : ''}`}>
+                {!done.length && 'Sẽ tự lưu khi có kịch bản đầu tiên'}
+                {done.length > 0 && saving && <><Loader2 size={13} className="spin" /> Đang lưu…</>}
+                {done.length > 0 && !saving && saveFailed && (
+                  <button type="button" onClick={() => saveNow(payload, payloadText)}><CloudOff size={13} /> Lưu lỗi · bấm để thử lại</button>
+                )}
+                {done.length > 0 && !saving && !saveFailed && unsaved && <><Cloud size={13} /> Chưa lưu</>}
+                {done.length > 0 && !saving && !saveFailed && !unsaved && <><Cloud size={13} /> Đã lưu</>}
+              </span>
+            </section>
+
             <nav className="sp-tabs" aria-label="Các file">
               {items.map((item) => (
                 <button

@@ -51,6 +51,42 @@
 .sp-bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, #6c63ff, #a855f7); transition: width .4s ease; }
 .sp-note { color: rgba(255, 255, 255, 0.42); font-size: 0.8rem; line-height: 1.55; text-align: center; }
 
+/* ── saved sets ── */
+.sp-sets { max-width: 760px; margin-inline: auto; }
+.sp-sets-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.sp-sets-head h2 { display: flex; align-items: center; gap: 9px; font: 700 1.05rem/1.2 'Be Vietnam Pro', sans-serif; }
+.sp-sets-head h2 svg { color: #a89fff; }
+.sp-sets-head h2 small { padding: 3px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; color: #c4bdff; background: rgba(108, 99, 255, 0.18); }
+.sp-search { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 10px; color: rgba(255, 255, 255, 0.45); background: rgba(0, 0, 0, 0.22); border: 1px solid rgba(255, 255, 255, 0.1); }
+.sp-search:focus-within { border-color: #8478ff; }
+.sp-search input { width: 180px; background: transparent; border: 0; outline: none; color: #fff; font: inherit; font-size: 0.86rem; }
+.sp-sets-empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 18px 8px; text-align: center; color: rgba(255, 255, 255, 0.45); font-size: 0.88rem; line-height: 1.5; }
+.sp-setlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 520px; overflow-y: auto; }
+.sp-setlist li { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; align-items: stretch; }
+.sp-set {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; align-items: center; text-align: left; cursor: pointer;
+  padding: 12px 14px; border-radius: 12px; color: #fff; font: inherit;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color .15s, background .15s;
+}
+.sp-set:hover, .sp-set:focus-visible { border-color: #8478ff; background: rgba(108, 99, 255, 0.1); outline: none; }
+.sp-set strong { grid-column: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.95rem; }
+.sp-set span { grid-column: 1; color: rgba(255, 255, 255, 0.55); font-size: 0.8rem; }
+.sp-set small { grid-column: 2; grid-row: 1 / span 2; color: rgba(255, 255, 255, 0.4); font-size: 0.76rem; white-space: nowrap; }
+.sp-set-del { display: grid; place-items: center; cursor: pointer; border-radius: 12px; color: rgba(255, 255, 255, 0.45); background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); }
+.sp-set-del:hover { color: #ff8a8a; border-color: rgba(239, 68, 68, 0.6); background: rgba(239, 68, 68, 0.1); }
+
+.sp-setbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.sp-setbar label { flex: none; font-size: 0.8rem; font-weight: 600; color: rgba(255, 255, 255, 0.55); }
+.sp-setbar input {
+  flex: 1; min-width: 0; max-width: 420px; height: 38px; padding: 0 12px; border-radius: 10px; color: #fff; font: 600 0.95rem/1 inherit;
+  background: rgba(0, 0, 0, 0.22); border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.sp-setbar input:focus { outline: none; border-color: #8478ff; background: rgba(108, 99, 255, 0.08); }
+.sp-save { display: inline-flex; align-items: center; gap: 6px; flex: none; color: rgba(255, 255, 255, 0.45); font-size: 0.8rem; white-space: nowrap; }
+.sp-save.failed, .sp-save.failed button { color: #fca5a5; }
+.sp-save button { display: inline-flex; align-items: center; gap: 6px; padding: 0; background: transparent; border: 0; font: inherit; cursor: pointer; text-decoration: underline; }
+
 /* ── several files ── */
 .sp-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 230px; overflow-y: auto; }
 .sp-files li {
@@ -157,6 +193,11 @@
   .sp-stats { grid-column: 1 / -1; }
   .sp-footer-actions { flex-direction: column-reverse; align-items: stretch; }
   .sp-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .sp-setbar { flex-wrap: wrap; }
+  .sp-setbar input { max-width: none; flex-basis: calc(100% - 70px); }
+  .sp-set { grid-template-columns: minmax(0, 1fr); }
+  .sp-set small { grid-column: 1; grid-row: auto; }
+  .sp-search input { width: 120px; }
   .sp-field-title { grid-column: 1 / -1; }
   .sp-stats { flex-wrap: wrap; height: auto; }
   .sp-revise { flex-wrap: wrap; }

@@ -41,6 +41,27 @@ export const lectureScriptService = {
     throw new Error('Quá thời gian chờ. Hãy thử lại.');
   },
 
+  // Saved sets: the scripts of one sitting (a chapter's videos), kept so they can be reopened.
+  async listSets() {
+    return unwrap(await apiClient.get('/document/lecture-script/sets', { timeout: 30000 }));
+  },
+
+  async getSet(id) {
+    return unwrap(await apiClient.get(`/document/lecture-script/sets/${id}`, { timeout: 60000 }));
+  },
+
+  /** Creates the set when `id` is empty, otherwise replaces it; answers with its list row. */
+  async saveSet(id, { name, prompt, items }) {
+    const body = { name, prompt, items };
+    return unwrap(id
+      ? await apiClient.put(`/document/lecture-script/sets/${id}`, body, { timeout: 60000 })
+      : await apiClient.post('/document/lecture-script/sets', body, { timeout: 60000 }));
+  },
+
+  async deleteSet(id) {
+    return unwrap(await apiClient.delete(`/document/lecture-script/sets/${id}`, { timeout: 30000 }));
+  },
+
   /** One workbook with a sheet per script: [{title, sheet, durationMinutes, rows}]. */
   async exportXlsx(sheets) {
     const response = await apiClient.post(
