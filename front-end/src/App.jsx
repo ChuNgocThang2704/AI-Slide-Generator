@@ -18,6 +18,7 @@ import EditorPage from './pages/EditorPage/EditorPage';
 import PresentPage from './pages/PresentPage/PresentPage';
 import PricingPage from './pages/PricingPage/PricingPage';
 import DocumentsPage from './pages/DocumentsPage/DocumentsPage';
+import ScriptPage from './pages/ScriptPage/ScriptPage';
 import AdminPage from './pages/AdminPage/AdminPage';
 import SettingsPage from './pages/SettingsPage/SettingsPage';
 import PaymentResultPage from './pages/PaymentResultPage/PaymentResultPage';
@@ -234,6 +235,11 @@ export default function App() {
         } />
         <Route path="/present/:id" element={
           <PrivateRoute><PresentPage /></PrivateRoute>
+        } />
+        <Route path="/script" element={
+          <PrivateRoute>
+            <Layout><ScriptPage /></Layout>
+          </PrivateRoute>
         } />
         <Route path="/documents" element={
           <PrivateRoute>

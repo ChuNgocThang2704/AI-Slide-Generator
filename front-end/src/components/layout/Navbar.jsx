@@ -4,8 +4,7 @@ import { useAuthStore } from '../../store';
 import { authService } from '../../services/authService';
 import {
   Sparkles, LayoutDashboard, LogOut, User, CreditCard,
-  ChevronDown, Menu, X, FileText, ShieldAlert
-} from 'lucide-react';
+  ChevronDown, Menu, X, FileText, ShieldAlert, Clapperboard } from 'lucide-react';
 import './Navbar.css';
 
 export default function Navbar() {
@@ -71,6 +70,9 @@ export default function Navbar() {
             <Link to="/documents" className={`nav-link ${isActive('/documents') ? 'active' : ''}`}>
               <FileText size={15} /> Tài liệu
             </Link>
+            <Link to="/script" className={`nav-link ${isActive('/script') ? 'active' : ''}`}>
+              <Clapperboard size={15} /> Kịch bản
+            </Link>
             {user?.roles?.some(r => r.name === 'ADMIN' || r.code === 'ADMIN' || r.name === 'ROLE_ADMIN' || user?.email === 'admin@aislide.com') && (
               <Link to="/admin" className={`nav-link ${isActive('/admin') ? 'active' : ''}`}>
                 <ShieldAlert size={15} /> Admin
@@ -104,6 +106,9 @@ export default function Navbar() {
                   </Link>
                   <Link to="/documents" className="dropdown-item" onClick={() => setDropdownOpen(false)}>
                     <FileText size={15} /> Tài liệu
+                  </Link>
+                  <Link to="/script" className="dropdown-item" onClick={() => setDropdownOpen(false)}>
+                    <Clapperboard size={15} /> Kịch bản bài giảng
                   </Link>
                   {user?.roles?.some(r => r.name === 'ADMIN' || r.code === 'ADMIN' || r.name === 'ROLE_ADMIN' || user?.email === 'admin@aislide.com') && (
                     <Link to="/admin" className="dropdown-item" onClick={() => setDropdownOpen(false)}>
@@ -149,6 +154,7 @@ export default function Navbar() {
               <Link to="/dashboard" className="mobile-link" onClick={() => setMenuOpen(false)}>Dashboard</Link>
               <Link to="/generate" className="mobile-link" onClick={() => setMenuOpen(false)}>Tạo slide</Link>
               <Link to="/documents" className="mobile-link" onClick={() => setMenuOpen(false)}>Tài liệu</Link>
+              <Link to="/script" className="mobile-link" onClick={() => setMenuOpen(false)}>Kịch bản bài giảng</Link>
               {user?.roles?.some(r => r.name === 'ADMIN' || r.code === 'ADMIN' || r.name === 'ROLE_ADMIN' || user?.email === 'admin@aislide.com') && (
                 <Link to="/admin" className="mobile-link" onClick={() => setMenuOpen(false)}>Admin</Link>
               )}
