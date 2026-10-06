@@ -244,3 +244,10 @@
 .sp-switch input:checked::after { transform: translateX(16px); }
 .sp-switch span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .sp-switch small { color: rgba(255, 255, 255, 0.45); font-size: 0.76rem; line-height: 1.4; }
+
+.sp-rowsync { display: flex !important; align-items: center; justify-content: flex-end; gap: 10px; }
+.sp-rowsync .warn { margin-right: auto; color: #fbbf24; }
+.sp-rowsync button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; cursor: pointer; font: inherit; color: rgba(143, 208, 255, 0.55); }
+.sp-rowsync button:hover:not(:disabled) { color: #8fd0ff; text-decoration: underline; }
+.sp-rowsync button:disabled { opacity: .4; cursor: default; }
+.sp-en-actions { flex-wrap: wrap; justify-content: flex-end; }

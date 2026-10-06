@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  byFileName, countWords, estimatedMinutes, firstShownNumber, englishStatus, renumberRows, rowsToTranslate, safeFileName, sheetNameFromFile, suggestedSetName,
+  byFileName, countWords, estimatedMinutes, firstShownNumber, applyTranslations, normalizeRow, renumberRows, rowsToTranslate, rowsWithScript, safeFileName, translationStatus, sheetNameFromFile, suggestedSetName,
 } from '../src/utils/lectureScript.js';
 
 const rows = () => [
@@ -52,14 +52,43 @@ test('a set is named after what its files share', () => {
   assert.equal(suggestedSetName([]), 'Bộ kịch bản');
 });
 
-test('English is needed for rows that have none or whose Vietnamese changed after translating', () => {
+test('a translation is needed for rows that have none or whose script changed after translating', () => {
   const rows = [
-    { script: 'Một.', en: 'One.', enFor: 'Một.' },
-    { script: 'Hai (đã sửa).', en: 'Two.', enFor: 'Hai.' },
-    { script: 'Ba.', en: '' },
-    { script: '   ', en: '' },
+    { script: 'Một.', alt: 'One.', altFor: 'Một.' },
+    { script: 'Hai (đã sửa).', alt: 'Two.', altFor: 'Hai.' },
+    { script: 'Ba.', alt: '' },
+    { script: '   ', alt: '' },
   ];
   assert.deepEqual(rowsToTranslate(rows), [{ i: 1, script: 'Hai (đã sửa).' }, { i: 2, script: 'Ba.' }]);
-  assert.deepEqual(englishStatus(rows), { translated: 2, stale: 1, missing: 1 });
+  assert.deepEqual(rowsWithScript(rows).map((row) => row.i), [0, 1, 2]);
+  assert.deepEqual(translationStatus(rows), { translated: 2, stale: 1, missing: 1 });
   assert.deepEqual(rowsToTranslate([]), []);
+});
+
+test('rows saved when the subtitles could only be English are read as they are now', () => {
+  assert.deepEqual(normalizeRow({ script: 'Một.', en: 'One.', enFor: 'Một.' }), { script: 'Một.', alt: 'One.', altFor: 'Một.' });
+  const current = { script: 'Một.', alt: 'One.', altFor: 'Một.' };
+  assert.equal(normalizeRow(current), current);
+});
+
+test('a translation lands only on the row whose script is still what was sent', () => {
+  const plan = [{ i: 0, script: 'Một.' }, { i: 1, script: 'Hai.' }, { i: 2, script: 'Ba.' }];
+  const items = [{ i: 0, text: 'One.' }, { i: 1, text: 'Two.' }, { i: 2, text: 'Three.' }];
+  const rows = [
+    { script: 'Một.', alt: '' },
+    { script: 'Hai, đã gõ thêm.', alt: '' },                       // edited while the call was running
+    { script: 'Chèn mới', alt: '' },                                // a row inserted meanwhile pushed "Ba." down
+    { script: 'Ba.', alt: '' },
+  ];
+  const out = applyTranslations(rows, plan, items);
+  assert.equal(out.applied, 2);
+  assert.deepEqual(out.rows.map((row) => row.alt), ['One.', '', '', 'Three.']);
+  assert.equal(out.rows[3].altFor, 'Ba.');
+});
+
+test('a row the user brought up to date by hand is not overwritten, unless everything is redone', () => {
+  const rows = [{ script: 'Một.', alt: 'One, polished.', altFor: 'Một.' }];
+  const plan = [{ i: 0, script: 'Một.' }];
+  assert.equal(applyTranslations(rows, plan, [{ i: 0, text: 'One.' }]).rows[0].alt, 'One, polished.');
+  assert.equal(applyTranslations(rows, plan, [{ i: 0, text: 'One.' }], { force: true }).rows[0].alt, 'One.');
 });

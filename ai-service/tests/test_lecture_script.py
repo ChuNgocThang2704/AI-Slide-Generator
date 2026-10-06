@@ -317,38 +317,66 @@ class FigureTests(unittest.TestCase):
 
 
 class _Translator:
-    """Answers translate_strings: 'EN:' in front of each item; `drop` makes it return one item too few."""
+    """Answers a translation call: every paragraph comes back with the target language in front.
 
-    def __init__(self, drop=False):
-        self.drop = drop
-        self.calls = 0
+    `drop_once` makes the first answer for a multi-row batch lose a paragraph of row `drop_once`,
+    the way a model merges two lines; `always_drop` keeps doing it."""
+
+    def __init__(self, drop_once=None, always_drop=None):
+        self.drop_once = drop_once
+        self.always_drop = always_drop
+        self.calls = []
 
     async def _llm_completion_plain_text(self, messages, **kwargs):
-        self.calls += 1
-        items = json.loads(messages[1]["content"])["items"]
-        if self.drop and len(items) > 1:
-            items = items[:-1]
-        return json.dumps({"items": [f"EN:{item}" for item in items]})
+        system = messages[0]["content"]
+        target = "EN" if system.startswith("You turn the spoken script") else "VI"
+        payload = json.loads(messages[1]["content"])
+        self.calls.append({"target": target, "rows": [row["i"] for row in payload["rows"]], "system": system, "lecture": payload["lecture"]})
+        rows = []
+        for row in payload["rows"]:
+            paragraphs = [f"{target}:{text}" for text in row["paragraphs"]]
+            if row["i"] == self.always_drop or (row["i"] == self.drop_once and len(payload["rows"]) > 1):
+                paragraphs = paragraphs[:-1]
+            rows.append({"i": row["i"], "paragraphs": paragraphs})
+        return json.dumps({"rows": rows})
 
 
-class EnglishSubtitleTests(unittest.TestCase):
-    def test_every_paragraph_is_translated_and_the_blank_line_structure_is_kept(self):
-        result = asyncio.run(translate_scripts(_Translator(), ["Chào các em.\n\nHôm nay học bài mới.", "", "Một đoạn."]))
+class SubtitleTranslationTests(unittest.TestCase):
+    def test_every_row_is_translated_paragraph_for_paragraph(self):
+        translator = _Translator()
+        result = asyncio.run(translate_scripts(translator, ["Chào các em.\n\nHôm nay học bài mới.", "", "Một đoạn."], "en", title="Bài 1"))
         self.assertEqual(result["failed"], [])
+        self.assertEqual(result["target"], "en")
         self.assertEqual(result["items"], [
-            {"i": 0, "en": "EN:Chào các em.\n\nEN:Hôm nay học bài mới."},
-            {"i": 2, "en": "EN:Một đoạn."},
+            {"i": 0, "text": "EN:Chào các em.\n\nEN:Hôm nay học bài mới."},
+            {"i": 2, "text": "EN:Một đoạn."},
         ])
+        self.assertEqual(translator.calls[0]["lecture"], "Bài 1")
+        self.assertIn("Never translate word by word", translator.calls[0]["system"])
 
-    def test_a_batch_the_model_gets_wrong_is_split_until_it_is_right(self):
-        translator = _Translator(drop=True)
-        result = asyncio.run(translate_scripts(translator, ["a\n\nb\n\nc\n\nd"]))
+    def test_an_english_script_is_translated_into_vietnamese(self):
+        translator = _Translator()
+        result = asyncio.run(translate_scripts(translator, ["Hello everyone.\n\nLet's begin."], "vi", note="xưng cô"))
+        self.assertEqual(result["items"][0]["text"], "VI:Hello everyone.\n\nVI:Let's begin.")
+        self.assertIn("không dịch từng chữ", translator.calls[0]["system"])
+        self.assertIn("xưng cô", translator.calls[0]["system"])
+
+    def test_a_row_that_comes_back_with_a_line_missing_is_asked_again_alone(self):
+        translator = _Translator(drop_once=1)
+        result = asyncio.run(translate_scripts(translator, ["a\n\nb", "c\n\nd\n\ne"], "en"))
         self.assertEqual(result["failed"], [])
-        self.assertEqual(result["items"][0]["en"], "EN:a\n\nEN:b\n\nEN:c\n\nEN:d")
-        self.assertGreater(translator.calls, 2)
+        self.assertEqual(result["items"][1]["text"], "EN:c\n\nEN:d\n\nEN:e")
+        self.assertEqual([call["rows"] for call in translator.calls], [[0, 1], [1]])
+
+    def test_a_row_that_keeps_failing_is_reported_not_half_translated(self):
+        translator = _Translator(always_drop=0)
+        result = asyncio.run(translate_scripts(translator, ["a\n\nb", "c"], "en"))
+        self.assertEqual(result["failed"], [0])
+        self.assertEqual([item["i"] for item in result["items"]], [1])
 
     def test_nothing_to_translate_gives_nothing(self):
-        self.assertEqual(asyncio.run(translate_scripts(_Translator(), ["", "  "])), {"items": [], "failed": []})
+        result = asyncio.run(translate_scripts(_Translator(), ["", "  "], "en"))
+        self.assertEqual((result["items"], result["failed"]), ([], []))
 
 
 class LectureScriptWorkbookTests(unittest.TestCase):
@@ -361,7 +389,7 @@ class LectureScriptWorkbookTests(unittest.TestCase):
         self.assertIsNone(plain["D4"].value)
         self.assertEqual({str(c) for c in plain.merged_cells.ranges}, {"A1:C1", "A2:C2"})
         both = load_workbook(io.BytesIO(build_workbook({"title": "T", "rows": [
-            {"scene": "Slide 2", "script": "Một.", "note": "", "en": "One."},
+            {"scene": "Slide 2", "script": "Một.", "note": "", "alt": "One."},
             {"scene": "Slide 3", "script": "Hai.", "note": ""},
         ]}))).active
         self.assertEqual([both[f"{c}4"].value for c in "ABCD"], ["PHÂN CẢNH", "LỜI THOẠI", "LỜI THOẠI (ENGLISH)", "LƯU Ý DỰNG"])
@@ -370,6 +398,15 @@ class LectureScriptWorkbookTests(unittest.TestCase):
         self.assertIsNone(both["C6"].value)
         self.assertEqual(both["D5"].value, None)
         self.assertEqual({str(c) for c in both.merged_cells.ranges}, {"A1:D1", "A2:D2"})
+        # a set saved before the subtitles could be Vietnamese kept them under "en"
+        legacy = load_workbook(io.BytesIO(build_workbook({"title": "T", "rows": [{"scene": "Slide 2", "script": "Một.", "note": "", "en": "One."}]}))).active
+        self.assertEqual(legacy["C5"].value, "One.")
+        # an English deck: the script is the English column, the subtitles are Vietnamese
+        english = load_workbook(io.BytesIO(build_workbook({"title": "T", "language": "en", "rows": [
+            {"scene": "Slide 2", "script": "One.", "note": "", "alt": "Một."},
+        ]}))).active
+        self.assertEqual([english[f"{c}4"].value for c in "ABCD"], ["PHÂN CẢNH", "LỜI THOẠI (ENGLISH)", "LỜI THOẠI (TIẾNG VIỆT)", "LƯU Ý DỰNG"])
+        self.assertEqual((english["B5"].value, english["C5"].value), ("One.", "Một."))
 
     def test_workbook_has_the_layout_of_a_production_script(self):
         try:

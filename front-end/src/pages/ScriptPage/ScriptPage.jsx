@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, Check, Clapperboard, Cloud, CloudOff, Download, FileUp, FolderOpen, Languages, Loader2, Plus, RotateCw,
+  AlertTriangle, ArrowLeft, Check, Clapperboard, Cloud, CloudOff, Download, FileUp, FolderOpen, Languages, Loader2, Plus, RefreshCw,
+  RotateCw,
   Search, Sparkles, Trash2, Wand2, X,
 } from 'lucide-react';
 import { useUIStore } from '../../store';
 import { confirmDialog } from '../../services/dialogService';
 import { lectureScriptService } from '../../services/lectureScriptService';
 import {
-  byFileName, countWords, englishStatus, estimatedMinutes, firstShownNumber, renumberRows, rowsToTranslate, safeFileName,
-  sheetNameFromFile, suggestedSetName, totalWords,
+  applyTranslations, byFileName, countWords, estimatedMinutes, firstShownNumber, normalizeRow, renumberRows, rowsToTranslate,
+  rowsWithScript, safeFileName, sheetNameFromFile, suggestedSetName, totalWords, translationStatus,
 } from '../../utils/lectureScript';
 import './ScriptPage.css';
 
@@ -17,6 +18,7 @@ const MAX_FILES = 20;
 const PARALLEL_FILES = 2;       // files written at the same time; the rest wait their turn
 const OPEN_SET_KEY = 'lecgen:lecture-script-open-set';
 const SAVE_DELAY_MS = 1200;
+const SYNC_DELAY_MS = 2500;      // how long after the last keystroke the translation of an edited row is brought up to date
 const PROMPT_HINTS = [
   'Giảng viên nữ, xưng "cô"',
   'Môn …, Chương …',
@@ -32,7 +34,10 @@ const kindOf = (row) => {
   if (row.scene === 'Lời kết') return 'outro';
   return 'extra';
 };
-const withKinds = (rows) => (rows || []).map((row) => ({ ...row, kind: kindOf(row) }));
+const withKinds = (rows) => (rows || []).map((row) => ({ ...normalizeRow(row), kind: kindOf(row) }));
+// The script is in the language of the deck; the subtitles are in the other one.
+const subtitleLanguage = (item) => (item?.language === 'en' ? 'vi' : 'en');
+const languageName = (code) => (code === 'vi' ? 'tiếng Việt' : 'tiếng Anh');
 const keyOf = (row) => (row.kind === 'slide' ? `slide-${row.slide}` : row.kind);
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -52,8 +57,8 @@ const rememberSetId = (id) => {
     // storage is a convenience only
   }
 };
-const savedItems = (items) => items.map(({ id, fileName, sheet, title, rows, slides, missing }) => ({
-  id, fileName, sheet, title, rows, slides, missing: missing || [],
+const savedItems = (items) => items.map(({ id, fileName, sheet, title, language, rows, slides, missing }) => ({
+  id, fileName, sheet, title, language: language === 'en' ? 'en' : 'vi', rows, slides, missing: missing || [],
 }));
 const formatDate = (value) => {
   const date = new Date(value);
@@ -94,6 +99,7 @@ export default function ScriptPage() {
   const savingRef = useRef(false);
   const sessionRef = useRef(0);         // bumped by "start over": answers of an older run are dropped
   const itemsRef = useRef([]);          // the latest items, for work that outlives a render
+  const triedRef = useRef(new Set());   // row texts already sent for translation by themselves: a failure is not retried in a loop
   const filesRef = useRef(new Map());   // id -> File, kept in memory so a failed file can be retried
   const firstRef = useRef(new Set());   // ids of the file that opens the course
   const queueRef = useRef([]);          // ids waiting for a free slot
@@ -110,7 +116,6 @@ export default function ScriptPage() {
   const active = items.find((item) => item.id === activeId) || items[0] || null;
   const done = useMemo(() => items.filter((item) => item.status === 'done'), [items]);
   const working = items.some((item) => item.status === 'queued' || item.status === 'writing' || item.revising || item.translating);
-  const anyEnglish = done.some((item) => item.rows.some((row) => String(row.en || '').trim()));
   const rows = useMemo(() => (active?.status === 'done' ? active.rows : []), [active]);
   const words = useMemo(() => totalWords(rows), [rows]);
   const minutes = useMemo(() => estimatedMinutes(rows), [rows]);
@@ -170,7 +175,8 @@ export default function ScriptPage() {
       const set = await lectureScriptService.getSet(id);
       if (sessionRef.current !== session) return;
       const opened = (set.items || []).filter((item) => item?.rows?.length).map((item) => ({
-        ...item, status: 'done', progress: 100, error: '', canRetry: false, revising: false, translating: false, rows: withKinds(item.rows),
+        ...item, status: 'done', progress: 100, error: '', canRetry: false, revising: false, translating: false, syncing: false,
+        language: item.language === 'en' ? 'en' : 'vi', rows: withKinds(item.rows),
       }));
       setIdRef.current = set.id;
       rememberSetId(set.id);
@@ -246,14 +252,17 @@ export default function ScriptPage() {
           if (sessionRef.current !== session) return;
           const written = withKinds(result.script.rows);
           const sheet = sheetNameFromFile(file.name);
+          const language = result.script.language === 'en' ? 'en' : 'vi';
+          const title = result.script.title || sheet;
           patchItem(id, {
             status: 'done', progress: 100, slides: result.slides || [],
-            title: result.script.title || sheet,
+            title,
+            language,
             rows: written,
             missing: result.script.missing || [],
           });
-          // The English subtitle lines follow right behind the Vietnamese script.
-          translateItem(id, { rows: written, sheet });
+          // The subtitles in the other language follow right behind the script.
+          translateRows(id, { fresh: { rows: written, sheet, language, title } });
         } catch (error) {
           if (sessionRef.current === session && error.message !== 'cancelled') {
             patchItem(id, { status: 'error', error: error.message || 'Không tạo được kịch bản' });
@@ -324,6 +333,7 @@ export default function ScriptPage() {
     savingRef.current = false;
     filesRef.current.clear();
     firstRef.current.clear();
+    triedRef.current.clear();
     setIdRef.current = null;
     rememberSetId(null);
     setSetName('');
@@ -393,62 +403,107 @@ export default function ScriptPage() {
     }
   };
 
-  // English subtitles: the Vietnamese rows that have none (or changed since) are translated paragraph by paragraph.
-  // `fresh` is for a script that was only just written: the items ref has not caught up with it yet.
-  async function translateItem(id, fresh) {
-    const target = fresh ? { rows: fresh.rows, sheet: fresh.sheet }
-      : itemsRef.current.find((item) => item.id === id && item.status === 'done' && !item.translating && !item.revising);
-    if (!target) return 0;
-    const needed = rowsToTranslate(target.rows);
-    if (!needed.length) return 0;
+  // Subtitles: the script rows are translated into the other language, a row at a time so the two stay side by side.
+  //  - by default only rows with no translation or an outdated one are sent;
+  //  - `plan` names the rows to send whatever their state (one row, or all of them with `force`);
+  //  - `lock` dims the table for a full pass; without it the user keeps typing and a translation only lands
+  //    on a row whose script is still the text that was sent;
+  //  - `fresh` is a script that was only just written: the items ref has not caught up with it yet.
+  async function translateRows(id, { fresh = null, plan = null, force = false, lock = true } = {}) {
+    const item = fresh
+      || itemsRef.current.find((entry) => entry.id === id && entry.status === 'done' && !entry.translating && !entry.syncing && !entry.revising);
+    if (!item) return 0;
+    const sent = plan || (force ? rowsWithScript(item.rows) : rowsToTranslate(item.rows));
+    if (!sent.length) return 0;
     const session = sessionRef.current;
-    patchItem(id, { translating: true, progress: 3 });
+    const busy = lock ? 'translating' : 'syncing';
+    patchItem(id, lock ? { translating: true, progress: 3 } : { syncing: true });
     try {
-      const { task_id: taskId } = await lectureScriptService.translate(needed.map((row) => row.script));
+      const { task_id: taskId } = await lectureScriptService.translate({
+        scripts: sent.map((row) => row.script), target: subtitleLanguage(item), title: item.title || '', note: promptRef.current,
+      });
       const result = await lectureScriptService.waitFor(
         taskId,
-        (value) => { if (sessionRef.current === session) patchItem(id, { progress: value }); },
+        (value) => { if (lock && sessionRef.current === session) patchItem(id, { progress: value }); },
         () => sessionRef.current !== session,
       );
       if (sessionRef.current !== session) return 0;
-      const english = new Map((result.items || []).map((entry) => [needed[entry.i]?.i, { en: entry.en, enFor: needed[entry.i]?.script }]));
-      patchItem(id, (item) => ({
-        translating: false,
-        rows: item.rows.map((row, index) => (english.has(index) ? { ...row, ...english.get(index) } : row)),
-      }));
-      if (result.failed?.length) addToast(`“${target.sheet}”: ${result.failed.length} dòng chưa dịch được, bấm dịch lại để thử tiếp`, 'warning');
-      return english.size;
+      let applied = 0;
+      patchItem(id, (current) => {
+        const outcome = applyTranslations(current.rows, sent, result.items, { force });
+        applied = outcome.applied;
+        return { [busy]: false, rows: outcome.rows };
+      });
+      if (result.failed?.length && lock) addToast(`“${item.sheet}”: ${result.failed.length} dòng chưa dịch được, bấm dịch lại để thử tiếp`, 'warning');
+      return applied || (result.items || []).length;
     } catch (error) {
       if (sessionRef.current !== session) return 0;
-      patchItem(id, { translating: false });
-      if (error.message !== 'cancelled') addToast(error.message || 'Không dịch được', 'error');
+      patchItem(id, { [busy]: false });
+      if (lock && error.message !== 'cancelled') addToast(error.message || 'Không dịch được', 'error');
       return 0;
     }
   }
 
+  // Bring the rows that are missing or out of date up to date.
   const translateActive = async () => {
     if (!active) return;
-    const count = await translateItem(active.id);
-    if (count) addToast(`Đã dịch ${count} dòng sang tiếng Anh`, 'success');
+    const count = await translateRows(active.id);
+    if (count) addToast(`Đã dịch ${count} dòng sang ${languageName(subtitleLanguage(active))}`, 'success');
+  };
+
+  // Translate everything again, replacing the translation that is there (hand edits included).
+  const retranslateActive = async () => {
+    if (!active) return;
+    const edited = translationStatus(active.rows).translated > 0;
+    if (edited && !(await confirmDialog({
+      title: 'Dịch lại toàn bộ',
+      message: `Bản dịch ${languageName(subtitleLanguage(active))} hiện tại của “${active.sheet}” sẽ được thay bằng bản dịch mới, kể cả những câu bạn đã sửa tay.`,
+      confirmLabel: 'Dịch lại',
+    }))) return;
+    const count = await translateRows(active.id, { force: true });
+    if (count) addToast(`Đã dịch lại ${count} dòng`, 'success');
+  };
+
+  const retranslateRow = async (index) => {
+    if (!active) return;
+    const script = String(active.rows[index]?.script || '').trim();
+    if (script) await translateRows(active.id, { plan: [{ i: index, script }], force: true, lock: false });
   };
 
   const translateAll = async () => {
-    const ids = done.map((item) => item.id);
+    const queue = done.map((item) => item.id);
     let total = 0;
-    const queue = [...ids];
     const worker = async () => {
-      while (queue.length) total += await translateItem(queue.shift());
+      while (queue.length) total += await translateRows(queue.shift());
     };
     await Promise.all([worker(), worker()]);     // two files at a time
-    if (total) addToast(`Đã dịch ${total} dòng sang tiếng Anh`, 'success');
+    addToast(total ? `Đã dịch ${total} dòng` : 'Bản dịch của mọi file đã khớp với lời thoại', 'success');
   };
+
+  // Keeping the two languages in step: once the user stops typing, the rows whose script changed are
+  // translated again by themselves. Each text is tried once; a row that failed waits for the button.
+  const syncId = active?.id;
+  const activeRows = active?.status === 'done' ? active.rows : null;
+  const activeBusy = Boolean(active?.translating || active?.syncing || active?.revising);
+  useEffect(() => {
+    if (!syncId || !activeRows || activeBusy) return undefined;
+    const pending = rowsToTranslate(activeRows).filter((row) => !triedRef.current.has(`${syncId}\n${row.script}`));
+    if (!pending.length) return undefined;
+    const timer = setTimeout(() => {
+      pending.forEach((row) => triedRef.current.add(`${syncId}\n${row.script}`));
+      translateRows(syncId, { plan: pending, lock: false });
+    }, SYNC_DELAY_MS);
+    return () => clearTimeout(timer);
+    // translateRows only reads refs and the stable patchItem
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncId, activeRows, activeBusy]);
 
   const exportXlsx = async (list) => {
     if (!list.length || exporting) return;
     setExporting(true);
     try {
       const blob = await lectureScriptService.exportXlsx(list.map((item) => ({
-        title: item.title, sheet: item.sheet, durationMinutes: estimatedMinutes(item.rows), rows: item.rows, withEnglish: true,
+        title: item.title, sheet: item.sheet, durationMinutes: estimatedMinutes(item.rows), rows: item.rows, language: item.language === 'en' ? 'en' : 'vi',
       })));
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -716,24 +771,29 @@ export default function ScriptPage() {
                 </section>
 
                 {(() => {
-                  const status = englishStatus(rows);
+                  const status = translationStatus(rows);
                   const need = status.missing + status.stale;
+                  const other = languageName(subtitleLanguage(active));
                   return (
                     <section className="sp-card sp-en">
                       <Languages size={18} />
                       <div className="sp-en-text">
-                        <strong>Lời thoại tiếng Anh (phụ đề)</strong>
+                        <strong>Phụ đề {other}</strong>
                         <small>
-                          {status.translated === 0 && 'Chưa dịch. Bản dịch khớp từng đoạn với tiếng Việt.'}
-                          {status.translated > 0 && need === 0 && `Đã dịch ${status.translated} dòng. Sửa trực tiếp ở cột English.`}
-                          {status.translated > 0 && need > 0 && `Đã dịch ${status.translated} dòng${status.stale ? ` · ${status.stale} dòng cần dịch lại` : ''}${status.missing ? ` · ${status.missing} dòng chưa dịch` : ''}.`}
+                          {active.syncing && 'Đang cập nhật bản dịch theo lời thoại vừa sửa…'}
+                          {!active.syncing && status.translated === 0 && 'Chưa dịch.'}
+                          {!active.syncing && status.translated > 0 && need === 0 && 'Khớp với lời thoại. Sửa lời thoại thì bản dịch tự cập nhật.'}
+                          {!active.syncing && status.translated > 0 && need > 0 && `${need} dòng chưa khớp với lời thoại.`}
                         </small>
                       </div>
                       <div className="sp-en-actions">
-                        <button type="button" className="btn btn-secondary btn-sm" disabled={active.translating || active.revising || need === 0} onClick={translateActive}>
-                          {active.translating
-                            ? <><Loader2 size={14} className="spin" /> {active.progress}%</>
-                            : status.translated === 0 ? 'Dịch sang tiếng Anh' : need === 0 ? 'Đã dịch đủ' : `Dịch ${need} dòng còn lại`}
+                        {need > 0 && (
+                          <button type="button" className="btn btn-secondary btn-sm" disabled={activeBusy} onClick={translateActive}>
+                            {active.translating ? <><Loader2 size={14} className="spin" /> {active.progress}%</> : `Dịch ${need} dòng`}
+                          </button>
+                        )}
+                        <button type="button" className="btn btn-ghost btn-sm" disabled={activeBusy || status.translated + status.missing === 0} onClick={retranslateActive}>
+                          {active.translating && need === 0 ? <><Loader2 size={14} className="spin" /> {active.progress}%</> : <><RefreshCw size={13} /> Dịch lại toàn bộ</>}
                         </button>
                         {done.length > 1 && (
                           <button type="button" className="btn btn-ghost btn-sm" disabled={working} onClick={translateAll}>Dịch cả {done.length} file</button>
@@ -746,8 +806,8 @@ export default function ScriptPage() {
                 <section className={`sp-card sp-table${active.revising || active.translating ? ' dim' : ''}`}>
                   <div className="sp-row sp-head">
                     <div>PHÂN CẢNH</div>
-                    <div>LỜI THOẠI</div>
-                    <div>LỜI THOẠI (ENGLISH)</div>
+                    <div>{active.language === 'en' ? 'LỜI THOẠI (ENGLISH)' : 'LỜI THOẠI'}</div>
+                    <div>{active.language === 'en' ? 'LỜI THOẠI (TIẾNG VIỆT)' : 'LỜI THOẠI (ENGLISH)'}</div>
                     <div>LƯU Ý DỰNG</div>
                     <div />
                   </div>
@@ -766,13 +826,20 @@ export default function ScriptPage() {
                       <div className="sp-en-cell">
                         <ScriptCell
                           className="sp-script sp-script-en"
-                          value={row.en || ''}
-                          label={`English ${row.scene}`}
+                          value={row.alt || ''}
+                          label={`Bản dịch ${row.scene}`}
                           placeholder={String(row.script || '').trim() ? 'Chưa dịch' : ''}
-                          onChange={(value) => updateRow(index, { en: value, enFor: row.enFor ?? String(row.script || '').trim() })}
+                          onChange={(value) => updateRow(index, { alt: value, altFor: String(row.script || '').trim() })}
                         />
-                        {String(row.en || '').trim() && row.enFor !== String(row.script || '').trim() && (
-                          <small className="warn">Tiếng Việt đã đổi, cần dịch lại</small>
+                        {String(row.script || '').trim() && (
+                          <small className="sp-rowsync">
+                            {String(row.alt || '').trim() && row.altFor !== String(row.script || '').trim() && (
+                              <span className="warn">{active.syncing ? 'Đang cập nhật…' : 'Lời thoại đã đổi'}</span>
+                            )}
+                            <button type="button" disabled={activeBusy} onClick={() => retranslateRow(index)} title="Dịch lại riêng dòng này từ lời thoại bên trái">
+                              <RefreshCw size={11} /> Dịch lại
+                            </button>
+                          </small>
                         )}
                       </div>
                       <div>
@@ -795,7 +862,7 @@ export default function ScriptPage() {
                   {!working && emptyRows > 0 && <><AlertTriangle size={14} /> Còn {emptyRows} phân cảnh chưa có lời thoại. </>}
                   {!working && emptyRows === 0 && (done.length > 1
                     ? `${done.length} sheet trong một file Excel.`
-                    : (anyEnglish
+                    : (done.some((item) => translationStatus(item.rows).translated > 0)
                       ? 'Xuất Excel khi đã kiểm tra xong.'
                       : 'Xuất Excel khi đã kiểm tra xong.'))}
                 </span>
