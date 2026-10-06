@@ -751,7 +751,7 @@ export default function ScriptPage() {
                 </section>
 
                 {active.missing?.length > 0 && rows.some((row) => !String(row.script || '').trim()) && (
-                  <p className="sp-missing"><AlertTriangle size={14} /> Chưa có lời thoại cho {active.missing.join(', ')} (slide không có chữ). Tự điền hoặc xoá dòng đó.</p>
+                  <p className="sp-missing"><AlertTriangle size={14} /> Chưa có lời thoại cho {active.missing.join(', ')} (slide không có chữ và không có hình mang nội dung). Tự điền hoặc xoá dòng đó.</p>
                 )}
 
                 <section className="sp-card sp-revise">

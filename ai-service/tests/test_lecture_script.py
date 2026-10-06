@@ -291,6 +291,29 @@ class FigureTests(unittest.TestCase):
         asyncio.run(describe_figures(vision, slides, True))
         self.assertEqual(len(vision.sent[0]["images"]), 2)
 
+    def test_a_slide_with_no_words_is_written_from_its_figure_and_left_empty_without_one(self):
+        slides = _slides(4)
+        slides[1]["text"] = ""                      # only a screenshot: the picture carries the content
+        slides[1]["images"] = [_png(color=(10, 30, 30))]
+        slides[2]["text"] = ""                      # only a decoration
+        slides[2]["images"] = [_png(color=(90, 30, 30))]
+
+        class Both(_Extractor, _Vision):
+            def __init__(self):
+                _Extractor.__init__(self)
+                _Vision.__init__(self, {"Mục 2": "Ảnh chụp màn hình Android Studio với LinearLayout chứa hai Button xếp dọc."})
+
+            async def _llm_completion_plain_text(self, messages, **kwargs):
+                if isinstance(messages[0]["content"], list):
+                    return await _Vision._llm_completion_plain_text(self, messages, **kwargs)
+                return await _Extractor._llm_completion_plain_text(self, messages, **kwargs)
+
+        script = asyncio.run(write_script(Both(), slides))
+        by_scene = {row["scene"]: row["script"] for row in script["rows"]}
+        self.assertTrue(by_scene["Slide 2"])
+        self.assertEqual(by_scene["Slide 3"], "")
+        self.assertEqual(script["missing"], ["Slide 3"])
+
     def test_the_description_is_given_to_the_script_writer(self):
         slides = _slides(3)
         slides[1]["images"] = [_png()]
