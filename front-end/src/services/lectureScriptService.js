@@ -28,9 +28,9 @@ export const lectureScriptService = {
     return unwrap(await apiClient.post('/document/lecture-script/revise', { slides, rows, prompt, filename }, { timeout: 60000 }));
   },
 
-  /** English subtitle lines for Vietnamese scripts: [string] -> task; its result is {items: [{i, en}], failed: [i]}. */
-  async translate(scripts) {
-    return unwrap(await apiClient.post('/document/lecture-script/translate', { scripts }, { timeout: 60000 }));
+  /** Scripts into the other language ("en" or "vi"): starts a task whose result is {items: [{i, text}], failed: [i]}. */
+  async translate({ scripts, target, title, note }) {
+    return unwrap(await apiClient.post('/document/lecture-script/translate', { scripts, target, title, note }, { timeout: 60000 }));
   },
 
   /** Resolves with {script, slides} once the task is done; `onProgress` gets 0-100 on the way. */
@@ -69,7 +69,7 @@ export const lectureScriptService = {
     return unwrap(await apiClient.delete(`/document/lecture-script/sets/${id}`, { timeout: 30000 }));
   },
 
-  /** One workbook with a sheet per script: [{title, sheet, durationMinutes, rows}]. */
+  /** One workbook with a sheet per script: [{title, sheet, language, durationMinutes, rows}]. */
   async exportXlsx(sheets) {
     const response = await apiClient.post(
       '/document/lecture-script/export',
@@ -77,8 +77,9 @@ export const lectureScriptService = {
         sheets: sheets.map((item) => ({
           title: item.title,
           sheet: item.sheet,
+          language: item.language,
           duration_minutes: item.durationMinutes,
-          rows: item.rows.map((row) => ({ ...row, en: item.withEnglish ? (row.en || '') : '' })),
+          rows: item.rows.map((row) => ({ scene: row.scene, slide: row.slide, script: row.script, note: row.note || '', alt: row.alt || '' })),
         })),
       },
       { responseType: 'blob', timeout: 90000 },

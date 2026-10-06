@@ -60,11 +60,13 @@ def _fill_sheet(sheet, script: Dict[str, Any]) -> None:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     rows: List[Dict[str, Any]] = [row for row in (script.get("rows") or []) if isinstance(row, dict)]
-    # English lines for the subtitles sit next to the Vietnamese; with none, the sheet is the plain three-column template.
-    with_english = any(str(row.get("en") or "").strip() for row in rows)
-    columns = "ABCD" if with_english else "ABC"
+    # The subtitle lines in the other language sit next to the script; with none, the sheet is the plain
+    # three-column template. A Vietnamese deck gets English beside it, an English deck gets Vietnamese.
+    english_script = script.get("language") == "en"
+    with_subtitles = any(str(row.get("alt") or row.get("en") or "").strip() for row in rows)
+    columns = "ABCD" if with_subtitles else "ABC"
     last = columns[-1]
-    widths = [25, 80, 80, 35] if with_english else [25, 80, 35]
+    widths = [25, 80, 80, 35] if with_subtitles else [25, 80, 35]
     for column, width in zip(columns, widths):
         sheet.column_dimensions[column].width = width
 
@@ -85,7 +87,12 @@ def _fill_sheet(sheet, script: Dict[str, Any]) -> None:
     sheet.row_dimensions[2].height = 24.75
     sheet.row_dimensions[3].height = 9.75
 
-    headings = ("PHÂN CẢNH", "LỜI THOẠI", "LỜI THOẠI (ENGLISH)", "LƯU Ý DỰNG") if with_english else ("PHÂN CẢNH", "LỜI THOẠI", "LƯU Ý DỰNG")
+    if not with_subtitles:
+        headings = ("PHÂN CẢNH", "LỜI THOẠI", "LƯU Ý DỰNG")
+    elif english_script:
+        headings = ("PHÂN CẢNH", "LỜI THOẠI (ENGLISH)", "LỜI THOẠI (TIẾNG VIỆT)", "LƯU Ý DỰNG")
+    else:
+        headings = ("PHÂN CẢNH", "LỜI THOẠI", "LỜI THOẠI (ENGLISH)", "LƯU Ý DỰNG")
     for column, heading in zip(columns, headings):
         cell = sheet[f"{column}4"]
         cell.value = heading
@@ -98,12 +105,12 @@ def _fill_sheet(sheet, script: Dict[str, Any]) -> None:
     for offset, row in enumerate(rows):
         index = 5 + offset
         scene, script_text, note = str(row.get("scene") or ""), str(row.get("script") or ""), str(row.get("note") or "")
-        english = str(row.get("en") or "")
-        values = (scene, script_text, english, note) if with_english else (scene, script_text, note)
+        subtitle = str(row.get("alt") or row.get("en") or "")
+        values = (scene, script_text, subtitle, note) if with_subtitles else (scene, script_text, note)
         for column, value in zip(columns, values):
             cell = sheet[f"{column}{index}"]
             cell.value = value or None
             cell.font = Font(name=_FONT, size=11, bold=(column == "A"))
             cell.alignment = Alignment(vertical="top", wrap_text=True)
             cell.border = border
-        sheet.row_dimensions[index].height = max(_row_height(script_text), _row_height(english))
+        sheet.row_dimensions[index].height = max(_row_height(script_text), _row_height(subtitle))

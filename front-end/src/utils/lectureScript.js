@@ -67,29 +67,70 @@ export function suggestedSetName(items) {
   return String(items?.[0]?.title || names[0] || 'Bộ kịch bản').trim().slice(0, 200);
 }
 
-/** Rows whose Vietnamese has no English yet, or changed since it was translated: [{i, script}]. */
+const trimmed = (text) => String(text || '').trim();
+
+/**
+ * A row carries its script and, in `alt`, the same lines in the other language (the subtitles);
+ * `altFor` is the script text that translation was made from. Sets saved before the subtitles
+ * could be Vietnamese kept them as `en` / `enFor`.
+ */
+export function normalizeRow(row) {
+  if (row.en === undefined && row.enFor === undefined) return row;
+  const { en, enFor, ...rest } = row;
+  return { ...rest, alt: rest.alt ?? en ?? '', altFor: rest.altFor ?? enFor };
+}
+
+/** Rows whose script has no translation yet, or changed since it was translated: [{i, script}]. */
 export function rowsToTranslate(rows) {
   const out = [];
   (rows || []).forEach((row, i) => {
-    const script = String(row.script || '').trim();
-    if (script && (!String(row.en || '').trim() || row.enFor !== script)) out.push({ i, script });
+    const script = trimmed(row.script);
+    if (script && (!trimmed(row.alt) || row.altFor !== script)) out.push({ i, script });
   });
   return out;
 }
 
-/** How many rows carry English, and how many of those are out of date against their Vietnamese. */
-export function englishStatus(rows) {
+/** Every row that has a script, whatever the state of its translation: [{i, script}]. */
+export function rowsWithScript(rows) {
+  const out = [];
+  (rows || []).forEach((row, i) => { if (trimmed(row.script)) out.push({ i, script: trimmed(row.script) }); });
+  return out;
+}
+
+/** How many rows are translated, and how many of those are out of date against their script. */
+export function translationStatus(rows) {
   let translated = 0;
   let stale = 0;
   let missing = 0;
   for (const row of rows || []) {
-    const script = String(row.script || '').trim();
+    const script = trimmed(row.script);
     if (!script) continue;
-    if (!String(row.en || '').trim()) missing += 1;
+    if (!trimmed(row.alt)) missing += 1;
     else {
       translated += 1;
-      if (row.enFor !== script) stale += 1;
+      if (row.altFor !== script) stale += 1;
     }
   }
   return { translated, stale, missing };
+}
+
+/**
+ * Puts translations that came back into the rows they were made for. The user may have gone on
+ * typing meanwhile: a translation only lands on a row whose script is still the text that was
+ * sent, and (unless `force`) not on a row the user has brought up to date by hand since.
+ * `plan` is what was sent ([{i, script}]), `items` the answer ([{i: index into plan, text}]).
+ */
+export function applyTranslations(rows, plan, items, { force = false } = {}) {
+  const next = [...(rows || [])];
+  let applied = 0;
+  for (const entry of items || []) {
+    const sent = plan[entry.i];
+    if (!sent || !trimmed(entry.text)) continue;
+    const fits = (row) => row && trimmed(row.script) === sent.script && (force || !trimmed(row.alt) || row.altFor !== sent.script);
+    const index = fits(next[sent.i]) ? sent.i : next.findIndex(fits);
+    if (index < 0) continue;
+    next[index] = { ...next[index], alt: entry.text, altFor: sent.script };
+    applied += 1;
+  }
+  return { rows: next, applied };
 }

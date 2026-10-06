@@ -777,77 +777,132 @@ async def write_script(
 
 # ── English subtitles ──────────────────────────────────────────────────────────
 
-_TRANSLATE_KIND = (
-    "paragraphs of a lecturer's spoken lecture script that will be shown as English subtitles: write natural, clear "
-    "spoken English, keep the meaning and the register of a teacher talking to students, keep technical terms; where "
-    "the Vietnamese gives a term with its English original in parentheses, use that English term once without repeating it"
+_TRANSLATE_BATCH_CHARS = 2600
+TRANSLATION_TARGETS = ("en", "vi")
+
+_TO_ENGLISH = """You turn the spoken script of a Vietnamese university lecturer into English subtitles for a lecture video.
+
+Translate the MEANING and write what a good English-speaking lecturer would actually say to students. Never translate word by word:
+- Build each sentence the English way. Inside one paragraph you may reorder, split or join sentences when it reads better.
+- Drop Vietnamese filler and politeness particles (nhé, nhỉ, đấy, thế, ạ, "các em thấy đấy" said out of habit) unless they carry meaning.
+- No calques: "khiến cho hệ thống gặp nguy hiểm" is "puts a system at risk", not "makes the system meet danger".
+- Spoken and plain, contractions welcome, no stiff written phrases ("in order to", "it is necessary that", "regarding").
+- Subtitles are read fast: keep sentences short, about 20 words at most.
+- Who is speaking: "thầy / cô / tôi" is "I", "các em / các bạn" is "you", "chúng ta / thầy trò mình" is "we".
+- Keep technical terms, acronyms, product names and every number exactly. Where the Vietnamese gives a term followed by its English original in parentheses, use the English term once and drop the parentheses.
+- Natural does not mean shorter: keep every piece of meaning (who hopes or asks, where something is, each item of a list). Keep every fact and add none.
+
+Examples of the difference:
+VI: Mời các em quan sát sơ đồ về quan hệ giữa Mối đe dọa và Lỗ hổng.
+Word by word (wrong): Please observe the diagram about the relationship between Threat and Vulnerability.
+Natural (right): Take a look at this diagram of how threats and vulnerabilities relate.
+VI: Các em thấy đấy, mối đe dọa sẽ khai thác lỗ hổng để dẫn đến một cuộc tấn công.
+Word by word (wrong): You see, the threat will exploit the vulnerability to lead to an attack.
+Natural (right): A threat exploits a vulnerability, and that's what leads to an attack.
+VI: Vì vậy, loại bỏ lỗ hổng là cách hiệu quả nhất để ngăn chặn tấn công thành công.
+Natural (right): So the most effective way to stop an attack is to get rid of the vulnerability."""
+
+_TO_VIETNAMESE = """Bạn chuyển lời thoại tiếng Anh của giảng viên thành phụ đề tiếng Việt cho video bài giảng đại học.
+
+Dịch Ý, viết đúng như một giảng viên người Việt sẽ nói với sinh viên. Tuyệt đối không dịch từng chữ:
+- Đặt câu theo cách nói tiếng Việt. Trong một đoạn được đảo trật tự, tách hoặc gộp câu cho tự nhiên.
+- Không bê nguyên cấu trúc tiếng Anh: tránh "nó là ... mà", tránh lạm dụng "bị / được", "một cách", "của" chồng nhau.
+- Văn nói, gần gũi, rõ ý; câu ngắn để đọc kịp phụ đề.
+- Xưng hô: "I" là "thầy" (trừ khi yêu cầu thêm nêu cách xưng khác), "you" là "các em", "we" là "chúng ta".
+- Thuật ngữ chuyên ngành, từ viết tắt, tên riêng và mọi con số giữ nguyên. Thuật ngữ đã quen bằng tiếng Việt thì dùng tiếng Việt và để từ tiếng Anh trong ngoặc ở lần đầu, ví dụ "Mối đe dọa (Threat)".
+- Tự nhiên không có nghĩa là lược bớt: giữ đủ mọi ý (ai mong, ai hỏi, ở đâu, từng mục trong danh sách), không thêm ý.
+
+Ví dụ:
+EN: Take a look at this diagram of how threats and vulnerabilities relate.
+Dịch từng chữ (sai): Hãy nhìn vào sơ đồ này của cách các mối đe dọa và lỗ hổng liên hệ.
+Tự nhiên (đúng): Mời các em quan sát sơ đồ về quan hệ giữa mối đe dọa và lỗ hổng.
+EN: So the most effective way to stop an attack is to get rid of the vulnerability.
+Tự nhiên (đúng): Vì vậy, loại bỏ lỗ hổng là cách hiệu quả nhất để ngăn một cuộc tấn công."""
+
+_TRANSLATE_CONTRACT = (
+    "\n\nYou get JSON {\"lecture\": title, \"rows\":[{\"i\": number, \"paragraphs\":[...]}]}. Each row is the script of one scene; "
+    "its paragraphs are the subtitle lines, so they must stay aligned: one paragraph in gives exactly one paragraph out, in the "
+    "same order, never merged, never dropped. Use the other paragraphs of the row as context.\n"
+    "Return ONLY JSON {\"rows\":[{\"i\": number, \"paragraphs\":[...]}]} with the same rows and the same number of paragraphs in each."
 )
-_TRANSLATE_BATCH_CHARS = 3000
 
 
-async def _translate_batch(extractor, batch: List[str]) -> List[Optional[str]]:
-    """English for every string of `batch`, in order; a batch the model gets wrong is split in two and
-    asked again, down to one string, so one stubborn paragraph cannot spoil its neighbours."""
-    from services.visual_translate import translate_strings
-
-    for _ in range(2):
-        result = await translate_strings(extractor, batch, "en", _TRANSLATE_KIND)
-        if result and all(result):
-            return list(result)
-    if len(batch) == 1:
-        return [None]
-    middle = len(batch) // 2
-    return await _translate_batch(extractor, batch[:middle]) + await _translate_batch(extractor, batch[middle:])
+def _paragraphs(script: Any) -> List[str]:
+    return [part.strip() for part in re.split(r"\n\s*\n|\n", str(script or "")) if part.strip()]
 
 
-async def translate_scripts(extractor, scripts: List[str], on_progress: Optional[Progress] = None) -> Dict[str, Any]:
-    """{"items": [{"i": row index, "en": "..."}], "failed": [row index]} for Vietnamese `scripts`.
+async def _translate_rows(
+    extractor, rows: List[tuple], target: str, title: str, note: str,
+) -> Dict[int, List[str]]:
+    """{row index: translated paragraphs} for the rows the model returned with the right paragraph count."""
+    system = (_TO_ENGLISH if target == "en" else _TO_VIETNAMESE) + _TRANSLATE_CONTRACT
+    if _clean(note):
+        system += "\n\nExtra instruction from the user (about how the lecturer speaks; follow it): " + _clean(note)[:600]
+    payload = {"lecture": title, "rows": [{"i": index, "paragraphs": paragraphs} for index, paragraphs in rows]}
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+    size = sum(len(text) for _, paragraphs in rows for text in paragraphs)
+    try:
+        parsed = await _ask_json(extractor, messages, max_tokens=min(7000, 500 + size), purpose="lecture_script_translate")
+    except Exception as error:
+        print(f"[lecture_script] translation call failed: {error!r}")
+        return {}
+    wanted = {index: len(paragraphs) for index, paragraphs in rows}
+    found: Dict[int, List[str]] = {}
+    for item in (parsed or {}).get("rows") or []:
+        try:
+            index = int(item.get("i"))
+            paragraphs = [" ".join(str(text or "").split()) for text in (item.get("paragraphs") or [])]
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if wanted.get(index) == len(paragraphs) and all(paragraphs):
+            found[index] = paragraphs
+    return found
 
-    Each script is cut into its paragraphs (the lines of the video) and translated paragraph by
-    paragraph, so the English keeps the same blank-line structure and lines up with the Vietnamese."""
-    pieces: List[tuple] = []          # (row index, paragraph index, text)
-    counts: Dict[int, int] = {}
-    for row, script in enumerate(scripts):
-        paragraphs = [part.strip() for part in re.split(r"\n\s*\n|\n", str(script or "")) if part.strip()]
-        counts[row] = len(paragraphs)
-        pieces.extend((row, position, text) for position, text in enumerate(paragraphs))
+
+async def translate_scripts(
+    extractor, scripts: List[str], target: str = "en", *, title: str = "", note: str = "",
+    on_progress: Optional[Progress] = None,
+) -> Dict[str, Any]:
+    """{"items": [{"i": row index, "text": "..."}], "failed": [row index]}: `scripts` in the `target` language.
+
+    A row (the script of one scene) is translated as a whole, so the sentences are written the way the
+    target language says them instead of word by word, but paragraph for paragraph: the lines of the
+    two languages stay side by side. A row the model returns with the wrong number of paragraphs is
+    asked again on its own; one that still fails is reported, never half-translated."""
+    target = target if target in TRANSLATION_TARGETS else "en"
+    rows = [(index, _paragraphs(script)) for index, script in enumerate(scripts)]
+    rows = [row for row in rows if row[1]]
     batches: List[List[tuple]] = []
     current: List[tuple] = []
     size = 0
-    for piece in pieces:
-        if current and size + len(piece[2]) > _TRANSLATE_BATCH_CHARS:
+    for row in rows:
+        length = sum(len(text) for text in row[1])
+        if current and size + length > _TRANSLATE_BATCH_CHARS:
             batches.append(current)
             current, size = [], 0
-        current.append(piece)
-        size += len(piece[2])
+        current.append(row)
+        size += length
     if current:
         batches.append(current)
 
     done = 0
     gate = asyncio.Semaphore(_PARALLEL_BATCHES)
 
-    async def run(batch: List[tuple]) -> List[Optional[str]]:
+    async def run(batch: List[tuple]) -> Dict[int, List[str]]:
         nonlocal done
         async with gate:
-            out = await _translate_batch(extractor, [text for _, _, text in batch])
+            found = await _translate_rows(extractor, batch, target, title, note)
+            for row in batch:                                   # a row that came back wrong gets one more try, alone
+                if row[0] not in found:
+                    found.update(await _translate_rows(extractor, [row], target, title, note))
         done += 1
         if on_progress:
             await on_progress(5 + int(90 * done / max(1, len(batches))))
-        return out
+        return found
 
-    results = await asyncio.gather(*(run(batch) for batch in batches))
-    english: Dict[int, Dict[int, Optional[str]]] = {}
-    for batch, texts in zip(batches, results):
-        for (row, position, _), text in zip(batch, texts):
-            english.setdefault(row, {})[position] = text
-    items: List[Dict[str, Any]] = []
-    failed: List[int] = []
-    for row in range(len(scripts)):
-        if not counts.get(row):
-            continue
-        parts = [english.get(row, {}).get(position) for position in range(counts[row])]
-        if any(part is None for part in parts):
-            failed.append(row)            # a row with a missing line is not half-translated: it is left to try again
-            continue
-        items.append({"i": row, "en": "\n\n".join(tidy_script(part) for part in parts if part)})
-    return {"items": items, "failed": failed}
+    translated: Dict[int, List[str]] = {}
+    for found in await asyncio.gather(*(run(batch) for batch in batches)):
+        translated.update(found)
+    items = [{"i": index, "text": "\n\n".join(tidy_script(text) for text in translated[index])} for index, _ in rows if index in translated]
+    failed = [index for index, _ in rows if index not in translated]
+    return {"items": items, "failed": failed, "target": target}

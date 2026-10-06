@@ -30,11 +30,15 @@ class ScriptRow(BaseModel):
     slide: Optional[int] = None
     script: str = ""
     note: str = ""
-    en: str = ""          # English subtitle lines, translated from `script`
+    alt: str = ""         # the same lines in the other language (the subtitles), paragraph for paragraph
+    en: str = ""          # where `alt` was kept before it could be Vietnamese too; still read from saved sets
 
 
 class TranslateRequest(BaseModel):
-    scripts: List[str] = Field(default_factory=list)   # Vietnamese scripts to translate, one per row
+    scripts: List[str] = Field(default_factory=list)   # scripts to translate, one per row
+    target: str = "en"                                 # the language to translate into: "en" or "vi"
+    title: str = ""                                    # the lecture, as context
+    note: str = ""                                     # what the user asked for when the script was written (how the lecturer speaks)
 
 
 class ReviseRequest(BaseModel):
@@ -47,6 +51,7 @@ class ReviseRequest(BaseModel):
 class ExportSheet(BaseModel):
     title: str = ""
     sheet: str = ""
+    language: str = "vi"      # the language of `script`; `alt` is the other one
     duration_minutes: Optional[int] = None
     rows: List[ScriptRow] = Field(default_factory=list)
 
@@ -114,7 +119,7 @@ async def generate(
 
 @router.post("/translate")
 async def translate(request: TranslateRequest):
-    """English subtitle lines for Vietnamese scripts, paragraph by paragraph so the lines match one for one."""
+    """Subtitle lines in the other language, paragraph for paragraph so the two languages stay side by side."""
     scripts = [str(text or "")[:20000] for text in request.scripts[:200]]
     if not any(text.strip() for text in scripts):
         raise HTTPException(status_code=400, detail="Chưa có lời thoại để dịch")
@@ -129,7 +134,9 @@ async def translate(request: TranslateRequest):
 
         try:
             extractor = core._new_task_content_extractor(task_id)
-            result = await translate_scripts(extractor, scripts, on_progress=progress)
+            result = await translate_scripts(
+                extractor, scripts, request.target, title=request.title[:200], note=request.note[:1500], on_progress=progress,
+            )
             await queue.update_task_status(task_id, "completed", progress=100, result=result)
         except Exception as error:
             print(f"[lecture_script] translate {task_id} failed: {error!r}")
@@ -164,13 +171,14 @@ async def revise(request: ReviseRequest):
 
 def _sheet_payload(sheet: ExportSheet) -> Optional[Dict[str, Any]]:
     rows = [
-        {"scene": row.scene.strip()[:60], "script": tidy_script(row.script), "note": row.note.strip()[:200], "en": tidy_script(row.en)}
+        {"scene": row.scene.strip()[:60], "script": tidy_script(row.script), "note": row.note.strip()[:200], "alt": tidy_script(row.alt or row.en)}
         for row in sheet.rows if row.scene.strip() or row.script.strip()
     ]
     if not rows:
         return None
     return {
         "title": sheet.title.strip()[:200], "sheet": sheet.sheet.strip(),
+        "language": "en" if sheet.language == "en" else "vi",
         "duration_minutes": sheet.duration_minutes or estimated_minutes(rows), "rows": rows,
     }
 
