@@ -6,6 +6,7 @@ import com.backend.userservice.dto.response.RoleResponse;
 import com.backend.userservice.service.RoleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -14,6 +15,7 @@ import java.util.List;
 @RequestMapping(value = "/roles")
 @Slf4j
 @RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
 public class RoleController {
     private final RoleService roleService;
 

@@ -10,6 +10,7 @@ import com.backend.userservice.service.AuthenticationService;
 import com.backend.userservice.service.UserService;
 import com.nimbusds.jose.JOSEException;
 import jakarta.validation.Valid;
+import org.springframework.security.access.prepost.PreAuthorize;
 import java.text.ParseException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +26,7 @@ public class UserController {
     private final UserService userService;
 
     @GetMapping
+    @PreAuthorize("hasRole('ADMIN')")
     ApiResponse<UserPagination> getUsers(@RequestParam(defaultValue = "0", required = false) int page,
                                          @RequestParam(defaultValue = "10", required = false) int size) {
         return ApiResponse.<UserPagination>builder()
@@ -32,7 +34,9 @@ public class UserController {
                 .build();
     }
 
+    // The JWT subject is the user's id, so authentication.name is that id: an admin, or the user themselves.
     @GetMapping("/{userId}")
+    @PreAuthorize("hasRole('ADMIN') or #userId == authentication.name")
     ApiResponse<UserResponse> getUser(@PathVariable("userId") String userId) {
         return ApiResponse.<UserResponse>builder()
                 .data(userService.getUser(userId))
@@ -47,12 +51,14 @@ public class UserController {
     }
 
     @DeleteMapping("/{userId}")
+    @PreAuthorize("hasRole('ADMIN')")
     ApiResponse<String> deleteUser(@PathVariable String userId) {
         userService.deleteUser(UUID.fromString(userId));
         return ApiResponse.<String>builder().data("User has been deleted").build();
     }
 
     @PostMapping("/{userId}")
+    @PreAuthorize("hasRole('ADMIN') or #userId == authentication.name")
     ApiResponse<UserResponse> updateUser(@PathVariable String userId, @RequestBody UpdateUserRequest request) {
         return ApiResponse.<UserResponse>builder()
                 .data(userService.updateUser(UUID.fromString(userId), request))

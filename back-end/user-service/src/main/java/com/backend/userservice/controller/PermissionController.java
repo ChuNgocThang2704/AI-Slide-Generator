@@ -6,6 +6,7 @@ import com.backend.userservice.dto.response.PermissionResponse;
 import com.backend.userservice.service.PermissionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -14,6 +15,7 @@ import java.util.List;
 @RequestMapping(value = "/permissions")
 @Slf4j
 @RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
 public class PermissionController {
     private final PermissionService permissionService;
 

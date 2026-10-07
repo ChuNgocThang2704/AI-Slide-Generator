@@ -57,6 +57,12 @@ public class UserService {
     private final RoleRepository roleRepository;
     private final StringRedisTemplate redisTemplate;
 
+    private boolean isAdmin() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
+    }
+
     public UserResponse getMyInfo() {
         String uuid = SecurityContextHolder.getContext().getAuthentication().getName();
         log.info("[user-service] lấy thông tin cá nhân của user: {}", uuid);
@@ -91,7 +97,12 @@ public class UserService {
         if (request.getPhoneNumber() != null) {
             profile.setPhoneNumber(request.getPhoneNumber());
         }
+        // Only an admin may change a user's roles; otherwise a user could grant themselves
+        // ADMIN/ULTRA by posting to their own id (the update endpoint is open to the owner too).
         if (request.getRoles() != null && !request.getRoles().isEmpty()) {
+            if (!isAdmin()) {
+                throw new AppException(ErrorCode.UNAUTHORIZED);
+            }
             List<RoleEntity> roles = roleRepository.findAllById(request.getRoles());
             user.setRoles(new HashSet<>(roles));
         }
