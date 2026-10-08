@@ -65,9 +65,6 @@ public class AuthenticationService {
     @Value("${jwt.signerKey}")
     protected String SIGNER_KEY;
 
-    @Value("${lec-service.url:http://localhost:8000}")
-    private String lecServiceUrl;
-
     @NonFinal
     @Value("${jwt.valid-duration}")
     protected long VALID_DURATION;
@@ -128,7 +125,6 @@ public class AuthenticationService {
             userRepository.save(userEntity);
             log.info("[user-service] lưu user thành công, gửi email xác nhận tới: {}", email);
             sendVerificationEmail(userEntity);
-            registerToLecBE(userEntity, createUserRequest.getPassword());
         } catch (DataIntegrityViolationException e) {
             throw new AppException(ErrorCode.USER_EXISTED);
         }
@@ -261,9 +257,6 @@ public class AuthenticationService {
         userRepository.save(userEntity);
         log.info("[user-service] đăng nhập thành công, userId: {}", userEntity.getId());
 
-        // Tự động đồng bộ tài khoản sang lecBE đề phòng user cũ chưa có tài khoản
-        registerToLecBE(userEntity, request.getPassword());
-
         return buildAuthenticationResponse(userEntity);
     }
 
@@ -342,7 +335,6 @@ public class AuthenticationService {
                     .avatarUrl(googleUserInfo.getPicture())
                     .build());
             UserEntity savedUser = userRepository.save(user);
-            registerToLecBE(savedUser, rawPassword);
             return savedUser;
         }
 
@@ -554,28 +546,5 @@ public class AuthenticationService {
                 .token(generateAccessToken(userEntity))
                 .refreshToken(generateRefreshToken(userEntity))
                 .build();
-    }
-
-    private void registerToLecBE(UserEntity userEntity, String rawPassword) {
-        log.info("[user-service] Đang đồng bộ đăng ký tài khoản sang Python lecBE: {}", userEntity.getEmail());
-        try {
-            Map<String, String> requestBody = new HashMap<>();
-            requestBody.put("username", userEntity.getId().toString()); // UUID làm username
-            requestBody.put("email", userEntity.getEmail());
-            requestBody.put("password", rawPassword);
-
-            String response = webClient.post()
-                    .uri(lecServiceUrl + "/api/v1/auth/register")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .bodyValue(requestBody)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    // The sync runs inside the login path: without a bound, a hanging lecBE
-                    // would hold every login open instead of being skipped like any other failure.
-                    .block(Duration.ofSeconds(5));
-            log.info("[user-service] Đồng bộ tài khoản sang lecBE thành công: {}", response);
-        } catch (Exception e) {
-            log.error("[user-service] Lỗi khi đồng bộ đăng ký sang lecBE (Bỏ qua để tiếp tục): {}", e.getMessage());
-        }
     }
 }
