@@ -5,7 +5,6 @@ import com.backend.documentservice.dto.request.ProjectImportRequest;
 import com.backend.documentservice.dto.request.ProjectReviseRequest;
 import com.backend.documentservice.dto.request.ProjectUpdateRequest;
 import com.backend.documentservice.dto.request.SlidePageUpdateRequest;
-import com.backend.documentservice.dto.request.ProjectVideoUpdateRequest;
 import com.backend.documentservice.dto.response.ApiResponse;
 import com.backend.documentservice.dto.response.AITaskLogResponse;
 import com.backend.documentservice.dto.response.ProjectExportResponse;
@@ -13,7 +12,6 @@ import com.backend.documentservice.dto.response.ProjectResponse;
 import com.backend.documentservice.dto.response.ProjectProgressResponse;
 import com.backend.documentservice.dto.response.SlidePageResponse;
 import com.backend.documentservice.dto.response.SourceDocumentResponse;
-import com.backend.documentservice.dto.response.ProjectVideoResponse;
 import com.backend.documentservice.dto.response.PageResponse;
 import com.backend.documentservice.service.ProjectService;
 import com.backend.documentservice.service.SourceDocumentService;
@@ -175,37 +173,6 @@ public class DocumentController {
         return ApiResponse.<List<ProjectExportResponse>>builder()
                 .data(projectService.getExports(id, currentUserId()))
                 .build();
-    }
-
-    @PostMapping("/projects/{id}/videos/current")
-    public ApiResponse<ProjectVideoResponse> updateProjectVideo(
-            @PathVariable UUID id,
-            @RequestBody ProjectVideoUpdateRequest request) {
-        return ApiResponse.<ProjectVideoResponse>builder()
-                .data(projectService.updateVideo(id, currentUserId(), request))
-                .build();
-    }
-
-    @GetMapping("/projects/{id}/videos/current")
-    public ApiResponse<ProjectVideoResponse> getCurrentProjectVideo(@PathVariable UUID id) {
-        return ApiResponse.<ProjectVideoResponse>builder()
-                .data(projectService.getLatestVideo(id, currentUserId()))
-                .build();
-    }
-
-    @GetMapping("/projects/{id}/videos")
-    public ApiResponse<List<ProjectVideoResponse>> getProjectVideos(@PathVariable UUID id) {
-        return ApiResponse.<List<ProjectVideoResponse>>builder()
-                .data(projectService.getProjectVideos(id, currentUserId()))
-                .build();
-    }
-
-    @DeleteMapping("/projects/{id}/videos/{videoId}")
-    public ApiResponse<String> deleteProjectVideo(
-            @PathVariable UUID id,
-            @PathVariable UUID videoId) {
-        projectService.deleteProjectVideo(id, videoId, currentUserId());
-        return ApiResponse.<String>builder().data("Video deleted successfully").build();
     }
 
     @DeleteMapping("/projects")

@@ -13,17 +13,13 @@ import com.backend.documentservice.exception.AppException;
 import com.backend.documentservice.exception.ErrorCode;
 import com.backend.documentservice.dto.response.AITaskLogResponse;
 import com.backend.documentservice.dto.response.ProjectExportResponse;
-import com.backend.documentservice.dto.request.ProjectVideoUpdateRequest;
-import com.backend.documentservice.dto.response.ProjectVideoResponse;
 import com.backend.documentservice.entity.AITaskLog;
-import com.backend.documentservice.entity.ProjectVideo;
 import com.backend.documentservice.dto.request.SlidePageUpdateRequest;
 import com.backend.documentservice.dto.response.SlidePageResponse;
 import com.backend.documentservice.entity.SlidePage;
 import com.backend.documentservice.repository.SlidePageRepository;
 import com.backend.documentservice.repository.AITaskLogRepository;
 import com.backend.documentservice.repository.ProjectExportRepository;
-import com.backend.documentservice.repository.ProjectVideoRepository;
 import com.backend.documentservice.client.SubscriptionClient;
 import com.backend.documentservice.dto.request.InternalQuotaRequest;
 import com.backend.documentservice.dto.response.ApiResponse;
@@ -83,7 +79,6 @@ public class ProjectService {
     private final SourceDocumentRepository sourceDocumentRepository;
     private final AITaskLogRepository aiTaskLogRepository;
     private final ProjectExportRepository projectExportRepository;
-    private final ProjectVideoRepository projectVideoRepository;
     private final SlidePageRepository slidePageRepository;
     private final ProjectMapper projectMapper;
     private final AiService aiService;
@@ -1905,59 +1900,6 @@ public class ProjectService {
             }
         }
         return null;
-    }
-
-    @Transactional
-    public ProjectVideoResponse updateVideo(UUID projectId, UUID userId, ProjectVideoUpdateRequest request) {
-        getProjectDetail(projectId, userId);
-        ProjectVideo video = Boolean.TRUE.equals(request.getStartNew())
-                ? ProjectVideo.builder().projectId(projectId).build()
-                : projectVideoRepository.findFirstByProjectIdOrderByCreatedAtDesc(projectId)
-                        .orElseGet(() -> ProjectVideo.builder().projectId(projectId).build());
-
-        if (request.getPhase() != null) video.setPhase(request.getPhase());
-        if (request.getStatus() != null) video.setStatus(request.getStatus());
-        if (request.getProgress() != null) video.setProgress(Math.max(0, Math.min(100, request.getProgress())));
-        if (request.getCurrentSlide() != null) video.setCurrentSlide(Math.max(0, request.getCurrentSlide()));
-        if (request.getTotalSlides() != null) video.setTotalSlides(Math.max(0, request.getTotalSlides()));
-        if (request.getVideoUrl() != null) video.setVideoUrl(request.getVideoUrl());
-        if (request.getTemporaryVideoUrl() != null) video.setTemporaryVideoUrl(request.getTemporaryVideoUrl());
-        if (request.getError() != null) video.setError(request.getError());
-        return toProjectVideoResponse(projectVideoRepository.save(video));
-    }
-
-    public ProjectVideoResponse getLatestVideo(UUID projectId, UUID userId) {
-        getProjectDetail(projectId, userId);
-        return projectVideoRepository.findFirstByProjectIdOrderByCreatedAtDesc(projectId)
-                .map(this::toProjectVideoResponse)
-                .orElse(null);
-    }
-
-    public List<ProjectVideoResponse> getProjectVideos(UUID projectId, UUID userId) {
-        getProjectDetail(projectId, userId);
-        return projectVideoRepository.findByProjectIdOrderByCreatedAtDesc(projectId).stream()
-                .filter(video -> video.getVideoUrl() != null && !video.getVideoUrl().isBlank())
-                .map(this::toProjectVideoResponse)
-                .collect(Collectors.toList());
-    }
-
-    @Transactional
-    public void deleteProjectVideo(UUID projectId, UUID videoId, UUID userId) {
-        getProjectDetail(projectId, userId);
-        ProjectVideo video = projectVideoRepository.findById(videoId)
-                .filter(item -> item.getProjectId().equals(projectId))
-                .orElseThrow(() -> new AppException(ErrorCode.PROJECT_NOT_FOUND));
-        projectVideoRepository.delete(video);
-    }
-
-    private ProjectVideoResponse toProjectVideoResponse(ProjectVideo video) {
-        return ProjectVideoResponse.builder()
-                .id(video.getId()).projectId(video.getProjectId())
-                .phase(video.getPhase()).status(video.getStatus()).progress(video.getProgress())
-                .currentSlide(video.getCurrentSlide()).totalSlides(video.getTotalSlides())
-                .videoUrl(video.getVideoUrl()).temporaryVideoUrl(video.getTemporaryVideoUrl())
-                .error(video.getError()).createdAt(video.getCreatedAt()).updatedAt(video.getUpdatedAt())
-                .build();
     }
 
     private static boolean isUsableGeneratedProjectName(String value) {
