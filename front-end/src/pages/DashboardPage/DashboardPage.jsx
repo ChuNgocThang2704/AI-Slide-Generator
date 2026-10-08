@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { confirmDialog } from '../../services/dialogService';
-import { useAuthStore, useProjectStore, useUIStore, useVideoGenStore } from '../../store';
+import { useAuthStore, useProjectStore, useUIStore } from '../../store';
 import { projectService } from '../../services/documentService';
 import { isCustomTemplateId, templateService } from '../../services/templateService';
 import ElementCanvas from '../../components/slides/ElementCanvas';
@@ -86,7 +86,6 @@ export default function DashboardPage() {
   const { user } = useAuthStore();
   const { projects, setProjects, updateProject, deleteProject } = useProjectStore();
   const { addToast } = useUIStore();
-  const { activeJobs } = useVideoGenStore();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
@@ -451,9 +450,6 @@ export default function DashboardPage() {
               const statusKey = typeof pres.status === 'string' ? pres.status.toUpperCase() : pres.status;
               const isCompleted = statusKey === 1 || statusKey === 'DONE' || statusKey === 'COMPLETED';
               const isPreviewLoading = isCompleted && typeof previewSlide === 'undefined';
-              const videoJob = activeJobs[pres.id];
-              const isVideoProcessing = videoJob && videoJob.phase === 'processing';
-              const isVideoDone = videoJob && videoJob.phase === 'result';
               return (
                 <div key={pres.id} className="pres-card" onClick={() => handleOpen(pres)}>
                   <div className="pres-thumb" style={{
@@ -503,24 +499,8 @@ export default function DashboardPage() {
                           </span>
                         );
                       })()}
-                      {isVideoProcessing && (
-                        <span className="pres-template-tag" style={{ color: '#a89fff', background: 'rgba(108,99,255,0.18)', border: '1px solid rgba(108,99,255,0.4)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          <Loader2 size={11} className="spin" /> Sinh video ({videoJob.progress || 0}%)
-                        </span>
-                      )}
-                      {isVideoDone && (
-                        <span className="pres-template-tag" style={{ color: '#34d399', background: 'rgba(52,211,153,0.12)', border: '1px solid rgba(52,211,153,0.3)' }}>
-                          ✓ Video xong
-                        </span>
-                      )}
                     </div>
-                    {isVideoProcessing && (
-                      <div className="pres-progress" title={videoJob.status || 'Đang sinh video...'} style={{ marginTop: 4 }}>
-                        <div className="pres-progress-track"><span style={{ width: `${videoJob.progress || 0}%`, background: '#6c63ff' }} /></div>
-                        <span style={{ color: '#a89fff' }}>{videoJob.progress || 0}%</span>
-                      </div>
-                    )}
-                    {!isVideoProcessing && progressPercent < 100 && (pres.status === 0 || ['CREATE', 'PROCESSING'].includes(String(pres.status).toUpperCase())) && (
+                    {progressPercent < 100 && (pres.status === 0 || ['CREATE', 'PROCESSING'].includes(String(pres.status).toUpperCase())) && (
                       <div className="pres-progress" title={taskProgress?.aiStatus || 'Đang tạo slide'}>
                         <div className="pres-progress-track"><span style={{ width: `${progressPercent}%` }} /></div>
                         <span>{progressPercent}%</span>

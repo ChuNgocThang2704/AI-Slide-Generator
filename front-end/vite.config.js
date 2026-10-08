@@ -12,14 +12,4 @@ export default defineConfig(({ mode }) => ({
       ? { output: { minify: { compress: { dropConsole: true, dropDebugger: true }, mangle: true, codegen: true } } }
       : {},
   },
-  server: {
-    proxy: {
-      '/lecgen-api': {
-        target: 'https://lecgen.aitc.vn',
-        changeOrigin: true,
-        secure: false,
-        rewrite: (path) => path.replace(/^\/lecgen-api/, ''),
-      }
-    }
-  }
 }))

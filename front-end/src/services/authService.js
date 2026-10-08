@@ -76,9 +76,6 @@ export const authService = {
     const meData = normalizeApiResponse(meResponse.data);
     const mappedUser = mapUser(meData);
 
-    // 🚀 TỰ ĐỘNG ĐỒNG BỘ ĐẮNG NHẬP / ĐẮNG KÝ VỚI LECGEN SERVER KHI ĐÃ ĐĂNG NHẬP THÀNH CÔNG
-    // syncLecgenSession(email, password);
-
     return {
       user: mappedUser,
       token: authData.token,
@@ -118,11 +115,6 @@ export const authService = {
     const meData = normalizeApiResponse(meResponse.data);
     const mappedUser = mapUser(meData);
 
-    // 🚀 TỰ ĐỘNG ĐỒNG BỘ ĐĂNG NHẬP GOOGLE SANG LECGEN SERVER (Username = Email, Password = 123456)
-    // if (mappedUser?.email) {
-    //   syncLecgenSession(mappedUser.email, '123456');
-    // }
-
     return {
       user: mappedUser,
       token: authData.token,
@@ -131,8 +123,7 @@ export const authService = {
   },
 
   async register(email, password) {
-    // Chỉ gửi đăng ký tạo OTP trên GenSlide trước, KHÔNG gọi LecGen ở bước này
-    // để tránh gọi thừa API hoặc báo lỗi khi người dùng chưa nhập mã OTP.
+    // Chỉ gửi đăng ký để tạo mã OTP; tài khoản được kích hoạt sau khi người dùng nhập mã.
     const response = await apiClient.post('/auth/register', { email, password });
     return normalizeApiResponse(response.data);
   },
@@ -164,7 +155,6 @@ export const authService = {
 
   async logout() {
     const token = localStorage.getItem('token');
-    localStorage.removeItem('lecgen_token');
     if (!token) return;
 
     try {

@@ -133,26 +133,6 @@ export const projectService = {
     return normalizeApiResponse(response.data);
   },
 
-  async updateVideo(projectId, updates) {
-    const response = await apiClient.post(`/document/projects/${projectId}/videos/current`, updates);
-    return normalizeApiResponse(response.data);
-  },
-
-  async getCurrentVideo(projectId) {
-    const response = await apiClient.get(`/document/projects/${projectId}/videos/current`);
-    return normalizeApiResponse(response.data);
-  },
-
-  async getVideos(projectId) {
-    const response = await apiClient.get(`/document/projects/${projectId}/videos`);
-    return normalizeApiResponse(response.data);
-  },
-
-  async deleteVideo(projectId, videoId) {
-    const response = await apiClient.delete(`/document/projects/${projectId}/videos/${videoId}`);
-    return normalizeApiResponse(response.data);
-  },
-
   // Lấy tiến độ xử lý của project
   async getProgress(id) {
     const response = await apiClient.get(`/document/projects/${id}/progress`);
