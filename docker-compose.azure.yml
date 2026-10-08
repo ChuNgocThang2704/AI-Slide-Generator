@@ -24,9 +24,11 @@ services:
     environment:
       JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
   document-service:
-    mem_limit: 512m
+    # Uploaded decks (up to 80 MB each) pass through here in memory on their way to the AI service,
+    # so several lecturers uploading at once needs more headroom than the other Java services.
+    mem_limit: 1024m
     environment:
-      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx600m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
   template-service:
     mem_limit: 512m
     environment:
@@ -40,7 +42,8 @@ services:
     environment:
       JAVA_TOOL_OPTIONS: "-Xms64m -Xmx300m -XX:MaxMetaspaceSize=128m -XX:ActiveProcessorCount=2"
   ai-service:
-    mem_limit: 768m
+    # Lecture scripts run inside this process and hold the uploaded decks and their pictures in memory.
+    mem_limit: 1280m
     environment:
       # The previously configured vLLM host is offline; use the configured Gemini API directly.
       # LLM calls go to the 9Router gateway (combo of free providers with auto-fallback);
